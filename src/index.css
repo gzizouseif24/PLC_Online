@@ -492,6 +492,52 @@ button {
   display: block;
 }
 
+/* drag-and-drop zones */
+.dropzone {
+  position: absolute;
+  z-index: 2;
+}
+.dropzone .ind {
+  display: none;
+  position: absolute;
+}
+.dropzone.over .ind {
+  display: block;
+}
+.vind {
+  left: 50%;
+  top: 4px;
+  bottom: 4px;
+  width: 0;
+  transform: translateX(-50%);
+  border-left: 2px dashed var(--accent);
+}
+.hind {
+  left: 6px;
+  right: 6px;
+  top: 50%;
+  height: 0;
+  transform: translateY(-50%);
+  border-top: 2px dashed var(--accent);
+}
+.dropzone.legslot.over,
+.dropzone.outslot.over,
+.dropzone.parslot.over {
+  background: rgba(76, 141, 255, 0.1);
+  border-radius: 6px;
+}
+.drag-ghost {
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--live);
+  background: var(--surface-2);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 6px 10px;
+  box-shadow: 0 6px 20px #00000066;
+  pointer-events: none;
+}
+
 /* coordinate-based rung canvas */
 .rung-canvas {
   position: relative;

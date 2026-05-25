@@ -1,9 +1,19 @@
 import { useEffect, useMemo, useState } from 'react'
+import {
+  DndContext,
+  DragOverlay,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+  type DragStartEvent,
+} from '@dnd-kit/core'
 import { Pencil, Trash2 } from 'lucide-react'
 import type { Element, InstructionType } from './types/simulator'
 import { useSimulator } from './hooks/useSimulator'
 import { useScanCycle } from './hooks/useScanCycle'
 import { makeElement } from './logic/factory'
+import { INSTRUCTION_MAP, isInput } from './logic/instructions'
 import Toolbar from './components/Toolbar'
 import InstructionPalette from './components/InstructionPalette'
 import LadderCanvas from './components/LadderCanvas'
@@ -33,6 +43,9 @@ export default function App() {
   const [selectedElementId, setSelectedElementId] = useState<string | null>(null)
   const [config, setConfig] = useState<ConfigState | null>(null)
   const [ctx, setCtx] = useState<CtxState | null>(null)
+  const [dragType, setDragType] = useState<InstructionType | null>(null)
+
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }))
 
   const effectiveRungId = useMemo(() => {
     if (selectedRungId && state.rungs.some((r) => r.id === selectedRungId)) return selectedRungId
@@ -57,6 +70,50 @@ export default function App() {
       afterElementId: selectedElementId,
     })
     setSelectedRungId(effectiveRungId)
+    setSelectedElementId(el.id)
+    openConfig(el, centerAnchor())
+  }
+
+  const onDragStart = (e: DragStartEvent) =>
+    setDragType((e.active.data.current?.type as InstructionType) ?? null)
+
+  const onDragEnd = (e: DragEndEvent) => {
+    setDragType(null)
+    const type = e.active.data.current?.type as InstructionType | undefined
+    if (!type || !e.over) return
+    const [kind, rid, arg] = String(e.over.id).split(':')
+    const rung = state.rungs.find((r) => r.id === rid)
+    if (!rung) return
+    const el = makeElement(type)
+
+    if (kind === 'main') {
+      if (isInput(type)) dispatch({ type: 'ADD_INSTRUCTION', rungId: rid, element: el, atMainPos: Number(arg) })
+      else dispatch({ type: 'ADD_INSTRUCTION', rungId: rid, element: el })
+    } else if (kind === 'par') {
+      if (isInput(type)) {
+        const i = rung.main.findIndex((c) => c.id === arg)
+        if (i === -1) return
+        dispatch({
+          type: 'ADD_BRANCH',
+          rungId: rid,
+          startNodeId: rung.mainNodes[i],
+          element: el,
+          closeNodeId: rung.mainNodes[i + 1],
+        })
+      } else {
+        dispatch({ type: 'ADD_INSTRUCTION', rungId: rid, element: el })
+      }
+    } else if (kind === 'legend') {
+      const b = rung.branches.find((x) => x.id === arg)
+      const afterId = b?.contacts[b.contacts.length - 1]?.id
+      dispatch({ type: 'ADD_INSTRUCTION', rungId: rid, element: el, afterElementId: afterId })
+    } else if (kind === 'out') {
+      dispatch({ type: 'ADD_INSTRUCTION', rungId: rid, element: el })
+    } else {
+      return
+    }
+
+    setSelectedRungId(rid)
     setSelectedElementId(el.id)
     openConfig(el, centerAnchor())
   }
@@ -104,6 +161,7 @@ export default function App() {
         onSetInterval={(ms) => dispatch({ type: 'SET_INTERVAL', interval: ms })}
       />
 
+      <DndContext sensors={sensors} onDragStart={onDragStart} onDragEnd={onDragEnd}>
       <div className="app-main">
         <InstructionPalette hasTarget={effectiveRungId !== null} onPick={handlePick} />
 
@@ -144,6 +202,13 @@ export default function App() {
           onDelete={(id) => dispatch({ type: 'DELETE_VARIABLE', id })}
         />
       </div>
+
+        <DragOverlay dropAnimation={null}>
+          {dragType ? (
+            <div className="drag-ghost">{INSTRUCTION_MAP[dragType].symbol}</div>
+          ) : null}
+        </DragOverlay>
+      </DndContext>
 
       <StatusBar
         running={state.running}

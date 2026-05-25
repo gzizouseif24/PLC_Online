@@ -1,9 +1,30 @@
-import type { ReactNode } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
+import { useDroppable } from '@dnd-kit/core'
 import { GitBranch, Trash2, CornerLeftUp } from 'lucide-react'
 import type { Element, Rung, Variable } from '../types/simulator'
 import { COL, ROW } from '../logic/compileRung'
 import ElementView from './Element'
 import { HWire, VWire } from './Wire'
+
+/** A drop target that highlights when an instruction is dragged over it. */
+function Drop({
+  id,
+  className,
+  style,
+  children,
+}: {
+  id: string
+  className: string
+  style: CSSProperties
+  children?: ReactNode
+}) {
+  const { setNodeRef, isOver } = useDroppable({ id })
+  return (
+    <div ref={setNodeRef} className={`${className}${isOver ? ' over' : ''}`} style={style}>
+      {children}
+    </div>
+  )
+}
 
 const RAIL_X = 18
 const MAIN_Y = 52
@@ -68,7 +89,7 @@ export default function RungView(props: Props) {
   const contact = (el: Element, x: number, y: number) => (
     <div
       key={el.id}
-      style={{ position: 'absolute', left: x, top: y, transform: 'translate(-50%, -50%)' }}
+      style={{ position: 'absolute', left: x, top: y, transform: 'translate(-50%, -50%)', zIndex: 3 }}
     >
       <ElementView
         element={el}
@@ -167,6 +188,54 @@ export default function RungView(props: Props) {
               </div>
             )
           })}
+
+          {/* ---- drop targets ---- */}
+          {/* main-line insertion slots */}
+          {Array.from({ length: K + 1 }).map((_, g) => (
+            <Drop
+              key={`ms${g}`}
+              id={`main:${rung.id}:${g}`}
+              className="dropzone mainslot"
+              style={{ left: nodeX(g) - 14, top: MAIN_Y - 26, width: 28, height: 52 }}
+            >
+              <div className="ind vind" />
+            </Drop>
+          ))}
+          {/* parallel-around-contact slots (below each main contact) */}
+          {rung.main.map((c, i) => (
+            <Drop
+              key={`par${c.id}`}
+              id={`par:${rung.id}:${c.id}`}
+              className="dropzone parslot"
+              style={{ left: cellCenter(i) - COL / 2, top: MAIN_Y + 16, width: COL, height: 40 }}
+            >
+              <div className="ind hind" />
+            </Drop>
+          ))}
+          {/* extend-branch slots (end of each branch leg) */}
+          {rung.branches.map((b) => {
+            const sCol = colOf(b.startNodeId)
+            const by = MAIN_Y + (rung.branches.indexOf(b) + 1) * ROW
+            const x = nodeX(sCol) + b.contacts.length * COL
+            return (
+              <Drop
+                key={`legend${b.id}`}
+                id={`legend:${rung.id}:${b.id}`}
+                className="dropzone legslot"
+                style={{ left: x - 18, top: by - 22, width: 44, height: 44 }}
+              >
+                <div className="ind hind" />
+              </Drop>
+            )
+          })}
+          {/* output slot */}
+          <Drop
+            id={`out:${rung.id}`}
+            className="dropzone outslot"
+            style={{ left: nodeX(K) + 4, top: MAIN_Y - 24, width: rightRailX - nodeX(K) - 4, height: 48 }}
+          >
+            <div className="ind hind" />
+          </Drop>
         </div>
 
         <div className="rung-tools">

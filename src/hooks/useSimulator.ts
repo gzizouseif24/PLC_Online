@@ -16,8 +16,20 @@ export type Action =
   | { type: 'SET_INTERVAL'; interval: number }
   | { type: 'ADD_RUNG' }
   | { type: 'DELETE_RUNG'; rungId: string }
-  | { type: 'ADD_INSTRUCTION'; rungId: string; element: Element; afterElementId?: string | null }
-  | { type: 'ADD_BRANCH'; rungId: string; startNodeId: string; element: Element }
+  | {
+      type: 'ADD_INSTRUCTION'
+      rungId: string
+      element: Element
+      afterElementId?: string | null
+      atMainPos?: number
+    }
+  | {
+      type: 'ADD_BRANCH'
+      rungId: string
+      startNodeId: string
+      element: Element
+      closeNodeId?: string | null
+    }
   | { type: 'CLOSE_BRANCH'; rungId: string; branchId: string; closeNodeId: string | null }
   | { type: 'DELETE_ELEMENT'; elementId: string }
   | { type: 'DELETE_BRANCH'; rungId: string; branchId: string }
@@ -122,6 +134,10 @@ function reducer(state: SimulatorState, action: Action): SimulatorState {
         if (r.id !== action.rungId) return r
         if (!isInput(el.type)) return { ...r, outputs: [...r.outputs, el] }
 
+        if (action.atMainPos != null) {
+          return insertMainContact(r, Math.max(0, Math.min(action.atMainPos, r.main.length)), el)
+        }
+
         if (after) {
           const mi = mainIndexOf(r, after)
           if (mi !== -1) return insertMainContact(r, mi + 1, el)
@@ -146,7 +162,7 @@ function reducer(state: SimulatorState, action: Action): SimulatorState {
         id: uid(),
         startNodeId: action.startNodeId,
         contacts: [action.element],
-        closeNodeId: null,
+        closeNodeId: action.closeNodeId ?? null,
         live: false,
       }
       const rungs = state.rungs.map((r) =>
