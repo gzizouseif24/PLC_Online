@@ -5,6 +5,7 @@ import {
   elementNode,
   makeElement,
   makeVariable,
+  parallelNode,
 } from '../src/logic/factory'
 import { createSeedState } from '../src/logic/seedProgram'
 
@@ -152,6 +153,42 @@ console.log('\n[4] P contact one-shot')
   assert(boolOf(variables, 'Pulse') === true, 'pulse fires on 0→1 edge')
   ;({ variables, rungs } = scan(variables, rungs))
   assert(boolOf(variables, 'Pulse') === false, 'pulse clears on next scan (one-shot)')
+}
+
+// ---- 5. Nested topology: A OR (B AND C) ---------------------------------
+console.log('\n[5] Series-in-branch + nesting: Out = A OR (B AND C)')
+{
+  mem.clear()
+  const a = makeVariable('A', 'BOOL', false)
+  const b = makeVariable('B', 'BOOL', false)
+  const c = makeVariable('C', 'BOOL', false)
+  const out = makeVariable('Out', 'BOOL', false)
+  const rung: Rung = {
+    id: 'r', number: 1,
+    logic: [
+      parallelNode([
+        [elementNode(makeElement('NO', a.id))],
+        [elementNode(makeElement('NO', b.id)), elementNode(makeElement('NO', c.id))],
+      ]),
+    ],
+    outputs: [makeElement('COIL', out.id)],
+    power: false, comment: '',
+  }
+  let variables: Variable[] = [a, b, c, out]
+  let rungs = [rung]
+
+  set(variables, 'A', true)
+  ;({ variables, rungs } = scan(variables, rungs))
+  assert(boolOf(variables, 'Out') === true, 'A alone energizes Out (OR leg)')
+
+  set(variables, 'A', false)
+  set(variables, 'B', true)
+  ;({ variables, rungs } = scan(variables, rungs))
+  assert(boolOf(variables, 'Out') === false, 'B alone does NOT energize (series needs B AND C)')
+
+  set(variables, 'C', true)
+  ;({ variables, rungs } = scan(variables, rungs))
+  assert(boolOf(variables, 'Out') === true, 'B AND C in the branch energizes Out')
 }
 
 console.log(`\n${failures === 0 ? 'ALL PASSED' : failures + ' FAILURE(S)'}`)

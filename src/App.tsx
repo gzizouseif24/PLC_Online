@@ -64,7 +64,12 @@ export default function App() {
     }
 
     if (!effectiveRungId) return
-    dispatch({ type: 'ADD_INSTRUCTION', rungId: effectiveRungId, element: el })
+    dispatch({
+      type: 'ADD_INSTRUCTION',
+      rungId: effectiveRungId,
+      element: el,
+      afterElementId: selectedElementId,
+    })
     setSelectedRungId(effectiveRungId)
     setSelectedElementId(el.id)
     openConfig(el, centerAnchor)

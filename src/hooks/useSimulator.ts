@@ -16,7 +16,12 @@ export type Action =
   | { type: 'SET_INTERVAL'; interval: number }
   | { type: 'ADD_RUNG' }
   | { type: 'DELETE_RUNG'; rungId: string }
-  | { type: 'ADD_INSTRUCTION'; rungId: string; element: Element }
+  | {
+      type: 'ADD_INSTRUCTION'
+      rungId: string
+      element: Element
+      afterElementId?: string | null
+    }
   | { type: 'ADD_PARALLEL'; rungId: string; targetElementId: string; element: Element }
   | { type: 'DELETE_ELEMENT'; elementId: string }
   | {
@@ -75,21 +80,47 @@ function containsElement(nodes: LadderNode[], elId: string): boolean {
   )
 }
 
-/** Add a parallel (OR) branch around the top-level node that owns `elId`. */
-function addParallel(
-  nodes: LadderNode[],
-  elId: string,
-  newEl: Element,
-): LadderNode[] {
+/**
+ * Add a parallel (OR) branch related to `elId`, at any depth:
+ * - if `elId` is the sole element of a parallel leg → add a sibling leg to that parallel
+ * - otherwise wrap the element itself in a new 2-leg parallel (nesting / crossing)
+ */
+function addParallel(nodes: LadderNode[], elId: string, newEl: Element): LadderNode[] {
   return nodes.map((node) => {
-    if (node.kind === 'element' && node.element.id === elId) {
-      return parallelNode([[node], [elementNode(newEl)]])
+    if (node.kind === 'element') {
+      return node.element.id === elId
+        ? parallelNode([[node], [elementNode(newEl)]])
+        : node
     }
-    if (node.kind === 'parallel' && containsElement(node.branches.flat(), elId)) {
+    const legIndex = node.branches.findIndex(
+      (b) => b.length === 1 && b[0].kind === 'element' && b[0].element.id === elId,
+    )
+    if (legIndex !== -1) {
       return { ...node, branches: [...node.branches, [elementNode(newEl)]] }
     }
-    return node
+    return { ...node, branches: node.branches.map((b) => addParallel(b, elId, newEl)) }
   })
+}
+
+/** Insert `newNode` in series immediately after the element `elId`, at any depth. */
+function insertAfterElement(
+  nodes: LadderNode[],
+  elId: string,
+  newNode: LadderNode,
+): LadderNode[] {
+  const out: LadderNode[] = []
+  for (const node of nodes) {
+    if (node.kind === 'element') {
+      out.push(node)
+      if (node.element.id === elId) out.push(newNode)
+    } else {
+      out.push({
+        ...node,
+        branches: node.branches.map((b) => insertAfterElement(b, elId, newNode)),
+      })
+    }
+  }
+  return out
 }
 
 // ---- reducer -------------------------------------------------------------
@@ -127,10 +158,16 @@ function reducer(state: SimulatorState, action: Action): SimulatorState {
 
     case 'ADD_INSTRUCTION': {
       const el = action.element
+      const after = action.afterElementId
       const rungs = state.rungs.map((r) => {
         if (r.id !== action.rungId) return r
         if (isInput(el.type)) {
-          return { ...r, logic: [...r.logic, elementNode(el)] }
+          // insert in series after the selected logic element, else append
+          const logic =
+            after && containsElement(r.logic, after)
+              ? insertAfterElement(r.logic, after, elementNode(el))
+              : [...r.logic, elementNode(el)]
+          return { ...r, logic }
         }
         return { ...r, outputs: [...r.outputs, el] }
       })
