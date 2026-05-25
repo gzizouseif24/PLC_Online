@@ -21,6 +21,8 @@ interface CtxState {
   y: number
 }
 
+const centerAnchor = () => ({ x: window.innerWidth / 2 - 140, y: 110 })
+
 export default function App() {
   const [state, dispatch] = useSimulator()
   useScanCycle(state, dispatch)
@@ -29,7 +31,7 @@ export default function App() {
     () => state.rungs[0]?.id ?? null,
   )
   const [selectedElementId, setSelectedElementId] = useState<string | null>(null)
-  const [branchTarget, setBranchTarget] = useState<{ rungId: string; elementId: string } | null>(null)
+  const [closing, setClosing] = useState<{ rungId: string; branchId: string } | null>(null)
   const [config, setConfig] = useState<ConfigState | null>(null)
   const [ctx, setCtx] = useState<CtxState | null>(null)
 
@@ -47,23 +49,8 @@ export default function App() {
     setConfig({ element, anchor })
 
   const handlePick = (instr: InstructionType) => {
-    const el = makeElement(instr)
-    const centerAnchor = { x: window.innerWidth / 2 - 140, y: 110 }
-
-    if (branchTarget) {
-      dispatch({
-        type: 'ADD_PARALLEL',
-        rungId: branchTarget.rungId,
-        targetElementId: branchTarget.elementId,
-        element: el,
-      })
-      setBranchTarget(null)
-      setSelectedElementId(el.id)
-      openConfig(el, centerAnchor)
-      return
-    }
-
     if (!effectiveRungId) return
+    const el = makeElement(instr)
     dispatch({
       type: 'ADD_INSTRUCTION',
       rungId: effectiveRungId,
@@ -72,12 +59,24 @@ export default function App() {
     })
     setSelectedRungId(effectiveRungId)
     setSelectedElementId(el.id)
-    openConfig(el, centerAnchor)
+    openConfig(el, centerAnchor())
   }
 
-  // keyboard: Delete removes selected element, else selected rung
+  const handleAddBranch = (rungId: string, startNodeId: string) => {
+    const el = makeElement('NO')
+    dispatch({ type: 'ADD_BRANCH', rungId, startNodeId, element: el })
+    setSelectedRungId(rungId)
+    setSelectedElementId(el.id)
+    openConfig(el, centerAnchor())
+  }
+
+  // Delete selected element / rung; Escape cancels a pending branch-close
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setClosing(null)
+        return
+      }
       if (e.key !== 'Delete') return
       const tag = (document.activeElement?.tagName ?? '').toLowerCase()
       if (tag === 'input' || tag === 'select' || tag === 'textarea') return
@@ -93,7 +92,6 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey)
   }, [selectedElementId, effectiveRungId, config, dispatch])
 
-  // close context menu on any outside click
   useEffect(() => {
     if (!ctx) return
     const close = () => setCtx(null)
@@ -112,32 +110,34 @@ export default function App() {
       />
 
       <div className="app-main">
-        <InstructionPalette
-          branchMode={branchTarget !== null}
-          hasTarget={effectiveRungId !== null}
-          onPick={handlePick}
-        />
+        <InstructionPalette hasTarget={effectiveRungId !== null} onPick={handlePick} />
 
         <LadderCanvas
           rungs={state.rungs}
           variables={state.variables}
           selectedRungId={effectiveRungId}
           selectedElementId={selectedElementId}
+          closing={closing}
           onSelectRung={(id) => {
             setSelectedRungId(id)
             setSelectedElementId(null)
-            setBranchTarget(null)
           }}
           onSelectElement={(el, rungId) => {
             setSelectedRungId(rungId)
             setSelectedElementId(el.id)
-            setBranchTarget(null)
           }}
-          onContextMenu={(el, _rungId, _region, x, y) => {
+          onContextMenu={(el, _rungId, x, y) => {
             setSelectedElementId(el.id)
             setCtx({ element: el, x, y })
           }}
-          onAddBranch={(rungId, elementId) => setBranchTarget({ rungId, elementId })}
+          onAddBranch={handleAddBranch}
+          onStartClose={(rungId, branchId) => setClosing({ rungId, branchId })}
+          onCloseAtNode={(rungId, nodeId) => {
+            if (closing) {
+              dispatch({ type: 'CLOSE_BRANCH', rungId, branchId: closing.branchId, closeNodeId: nodeId })
+              setClosing(null)
+            }
+          }}
           onDeleteRung={(rungId) => {
             dispatch({ type: 'DELETE_RUNG', rungId })
             if (selectedRungId === rungId) setSelectedRungId(null)
@@ -145,7 +145,7 @@ export default function App() {
           onAddRung={() => dispatch({ type: 'ADD_RUNG' })}
           onClearSelection={() => {
             setSelectedElementId(null)
-            setBranchTarget(null)
+            setClosing(null)
           }}
         />
 

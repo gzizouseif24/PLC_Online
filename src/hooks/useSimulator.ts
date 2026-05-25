@@ -1,14 +1,14 @@
 import { useReducer } from 'react'
 import type {
+  Branch,
   Element,
-  LadderNode,
   Rung,
   SimulatorState,
   Variable,
   VarValue,
 } from '../types/simulator'
 import { isInput } from '../logic/instructions'
-import { elementNode, parallelNode, uid } from '../logic/factory'
+import { uid } from '../logic/factory'
 import { createSeedState } from '../logic/seedProgram'
 
 export type Action =
@@ -16,14 +16,11 @@ export type Action =
   | { type: 'SET_INTERVAL'; interval: number }
   | { type: 'ADD_RUNG' }
   | { type: 'DELETE_RUNG'; rungId: string }
-  | {
-      type: 'ADD_INSTRUCTION'
-      rungId: string
-      element: Element
-      afterElementId?: string | null
-    }
-  | { type: 'ADD_PARALLEL'; rungId: string; targetElementId: string; element: Element }
+  | { type: 'ADD_INSTRUCTION'; rungId: string; element: Element; afterElementId?: string | null }
+  | { type: 'ADD_BRANCH'; rungId: string; startNodeId: string; element: Element }
+  | { type: 'CLOSE_BRANCH'; rungId: string; branchId: string; closeNodeId: string | null }
   | { type: 'DELETE_ELEMENT'; elementId: string }
+  | { type: 'DELETE_BRANCH'; rungId: string; branchId: string }
   | {
       type: 'CONFIGURE_ELEMENT'
       elementId: string
@@ -37,97 +34,57 @@ export type Action =
   | { type: 'TICK'; variables: Variable[]; rungs: Rung[]; cycleMs: number }
   | { type: 'RESET_SCAN' }
 
-// ---- recursive node helpers ---------------------------------------------
+// ---- helpers -------------------------------------------------------------
 
-function mapNodeElements(node: LadderNode, fn: (el: Element) => Element): LadderNode {
-  if (node.kind === 'element') {
-    return { ...node, element: fn(node.element) }
-  }
+function mapRungElements(rung: Rung, fn: (el: Element) => Element): Rung {
   return {
-    ...node,
-    branches: node.branches.map((branch) => branch.map((n) => mapNodeElements(n, fn))),
+    ...rung,
+    main: rung.main.map(fn),
+    branches: rung.branches.map((b) => ({ ...b, contacts: b.contacts.map(fn) })),
+    outputs: rung.outputs.map(fn),
   }
 }
 
-/** Remove the element with `elId` anywhere in a node series, collapsing empty parallels. */
-function removeElement(nodes: LadderNode[], elId: string): LadderNode[] {
-  const result: LadderNode[] = []
-  for (const node of nodes) {
-    if (node.kind === 'element') {
-      if (node.element.id === elId) continue
-      result.push(node)
-    } else {
-      const branches = node.branches
-        .map((b) => removeElement(b, elId))
-        .filter((b) => b.length > 0)
-      if (branches.length === 0) continue
-      if (branches.length === 1) {
-        // collapse single-branch parallel back into a plain series
-        result.push(...branches[0])
-        continue
-      }
-      result.push({ ...node, branches })
-    }
+function mainIndexOf(rung: Rung, elId: string): number {
+  return rung.main.findIndex((c) => c.id === elId)
+}
+
+function branchOf(rung: Rung, elId: string): { branch: Branch; index: number } | null {
+  for (const b of rung.branches) {
+    const i = b.contacts.findIndex((c) => c.id === elId)
+    if (i !== -1) return { branch: b, index: i }
   }
-  return result
+  return null
 }
 
-function containsElement(nodes: LadderNode[], elId: string): boolean {
-  return nodes.some((n) =>
-    n.kind === 'element'
-      ? n.element.id === elId
-      : n.branches.some((b) => containsElement(b, elId)),
-  )
+/** Insert a contact into the main line at contact position `pos` (adds one node). */
+function insertMainContact(rung: Rung, pos: number, el: Element): Rung {
+  const main = [...rung.main]
+  main.splice(pos, 0, el)
+  const mainNodes = [...rung.mainNodes]
+  mainNodes.splice(pos + 1, 0, uid())
+  return { ...rung, main, mainNodes }
 }
 
-/**
- * Add a parallel (OR) branch related to `elId`, at any depth:
- * - if `elId` is the sole element of a parallel leg → add a sibling leg to that parallel
- * - otherwise wrap the element itself in a new 2-leg parallel (nesting / crossing)
- */
-function addParallel(nodes: LadderNode[], elId: string, newEl: Element): LadderNode[] {
-  return nodes.map((node) => {
-    if (node.kind === 'element') {
-      return node.element.id === elId
-        ? parallelNode([[node], [elementNode(newEl)]])
-        : node
-    }
-    const legIndex = node.branches.findIndex(
-      (b) => b.length === 1 && b[0].kind === 'element' && b[0].element.id === elId,
-    )
-    if (legIndex !== -1) {
-      return { ...node, branches: [...node.branches, [elementNode(newEl)]] }
-    }
-    return { ...node, branches: node.branches.map((b) => addParallel(b, elId, newEl)) }
-  })
+function removeMainContact(rung: Rung, i: number): Rung {
+  const removedNode = rung.mainNodes[i + 1]
+  const main = rung.main.filter((_, idx) => idx !== i)
+  const mainNodes = rung.mainNodes.filter((_, idx) => idx !== i + 1)
+  if (mainNodes.length < 2) mainNodes.push(uid()) // keep left rail != right rail
+  const survivor = mainNodes[Math.min(i, mainNodes.length - 1)]
+  const branches = rung.branches.map((b) => ({
+    ...b,
+    startNodeId: b.startNodeId === removedNode ? survivor : b.startNodeId,
+    closeNodeId: b.closeNodeId === removedNode ? survivor : b.closeNodeId,
+  }))
+  return { ...rung, main, mainNodes, branches }
 }
-
-/** Insert `newNode` in series immediately after the element `elId`, at any depth. */
-function insertAfterElement(
-  nodes: LadderNode[],
-  elId: string,
-  newNode: LadderNode,
-): LadderNode[] {
-  const out: LadderNode[] = []
-  for (const node of nodes) {
-    if (node.kind === 'element') {
-      out.push(node)
-      if (node.element.id === elId) out.push(newNode)
-    } else {
-      out.push({
-        ...node,
-        branches: node.branches.map((b) => insertAfterElement(b, elId, newNode)),
-      })
-    }
-  }
-  return out
-}
-
-// ---- reducer -------------------------------------------------------------
 
 function nextRungNumber(rungs: Rung[]): number {
   return rungs.reduce((max, r) => Math.max(max, r.number), 0) + 1
 }
+
+// ---- reducer -------------------------------------------------------------
 
 function reducer(state: SimulatorState, action: Action): SimulatorState {
   switch (action.type) {
@@ -141,7 +98,9 @@ function reducer(state: SimulatorState, action: Action): SimulatorState {
       const rung: Rung = {
         id: uid(),
         number: nextRungNumber(state.rungs),
-        logic: [],
+        mainNodes: [uid(), uid()],
+        main: [],
+        branches: [],
         outputs: [],
         power: false,
         comment: '',
@@ -161,34 +120,84 @@ function reducer(state: SimulatorState, action: Action): SimulatorState {
       const after = action.afterElementId
       const rungs = state.rungs.map((r) => {
         if (r.id !== action.rungId) return r
-        if (isInput(el.type)) {
-          // insert in series after the selected logic element, else append
-          const logic =
-            after && containsElement(r.logic, after)
-              ? insertAfterElement(r.logic, after, elementNode(el))
-              : [...r.logic, elementNode(el)]
-          return { ...r, logic }
+        if (!isInput(el.type)) return { ...r, outputs: [...r.outputs, el] }
+
+        if (after) {
+          const mi = mainIndexOf(r, after)
+          if (mi !== -1) return insertMainContact(r, mi + 1, el)
+          const found = branchOf(r, after)
+          if (found) {
+            const branches = r.branches.map((b) => {
+              if (b.id !== found.branch.id) return b
+              const contacts = [...b.contacts]
+              contacts.splice(found.index + 1, 0, el)
+              return { ...b, contacts }
+            })
+            return { ...r, branches }
+          }
         }
-        return { ...r, outputs: [...r.outputs, el] }
+        return insertMainContact(r, r.main.length, el)
       })
       return { ...state, rungs }
     }
 
-    case 'ADD_PARALLEL': {
+    case 'ADD_BRANCH': {
+      const branch: Branch = {
+        id: uid(),
+        startNodeId: action.startNodeId,
+        contacts: [action.element],
+        closeNodeId: null,
+        live: false,
+      }
+      const rungs = state.rungs.map((r) =>
+        r.id === action.rungId ? { ...r, branches: [...r.branches, branch] } : r,
+      )
+      return { ...state, rungs }
+    }
+
+    case 'CLOSE_BRANCH': {
       const rungs = state.rungs.map((r) =>
         r.id === action.rungId
-          ? { ...r, logic: addParallel(r.logic, action.targetElementId, action.element) }
+          ? {
+              ...r,
+              branches: r.branches.map((b) =>
+                b.id === action.branchId ? { ...b, closeNodeId: action.closeNodeId } : b,
+              ),
+            }
+          : r,
+      )
+      return { ...state, rungs }
+    }
+
+    case 'DELETE_BRANCH': {
+      const rungs = state.rungs.map((r) =>
+        r.id === action.rungId
+          ? { ...r, branches: r.branches.filter((b) => b.id !== action.branchId) }
           : r,
       )
       return { ...state, rungs }
     }
 
     case 'DELETE_ELEMENT': {
-      const rungs = state.rungs.map((r) => ({
-        ...r,
-        logic: removeElement(r.logic, action.elementId),
-        outputs: r.outputs.filter((o) => o.id !== action.elementId),
-      }))
+      const rungs = state.rungs.map((r) => {
+        const mi = mainIndexOf(r, action.elementId)
+        if (mi !== -1) return removeMainContact(r, mi)
+        const found = branchOf(r, action.elementId)
+        if (found) {
+          const branches = r.branches
+            .map((b) =>
+              b.id === found.branch.id
+                ? { ...b, contacts: b.contacts.filter((c) => c.id !== action.elementId) }
+                : b,
+            )
+            .filter((b) => b.contacts.length > 0)
+          return { ...r, branches }
+        }
+        if (r.outputs.some((o) => o.id === action.elementId)) {
+          return { ...r, outputs: r.outputs.filter((o) => o.id !== action.elementId) }
+        }
+        return r
+      })
       return { ...state, rungs }
     }
 
@@ -197,12 +206,7 @@ function reducer(state: SimulatorState, action: Action): SimulatorState {
         el.id === action.elementId
           ? { ...el, varId: action.varId, params: action.params }
           : el
-      const rungs = state.rungs.map((r) => ({
-        ...r,
-        logic: r.logic.map((n) => mapNodeElements(n, apply)),
-        outputs: r.outputs.map(apply),
-      }))
-      return { ...state, rungs }
+      return { ...state, rungs: state.rungs.map((r) => mapRungElements(r, apply)) }
     }
 
     case 'ADD_VARIABLE':
@@ -226,15 +230,13 @@ function reducer(state: SimulatorState, action: Action): SimulatorState {
 
     case 'DELETE_VARIABLE': {
       const variables = state.variables.filter((v) => v.id !== action.id)
-      // null out references to the deleted variable
       const clearRef = (el: Element): Element =>
         el.varId === action.id ? { ...el, varId: null } : el
-      const rungs = state.rungs.map((r) => ({
-        ...r,
-        logic: r.logic.map((n) => mapNodeElements(n, clearRef)),
-        outputs: r.outputs.map(clearRef),
-      }))
-      return { ...state, variables, rungs }
+      return {
+        ...state,
+        variables,
+        rungs: state.rungs.map((r) => mapRungElements(r, clearRef)),
+      }
     }
 
     case 'TICK':

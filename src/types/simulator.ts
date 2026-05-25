@@ -85,16 +85,35 @@ export interface Element {
  * A rung's input-conditioning logic is a SERIES of nodes evaluated left -> right.
  * A node is either a single element, or a PARALLEL group of sub-series (OR).
  */
-export type LadderNode =
-  | { id: string; kind: 'element'; element: Element }
-  | { id: string; kind: 'parallel'; branches: LadderNode[][] }
+/**
+ * A parallel branch leg. It starts at a main-line node (`startNodeId`) and runs
+ * left→right through its own series of contacts. It is OPEN until the user
+ * closes it onto a main-line node (`closeNodeId`); an open branch carries no
+ * power back to the rung and does not auto-rejoin (shown with an arrow handle).
+ */
+export interface Branch {
+  id: string
+  startNodeId: string
+  contacts: Element[]
+  closeNodeId: string | null // null = open
+  live: boolean
+}
 
+/**
+ * Editing model for one rung. The main line is `main.length` contacts wired
+ * through `mainNodes` (length main.length + 1): mainNodes[0] is the left rail,
+ * the last is the right side that feeds the outputs. main[i] connects
+ * mainNodes[i] → mainNodes[i+1]. Node ids are stable so branch references
+ * survive insertions/deletions on the main line.
+ */
 export interface Rung {
   id: string
   number: number
-  logic: LadderNode[] // input region (contacts, compares)
-  outputs: Element[] // output region (coils, timers, counters, math)
-  power: boolean // updated each scan
+  mainNodes: string[]
+  main: Element[]
+  branches: Branch[]
+  outputs: Element[] // coils/timers/counters/math, driven by left↔right connectivity
+  power: boolean
   comment: string
 }
 

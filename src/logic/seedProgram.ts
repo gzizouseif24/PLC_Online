@@ -1,22 +1,17 @@
 import type { SimulatorState } from '../types/simulator'
-import { elementNode, makeElement, makeVariable, parallelNode } from './factory'
+import { makeElement, makeVariable } from './factory'
 
 /**
  * Preloaded motor starter with seal-in:
- *   ( Start[NO]  OR  Motor[NO] )  AND  Stop[NC]  ->  Motor (COIL)
+ *   ( Start[NO]  parallel  Motor[NO] )  in series with  Stop[NC]  ->  Motor coil
  *
- * The parallel branch wraps a SUBSET of the rung (Start ∥ Motor seal), both in
- * series with Stop — a true seal-in that the flat "whole-rung OR" model cannot express.
+ * Main line nodes n0─Start─n1─Stop─n2. Branch starts at n0, holds Motor[NO],
+ * closed onto n1 (so Motor parallels Start).
  */
 export function createSeedState(): SimulatorState {
   const start = makeVariable('Start', 'BOOL', false)
   const stop = makeVariable('Stop', 'BOOL', false)
   const motor = makeVariable('Motor', 'BOOL', false)
-
-  const startContact = makeElement('NO', start.id)
-  const sealContact = makeElement('NO', motor.id)
-  const stopContact = makeElement('NC', stop.id)
-  const motorCoil = makeElement('COIL', motor.id)
 
   return {
     variables: [start, stop, motor],
@@ -24,11 +19,18 @@ export function createSeedState(): SimulatorState {
       {
         id: 'rung-seed-1',
         number: 1,
-        logic: [
-          parallelNode([[elementNode(startContact)], [elementNode(sealContact)]]),
-          elementNode(stopContact),
+        mainNodes: ['n0', 'n1', 'n2'],
+        main: [makeElement('NO', start.id), makeElement('NC', stop.id)],
+        branches: [
+          {
+            id: 'branch-seed-1',
+            startNodeId: 'n0',
+            contacts: [makeElement('NO', motor.id)],
+            closeNodeId: 'n1',
+            live: false,
+          },
         ],
-        outputs: [motorCoil],
+        outputs: [makeElement('COIL', motor.id)],
         power: false,
         comment: 'Motor starter — Start/Stop with seal-in',
       },

@@ -343,6 +343,7 @@ button {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  overflow-x: auto;
 }
 .rung-comment {
   font-size: 11px;
@@ -489,6 +490,65 @@ button {
 }
 .element-svg {
   display: block;
+}
+
+/* coordinate-based rung canvas */
+.rung-canvas {
+  position: relative;
+  margin: 6px 12px 2px;
+}
+.railbar {
+  position: absolute;
+  width: 5px;
+  background: var(--rail);
+  border-radius: 1px;
+}
+.railbar.live {
+  background: var(--live);
+}
+.seg {
+  position: absolute;
+  background: var(--idle);
+}
+.seg.live {
+  background: var(--live);
+}
+.node-dot {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid #fff;
+  cursor: pointer;
+  z-index: 6;
+}
+.node-dot:hover {
+  filter: brightness(1.15);
+}
+.branch-arrow {
+  position: absolute;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  color: var(--warn);
+  border-radius: 5px;
+  cursor: pointer;
+  z-index: 6;
+}
+.branch-arrow:hover,
+.branch-arrow.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.closing-hint {
+  font-size: 11px;
+  color: var(--accent);
+  align-self: center;
 }
 
 /* parallel group — main path on the rung line, OR paths hang below with risers */

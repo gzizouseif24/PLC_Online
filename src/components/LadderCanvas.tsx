@@ -7,10 +7,13 @@ interface Props {
   variables: Variable[]
   selectedRungId: string | null
   selectedElementId: string | null
+  closing: { rungId: string; branchId: string } | null
   onSelectRung: (rungId: string) => void
   onSelectElement: (el: Element, rungId: string) => void
-  onContextMenu: (el: Element, rungId: string, region: 'logic' | 'output', x: number, y: number) => void
-  onAddBranch: (rungId: string, elementId: string) => void
+  onContextMenu: (el: Element, rungId: string, x: number, y: number) => void
+  onAddBranch: (rungId: string, startNodeId: string) => void
+  onStartClose: (rungId: string, branchId: string) => void
+  onCloseAtNode: (rungId: string, nodeId: string) => void
   onDeleteRung: (rungId: string) => void
   onAddRung: () => void
   onClearSelection: () => void
@@ -21,10 +24,13 @@ export default function LadderCanvas({
   variables,
   selectedRungId,
   selectedElementId,
+  closing,
   onSelectRung,
   onSelectElement,
   onContextMenu,
   onAddBranch,
+  onStartClose,
+  onCloseAtNode,
   onDeleteRung,
   onAddRung,
   onClearSelection,
@@ -47,10 +53,13 @@ export default function LadderCanvas({
           variables={variables}
           selected={selectedRungId === rung.id}
           selectedElementId={selectedElementId}
+          closing={closing && closing.rungId === rung.id ? { branchId: closing.branchId } : null}
           onSelectRung={onSelectRung}
           onSelectElement={onSelectElement}
           onContextMenu={onContextMenu}
           onAddBranch={onAddBranch}
+          onStartClose={onStartClose}
+          onCloseAtNode={onCloseAtNode}
           onDeleteRung={onDeleteRung}
         />
       ))}

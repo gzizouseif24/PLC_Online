@@ -1,8 +1,6 @@
 import type {
   CounterValue,
   Element,
-  LadderNode,
-  Rung,
   TimerValue,
   Variable,
   VarValue,
@@ -116,44 +114,6 @@ export function evaluateContact(
     }
   }
   return false
-}
-
-/** Evaluate a series of nodes; result is incomingPower AND-chained through each. */
-function evaluateSeries(
-  nodes: LadderNode[],
-  incoming: boolean,
-  varsById: Map<string, Variable>,
-  mem: EdgeMemMap,
-): boolean {
-  let power = incoming
-  for (const node of nodes) {
-    power = evaluateNode(node, power, varsById, mem)
-    if (!power) {
-      // continue evaluating so `live` flags update, but power stays false
-    }
-  }
-  return power
-}
-
-export function evaluateNode(
-  node: LadderNode,
-  incoming: boolean,
-  varsById: Map<string, Variable>,
-  mem: EdgeMemMap,
-): boolean {
-  if (node.kind === 'element') {
-    const passes = evaluateContact(node.element, varsById, mem)
-    const out = incoming && passes
-    node.element.live = out
-    return out
-  }
-  // parallel: OR of each branch, each branch is a series fed by `incoming`
-  let any = false
-  for (const branch of node.branches) {
-    const branchPower = evaluateSeries(branch, incoming, varsById, mem)
-    if (branchPower) any = true
-  }
-  return any
 }
 
 // ---- output execution ----------------------------------------------------
@@ -310,88 +270,6 @@ export function executeOutput(
     case 'DIV':
       if (power) execMath(el, varsById)
       break
-  }
-}
-
-// ---- whole-program scan --------------------------------------------------
-
-/**
- * Evaluate every rung against a working copy of variables, mutating in place.
- * Returns the new variables + rungs (already cloned by the caller).
- * Edge memory (prev values) is updated for the NEXT scan after evaluation.
- */
-export function scanProgram(
-  variables: Variable[],
-  rungs: Rung[],
-  dtMs: number,
-  mem: EdgeMemMap,
-): { variables: Variable[]; rungs: Rung[] } {
-  const varsById = new Map<string, Variable>()
-  for (const v of variables) varsById.set(v.id, v)
-
-  // snapshot per-variable bool BEFORE evaluation, for P/N edge memory update
-  const preBool = new Map<string, boolean>()
-  for (const v of variables) preBool.set(v.id, readBool(v))
-
-  // capture incoming power per output element for counter edges (set during exec)
-  const powerForElement = new Map<string, boolean>()
-
-  for (const rung of rungs) {
-    const power = evaluateSeries(rung.logic, true, varsById, mem)
-    rung.power = power
-    for (const out of rung.outputs) {
-      powerForElement.set(out.id, power)
-      executeOutput(out, power, varsById, mem, dtMs)
-    }
-  }
-
-  // update edge memory for next scan
-  for (const rung of rungs) {
-    updateNodeEdgeMem(rung.logic, varsById, mem)
-    for (const out of rung.outputs) {
-      const m = getMem(mem, out.id)
-      m.prevPower = powerForElement.get(out.id) ?? false
-    }
-  }
-
-  return { variables, rungs }
-}
-
-function updateNodeEdgeMem(
-  nodes: LadderNode[],
-  varsById: Map<string, Variable>,
-  mem: EdgeMemMap,
-) {
-  for (const node of nodes) {
-    if (node.kind === 'element') {
-      if (node.element.type === 'P_CONTACT' || node.element.type === 'N_CONTACT') {
-        const m = getMem(mem, node.element.id)
-        m.prevVar = readBool(node.element.varId ? varsById.get(node.element.varId) : undefined)
-      }
-    } else {
-      for (const branch of node.branches) updateNodeEdgeMem(branch, varsById, mem)
-    }
-  }
-}
-
-/**
- * Seed edge memory from the current state at Run, so an input that is already
- * true when the simulation starts does NOT produce a spurious one-shot / count
- * on the first scan. Operates on clones — does not mutate live state.
- */
-export function primeEdgeMem(variables: Variable[], rungs: Rung[], mem: EdgeMemMap) {
-  mem.clear()
-  const v = structuredClone(variables)
-  const r = structuredClone(rungs)
-  const varsById = new Map<string, Variable>()
-  for (const variable of v) varsById.set(variable.id, variable)
-
-  // prevVar = current value, so steady-state inputs show no edge
-  for (const rung of r) updateNodeEdgeMem(rung.logic, varsById, mem)
-  // prevPower = steady-state rung power
-  for (const rung of r) {
-    const power = evaluateSeries(rung.logic, true, varsById, mem)
-    for (const out of rung.outputs) getMem(mem, out.id).prevPower = power
   }
 }
 

@@ -2,7 +2,6 @@ import type {
   CounterValue,
   Element,
   InstructionType,
-  LadderNode,
   TimerValue,
   Variable,
   VarType,
@@ -44,14 +43,6 @@ export function makeElement(
   id?: string,
 ): Element {
   return { id: id ?? uid(), type, varId, params, live: false }
-}
-
-export function elementNode(element: Element, id?: string): LadderNode {
-  return { id: id ?? uid(), kind: 'element', element }
-}
-
-export function parallelNode(branches: LadderNode[][], id?: string): LadderNode {
-  return { id: id ?? uid(), kind: 'parallel', branches }
 }
 
 export function varTypeForInstruction(type: InstructionType): VarType | null {
