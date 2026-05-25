@@ -123,10 +123,14 @@ export default function ElementView({
     >
       <span className={`element-label${unset ? ' unset' : ''}`}>{label}</span>
       <ElementSymbol type={element.type} live={element.live} />
-      {sub && <span className="element-sub">{sub}</span>}
-      {progress !== null && (
-        <div className="block-progress">
-          <span style={{ width: `${progress * 100}%` }} />
+      {(sub || progress !== null) && (
+        <div className="element-below">
+          {sub && <span className="element-sub">{sub}</span>}
+          {progress !== null && (
+            <div className="block-progress">
+              <span style={{ width: `${progress * 100}%` }} />
+            </div>
+          )}
         </div>
       )}
     </div>

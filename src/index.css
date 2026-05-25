@@ -354,7 +354,7 @@ button {
 .rung-line {
   display: flex;
   align-items: center;
-  padding: 14px 8px;
+  padding: 26px 8px 30px;
   overflow-x: auto;
 }
 
@@ -458,10 +458,12 @@ button {
   outline-offset: 3px;
 }
 .element-label {
+  position: absolute;
+  bottom: 100%;
+  margin-bottom: 4px;
   font-family: var(--mono);
   font-size: 11px;
   color: var(--text);
-  margin-bottom: 2px;
   white-space: nowrap;
   max-width: 130px;
   overflow: hidden;
@@ -470,11 +472,19 @@ button {
 .element-label.unset {
   color: var(--warn);
 }
+.element-below {
+  position: absolute;
+  top: 100%;
+  margin-top: 4px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+}
 .element-sub {
   font-family: var(--mono);
   font-size: 10px;
   color: var(--text-faint);
-  margin-top: 2px;
   white-space: nowrap;
 }
 .element-svg {
@@ -491,10 +501,10 @@ button {
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 14px;
+  gap: 30px;
   border-left: 3px solid var(--idle);
   border-right: 3px solid var(--idle);
-  padding: 6px 4px;
+  padding: 10px 4px;
 }
 .parallel-branches.live {
   border-color: var(--live);
@@ -511,7 +521,6 @@ button {
   background: var(--border);
   border-radius: 2px;
   overflow: hidden;
-  margin-top: 4px;
 }
 .block-progress > span {
   display: block;
