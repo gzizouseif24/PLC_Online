@@ -47,22 +47,35 @@ function NodeView({
   }
 
   const live = nodeLiveOut(node)
+  const n = node.branches.length
+  const GAP = 60 // vertical distance between branch centers
+  const riserH = (n - 1) * GAP
+  const center = riserH + 20 // axis (matches single-element center)
+
   return (
-    <div className="parallel">
-      <div className={`parallel-branches${live ? ' live' : ''}`}>
-        {node.branches.map((branch, i) => (
-          <div className="branch-row" key={i}>
-            <NodeSeries
-              nodes={branch}
-              variables={variables}
-              incomingLive={false}
-              selectedId={selectedId}
-              onSelect={onSelect}
-              onContextMenu={onContextMenu}
-            />
-          </div>
-        ))}
-      </div>
+    <div className="parallel" style={{ padding: `${riserH}px 0` }}>
+      {node.branches.map((branch, i) => (
+        <div
+          key={i}
+          className={`branch-row${i === 0 ? ' main' : ' sub'}`}
+          style={i === 0 ? undefined : { top: riserH + i * GAP }}
+        >
+          <NodeSeries
+            nodes={branch}
+            variables={variables}
+            incomingLive={false}
+            selectedId={selectedId}
+            onSelect={onSelect}
+            onContextMenu={onContextMenu}
+          />
+        </div>
+      ))}
+      {riserH > 0 && (
+        <>
+          <span className={`riser left${live ? ' live' : ''}`} style={{ top: center, height: riserH }} />
+          <span className={`riser right${live ? ' live' : ''}`} style={{ top: center, height: riserH }} />
+        </>
+      )}
     </div>
   )
 }

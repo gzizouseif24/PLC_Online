@@ -491,27 +491,33 @@ button {
   display: block;
 }
 
-/* parallel group */
+/* parallel group — main path on the rung line, OR paths hang below with risers */
 .parallel {
-  display: flex;
-  align-items: stretch;
+  position: relative;
   flex: none;
-}
-.parallel-branches {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 30px;
-  border-left: 3px solid var(--idle);
-  border-right: 3px solid var(--idle);
-  padding: 10px 4px;
-}
-.parallel-branches.live {
-  border-color: var(--live);
 }
 .branch-row {
   display: flex;
   align-items: center;
+}
+.branch-row.sub {
+  position: absolute;
+  left: 0;
+  right: 0;
+}
+.riser {
+  position: absolute;
+  width: 3px;
+  background: var(--idle);
+}
+.riser.left {
+  left: 0;
+}
+.riser.right {
+  right: 0;
+}
+.riser.live {
+  background: var(--live);
 }
 
 /* timer / counter progress bar */
