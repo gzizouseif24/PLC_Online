@@ -24,12 +24,14 @@ function nodeLiveOut(node: LadderNode): boolean {
 function NodeView({
   node,
   variables,
+  incomingLive,
   selectedId,
   onSelect,
   onContextMenu,
 }: {
   node: LadderNode
   variables: Variable[]
+  incomingLive: boolean
   selectedId: string | null
   onSelect: (el: Element) => void
   onContextMenu: (el: Element, x: number, y: number) => void
@@ -63,7 +65,7 @@ function NodeView({
           <NodeSeries
             nodes={branch}
             variables={variables}
-            incomingLive={false}
+            incomingLive={incomingLive}
             selectedId={selectedId}
             onSelect={onSelect}
             onContextMenu={onContextMenu}
@@ -72,7 +74,7 @@ function NodeView({
       ))}
       {riserH > 0 && (
         <>
-          <span className={`riser left${live ? ' live' : ''}`} style={{ top: center, height: riserH }} />
+          <span className={`riser left${incomingLive ? ' live' : ''}`} style={{ top: center, height: riserH }} />
           <span className={`riser right${live ? ' live' : ''}`} style={{ top: center, height: riserH }} />
         </>
       )}
@@ -102,6 +104,7 @@ export default function NodeSeries({
         key={node.id}
         node={node}
         variables={variables}
+        incomingLive={prevLive}
         selectedId={selectedId}
         onSelect={onSelect}
         onContextMenu={onContextMenu}
