@@ -93,12 +93,12 @@ export default function App() {
       if (isInput(type)) {
         const i = rung.main.findIndex((c) => c.id === arg)
         if (i === -1) return
+        // open branch starting at the contact's left node — user closes it themselves
         dispatch({
           type: 'ADD_BRANCH',
           rungId: rid,
           startNodeId: rung.mainNodes[i],
           element: el,
-          closeNodeId: rung.mainNodes[i + 1],
         })
       } else {
         dispatch({ type: 'ADD_INSTRUCTION', rungId: rid, element: el })

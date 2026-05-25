@@ -6,7 +6,11 @@ import { COL, ROW } from '../logic/compileRung'
 import ElementView from './Element'
 import { HWire, VWire } from './Wire'
 
-/** A drop target that highlights when an instruction is dragged over it. */
+const RAIL_X = 18
+const MAIN_Y = 52
+const SYM_HALF = 30
+const OUT_GAP = 28
+
 function Drop({
   id,
   className,
@@ -25,11 +29,6 @@ function Drop({
     </div>
   )
 }
-
-const RAIL_X = 18
-const MAIN_Y = 52
-const SYM_HALF = 30
-const OUT_GAP = 28
 
 interface Props {
   rung: Rung
@@ -59,9 +58,26 @@ export default function RungView(props: Props) {
   } = props
 
   const K = rung.main.length
-  const nodeX = (i: number) => RAIL_X + i * COL
-  const cellCenter = (i: number) => nodeX(i) + COL / 2
-  const colOf = (nodeId: string) => Math.max(0, rung.mainNodes.indexOf(nodeId))
+  const idxOf = (nodeId: string) => Math.max(0, rung.mainNodes.indexOf(nodeId))
+
+  // --- layout pass: stretch main columns so closed branches fit & rejoin cleanly
+  const colPos: number[] = []
+  for (let i = 0; i <= K; i++) colPos[i] = i
+  for (const b of rung.branches) {
+    if (!b.closeNodeId) continue
+    const s = idxOf(b.startNodeId)
+    const e = idxOf(b.closeNodeId)
+    if (e <= s) continue
+    const need = b.contacts.length
+    const have = colPos[e] - colPos[s]
+    if (have < need) {
+      const shift = need - have
+      for (let j = e; j <= K; j++) colPos[j] += shift
+    }
+  }
+  const X = (cell: number) => RAIL_X + cell * COL
+  const nodeX = (i: number) => X(colPos[i])
+  const mainCenter = (i: number) => X((colPos[i] + colPos[i + 1]) / 2)
 
   const mainNodeHot = (i: number): boolean => {
     if (i === 0) return true
@@ -71,14 +87,13 @@ export default function RungView(props: Props) {
     return rung.branches.some((b) => b.live && (b.startNodeId === nid || b.closeNodeId === nid))
   }
 
-  // outputs sit between the main-line end and the right rail
   const outCount = rung.outputs.length
   const outX = (oi: number) => nodeX(K) + OUT_GAP + oi * COL + COL / 2
   const rightRailX = nodeX(K) + OUT_GAP + Math.max(1, outCount) * COL
 
   let maxX = rightRailX
   rung.branches.forEach((b) => {
-    maxX = Math.max(maxX, nodeX(colOf(b.startNodeId)) + b.contacts.length * COL)
+    maxX = Math.max(maxX, X(colPos[idxOf(b.startNodeId)] + b.contacts.length))
   })
   const width = maxX + RAIL_X
   const height = MAIN_Y + rung.branches.length * ROW + 60
@@ -120,7 +135,7 @@ export default function RungView(props: Props) {
 
           {/* main line */}
           {rung.main.map((c, i) => {
-            const cx = cellCenter(i)
+            const cx = mainCenter(i)
             return (
               <div key={c.id}>
                 <HWire x1={nodeX(i)} x2={cx - SYM_HALF} y={MAIN_Y} live={mainNodeHot(i)} />
@@ -130,7 +145,7 @@ export default function RungView(props: Props) {
             )
           })}
 
-          {/* main-end → outputs → right rail */}
+          {/* main end → outputs → right rail */}
           {(() => {
             const segs: ReactNode[] = []
             let cursor = nodeX(K)
@@ -147,50 +162,60 @@ export default function RungView(props: Props) {
           {/* branches */}
           {rung.branches.map((b, bi) => {
             const by = MAIN_Y + (bi + 1) * ROW
-            const sCol = colOf(b.startNodeId)
-            const sx = nodeX(sCol)
-            const startHot = mainNodeHot(sCol)
-            const lastLive = b.contacts.length > 0 && b.contacts[b.contacts.length - 1].live
-            const endCol = Math.min(K, sCol + b.contacts.length)
+            const sIdx = idxOf(b.startNodeId)
+            const sCell = colPos[sIdx]
+            const sx = X(sCell)
+            const startHot = mainNodeHot(sIdx)
+            const N = b.contacts.length
+            const legEndX = X(sCell + N)
+            const lastLive = N > 0 && b.contacts[N - 1].live
 
             return (
               <div key={b.id}>
                 <VWire x={sx} y1={MAIN_Y} y2={by} live={startHot} />
                 {b.contacts.map((c, ci) => {
-                  const cx = sx + COL / 2 + ci * COL
+                  const cx = X(sCell + ci + 0.5)
                   const leftHot = ci === 0 ? startHot : b.contacts[ci - 1].live
                   return (
                     <div key={c.id}>
-                      <HWire x1={sx + ci * COL} x2={cx - SYM_HALF} y={by} live={leftHot} />
-                      <HWire x1={cx + SYM_HALF} x2={sx + (ci + 1) * COL} y={by} live={c.live} />
+                      <HWire x1={X(sCell + ci)} x2={cx - SYM_HALF} y={by} live={leftHot} />
+                      <HWire x1={cx + SYM_HALF} x2={X(sCell + ci + 1)} y={by} live={c.live} />
                       {contact(c, cx, by)}
                     </div>
                   )
                 })}
                 {b.closeNodeId ? (
                   <>
-                    <HWire x1={sx + b.contacts.length * COL} x2={nodeX(colOf(b.closeNodeId))} y={by} live={lastLive} />
-                    <VWire x={nodeX(colOf(b.closeNodeId))} y1={by} y2={MAIN_Y} live={lastLive} />
+                    <HWire x1={legEndX} x2={nodeX(idxOf(b.closeNodeId))} y={by} live={lastLive} />
+                    <VWire x={nodeX(idxOf(b.closeNodeId))} y1={by} y2={MAIN_Y} live={lastLive} />
                   </>
                 ) : (
                   <button
                     className="branch-arrow"
-                    style={{ left: sx + b.contacts.length * COL - 10, top: by - 11 }}
+                    style={{ left: legEndX - 10, top: by - 11 }}
                     title="Close this branch back onto the main line"
                     onClick={(e) => {
                       e.stopPropagation()
-                      onCloseBranch(rung.id, b.id, rung.mainNodes[endCol])
+                      const closeIdx = Math.max(sIdx + 1, Math.min(sIdx + N, K))
+                      onCloseBranch(rung.id, b.id, rung.mainNodes[closeIdx])
                     }}
                   >
                     <CornerLeftUp size={14} />
                   </button>
                 )}
+                {/* extend-branch drop slot at the leg end */}
+                <Drop
+                  id={`legend:${rung.id}:${b.id}`}
+                  className="dropzone legslot"
+                  style={{ left: legEndX - 18, top: by - 22, width: 44, height: 44 }}
+                >
+                  <div className="ind hind" />
+                </Drop>
               </div>
             )
           })}
 
-          {/* ---- drop targets ---- */}
-          {/* main-line insertion slots */}
+          {/* ---- main-line drop targets ---- */}
           {Array.from({ length: K + 1 }).map((_, g) => (
             <Drop
               key={`ms${g}`}
@@ -201,34 +226,16 @@ export default function RungView(props: Props) {
               <div className="ind vind" />
             </Drop>
           ))}
-          {/* parallel-around-contact slots (below each main contact) */}
           {rung.main.map((c, i) => (
             <Drop
               key={`par${c.id}`}
               id={`par:${rung.id}:${c.id}`}
               className="dropzone parslot"
-              style={{ left: cellCenter(i) - COL / 2, top: MAIN_Y + 16, width: COL, height: 40 }}
+              style={{ left: nodeX(i), top: MAIN_Y + 16, width: nodeX(i + 1) - nodeX(i), height: 40 }}
             >
               <div className="ind hind" />
             </Drop>
           ))}
-          {/* extend-branch slots (end of each branch leg) */}
-          {rung.branches.map((b) => {
-            const sCol = colOf(b.startNodeId)
-            const by = MAIN_Y + (rung.branches.indexOf(b) + 1) * ROW
-            const x = nodeX(sCol) + b.contacts.length * COL
-            return (
-              <Drop
-                key={`legend${b.id}`}
-                id={`legend:${rung.id}:${b.id}`}
-                className="dropzone legslot"
-                style={{ left: x - 18, top: by - 22, width: 44, height: 44 }}
-              >
-                <div className="ind hind" />
-              </Drop>
-            )
-          })}
-          {/* output slot */}
           <Drop
             id={`out:${rung.id}`}
             className="dropzone outslot"
