@@ -31,7 +31,6 @@ export default function App() {
     () => state.rungs[0]?.id ?? null,
   )
   const [selectedElementId, setSelectedElementId] = useState<string | null>(null)
-  const [closing, setClosing] = useState<{ rungId: string; branchId: string } | null>(null)
   const [config, setConfig] = useState<ConfigState | null>(null)
   const [ctx, setCtx] = useState<CtxState | null>(null)
 
@@ -70,13 +69,9 @@ export default function App() {
     openConfig(el, centerAnchor())
   }
 
-  // Delete selected element / rung; Escape cancels a pending branch-close
+  // Delete selected element / rung
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        setClosing(null)
-        return
-      }
       if (e.key !== 'Delete') return
       const tag = (document.activeElement?.tagName ?? '').toLowerCase()
       if (tag === 'input' || tag === 'select' || tag === 'textarea') return
@@ -117,7 +112,6 @@ export default function App() {
           variables={state.variables}
           selectedRungId={effectiveRungId}
           selectedElementId={selectedElementId}
-          closing={closing}
           onSelectRung={(id) => {
             setSelectedRungId(id)
             setSelectedElementId(null)
@@ -131,22 +125,15 @@ export default function App() {
             setCtx({ element: el, x, y })
           }}
           onAddBranch={handleAddBranch}
-          onStartClose={(rungId, branchId) => setClosing({ rungId, branchId })}
-          onCloseAtNode={(rungId, nodeId) => {
-            if (closing) {
-              dispatch({ type: 'CLOSE_BRANCH', rungId, branchId: closing.branchId, closeNodeId: nodeId })
-              setClosing(null)
-            }
-          }}
+          onCloseBranch={(rungId, branchId, closeNodeId) =>
+            dispatch({ type: 'CLOSE_BRANCH', rungId, branchId, closeNodeId })
+          }
           onDeleteRung={(rungId) => {
             dispatch({ type: 'DELETE_RUNG', rungId })
             if (selectedRungId === rungId) setSelectedRungId(null)
           }}
           onAddRung={() => dispatch({ type: 'ADD_RUNG' })}
-          onClearSelection={() => {
-            setSelectedElementId(null)
-            setClosing(null)
-          }}
+          onClearSelection={() => setSelectedElementId(null)}
         />
 
         <VariablePanel
