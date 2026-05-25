@@ -16,7 +16,7 @@ export interface EdgeMem {
 
 export type EdgeMemMap = Map<string, EdgeMem>
 
-function getMem(mem: EdgeMemMap, id: string): EdgeMem {
+export function getMem(mem: EdgeMemMap, id: string): EdgeMem {
   let m = mem.get(id)
   if (!m) {
     m = {}
@@ -69,7 +69,7 @@ function resolveSource(
 
 // ---- input evaluation (contacts + compares) ------------------------------
 
-function evaluateContact(
+export function evaluateContact(
   el: Element,
   varsById: Map<string, Variable>,
   mem: EdgeMemMap,
@@ -263,7 +263,7 @@ function execMath(el: Element, varsById: Map<string, Variable>) {
   setVarValue(dest, Math.round(result))
 }
 
-function executeOutput(
+export function executeOutput(
   el: Element,
   power: boolean,
   varsById: Map<string, Variable>,
