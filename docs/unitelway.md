@@ -195,6 +195,18 @@ segment mapping, the byte order and which V1 code reads which area.
     Fixed: receive buffer and parser are cleared at the start of every request.
   - Address 2-3 mode is probably fine after this fix; to retest.
 
+## 5j. Rack configuration: what is feasible
+
+- **Physical rack (what is plugged in):** identification `0F` sent to each module address
+  through the X-WAY header (network, station, gate, ext1, ext2). Addressing to find:
+  `ut_rack.py` tries gates 0..15 on module 0, then ext1 = 1..5 and ext2 = 1..5 on gate 0.
+- **Configured rack (what the application expects):** the application creates status objects
+  for each configured module, even when the module is absent. Reading them slot by slot
+  would show "configured but absent". Object codes unknown; needs an I/O module to find.
+- **Uploading the application** to decode its configuration: proprietary binary, not planned.
+- **Writing the configuration:** means downloading a modified application. Not planned:
+  stays in PL7.
+
 ## 6. How to fill the "to verify" gaps
 
 1. **Schneider manuals:** Uni-Telway reference 35000789 and the UNI-TE / communication
