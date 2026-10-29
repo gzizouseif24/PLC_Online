@@ -266,6 +266,46 @@ Round 2: gates 5 and 8 with ext1 0..5, ext2 0..3.
 - Remaining sources: Schneider's UNI-TE requests manual for TSX Micro/Premium, or a capture
   of PL7 through `ut_spy.py` (PL7 in a Windows XP/7 virtual machine).
 
+## 5q. Official UNI-TE request list (PL7 help, tcom1 "Liste des requêtes")
+
+Extracted from the PL7 help files with `tools/hlp2txt.py`. Byte coding of parameters is
+in Schneider's "TSX DR NET" manual (not in the help).
+
+| Group | Request | Code | Answer |
+|---|---|---|---|
+| General | IDENTIFICATION | 0F | 3F |
+| | READ_CPU (system diagnostic) | 4F | 7F |
+| | MIRROR | FA | FB |
+| Standard objects | READ_INTERNAL_BIT / WRITE | 00 / 10 | 30 / FE |
+| | READ_SYSTEM_BIT / WRITE | 01 / 11 | 31 / FE |
+| | READ_INTERNAL_WORD / WRITE | 04 / 14 | 34 / FE |
+| | READ_SYSTEM_WORD / WRITE | 06 / 15 | 36 / FE |
+| | READ_CONSTANT_WORD | 05 | 35 |
+| | FORCE_INTERNAL_BIT | 1B | FE |
+| | READ_GRAFCET_BIT (127 steps) | 2A | 5A |
+| I/O modules | READ_DIGITAL_MODULE_IMAGE | 49 | 79 |
+| | WRITE_DIGITAL_MODULE_IMAGE | 4A | 7A |
+| | READ_STATUS_MODULE (physical structure, full state) | 44 | 74 |
+| | READ_IO_CHANNEL (config, status...) | 43 | 73 |
+| | WRITE_IO_CHANNEL | 48 | 78 |
+| Generic objects | READ_OBJECT / WRITE_OBJECT | 36 / 37 | 66 / FE |
+| | READ_OBJECT_LIST / WRITE_OBJECT_LIST | 38 / 39 | 68 / 69 |
+| | WRITE_GENERIC_OBJECT | 83 | B3 |
+| | ACTION_GENERIC_OBJECT | 9F | CF |
+| Operating modes | RUN / STOP | 24 / 25 | FE |
+| | **INIT (warm or cold restart)** | 33 | 63 |
+| Transfer | OPEN/WRITE/CLOSE_DOWNLOAD | 3A/3B/3C | 6A/6B/6C |
+| | OPEN/READ/CLOSE_UPLOAD | 3D/3E/3F | 6D/6E/6F |
+| | BACKUP (compare / save memory zones) | 45 | 75 |
+| Semaphore | RESERVE / RELEASE / I_AM_ALIVE | 1D / 1E / 2D | FE |
+
+- DATA_EXCH example confirms the WRITE_OBJECT layout we used: `37 07 68 07 <addr> <qty> <data>`
+  (category 07 in Schneider's example; 00 works on our PLC).
+- Addressing: modules without a server (simple I/O) are reached through the CPU's UNI-TE
+  server (`SYS`); only modules / sub-modules with a server answer `module.SYS`.
+  Uni-Telway on the terminal port: module 0, channel 0, slaves 1..8.
+- `ut_modules.py` probes 4F / 44 / 49 / 43 parameter layouts (reads only).
+
 ## 6. How to fill the "to verify" gaps
 
 1. **Schneider manuals:** Uni-Telway reference 35000789 and the UNI-TE / communication
