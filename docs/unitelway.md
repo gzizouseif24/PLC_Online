@@ -177,7 +177,7 @@ segment mapping, the byte order and which V1 code reads which area.
   consistent with %MW / %KW.
 - Fault words (to read next): %SW124 CPU fault type, %SW125 blocking fault type,
   %SW126/127 blocking fault address (TSX Micro, from memory).
-- ERR LED turned steady red after this run (cause unknown).
+- %SW120..%SW127 all 0, consistent with no blocking fault (ERR off; I/O LED only).
 
 ## 6. How to fill the "to verify" gaps
 
