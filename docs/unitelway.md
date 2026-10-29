@@ -259,6 +259,13 @@ Round 2: gates 5 and 8 with ext1 0..5, ext2 0..3.
 - Plan: capture PL7 talking to the PLC through `ut_spy.py` (relay between a com0com
   virtual port and the real port, decodes every request and answer).
 
+## 5p. Blind I/O probe: nothing
+
+- V1 `02`, `03`, `07` at module positions 1..6, encodings p, p*16, p*32, p*100, p*256:
+  all refused (`FD`). I/O object codes still unknown.
+- Remaining sources: Schneider's UNI-TE requests manual for TSX Micro/Premium, or a capture
+  of PL7 through `ut_spy.py` (PL7 in a Windows XP/7 virtual machine).
+
 ## 6. How to fill the "to verify" gaps
 
 1. **Schneider manuals:** Uni-Telway reference 35000789 and the UNI-TE / communication
