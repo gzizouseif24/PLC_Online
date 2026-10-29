@@ -243,6 +243,14 @@ Round 2: gates 5 and 8 with ext1 0..5, ext2 0..3.
 - Next: ext1 32..127 (other built-in parts, module positions), ext2 0..7 on ext1 16 and 20,
   and a module in a slot to anchor the numbering.
 
+## 5n. Rack probe, round 4 (empty rack)
+
+- ext1 16 and 20 with ext2 1..7: all refused `0D`. ext2 is not used for these two parts.
+- ext1 32..127, ext2 0: nothing answers.
+- So with an empty rack, gate 8 shows exactly two parts: the CPU (ext1 0 / 16) and the
+  terminal port (ext1 20). Consistent with the rack being empty.
+- Slot numbering still unknown: needs one module in the rack.
+
 ## 6. How to fill the "to verify" gaps
 
 1. **Schneider manuals:** Uni-Telway reference 35000789 and the UNI-TE / communication
