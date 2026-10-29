@@ -208,21 +208,28 @@ def main():
     dtr = None if a.dtr is None else bool(a.dtr)
 
     if a.essai:
-        print(f"Essai des reglages sur {a.port} (ecoute seule, 3 s par reglage)\n")
+        print(f"Essai des reglages sur {a.port} (ecoute seule, 3 s par reglage, Ctrl+C pour arreter)\n")
         results = []
-        for baud in (9600, 19200, 4800, 2400, 1200):
-            for parity in ("O", "E", "N"):
-                ser = open_port(a.port, baud, parity, 1, rts, dtr)
-                try:
-                    stats, _ = listen(ser, 3, show_frames=False)
-                finally:
-                    ser.close()
-                n = sum(stats.polls.values())
-                print(f"  {baud:5d} 8{parity}1 : {n:5d} scrutations, octets isoles {stats.stray}")
-                results.append((n, baud, parity))
-        n, baud, parity = max(results)
+        try:
+            for baud in (9600, 19200, 4800, 2400, 1200):
+                for parity in ("O", "E", "N"):
+                    ser = open_port(a.port, baud, parity, 1, rts, dtr)
+                    try:
+                        stats, _ = listen(ser, 3, show_frames=False)
+                    finally:
+                        ser.close()
+                    n = sum(stats.polls.values())
+                    print(f"  {baud:5d} 8{parity}1 : {n:5d} scrutations, octets isoles {stats.stray}")
+                    results.append((n, baud, parity))
+        except KeyboardInterrupt:
+            print("  (arrete)")
+        n = max((r[0] for r in results), default=0)
         if n:
-            print(f"\n-> Meilleur reglage : {baud} 8{parity}1. Relancer avec --baud {baud} --parite {parity}")
+            best = [r for r in results if r[0] > 0]
+            bauds = sorted({r[1] for r in best})
+            print(f"\n-> Vitesse : {', '.join(map(str, bauds))} baud.")
+            print("   La parite ne se voit pas en ecoute (Windows ne signale pas les erreurs de parite) :")
+            print("   garder O (defaut du port TER) ; le premier echange avec l'automate la confirmera.")
         else:
             print("\n-> Aucune scrutation reconnue. Verifier : cable/selecteur PCX 1031, port COM, "
                   "PL7 ferme, port TER en Uni-Telway maitre. Essayer --rts 0 ou --dtr 1.")

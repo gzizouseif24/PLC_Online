@@ -101,6 +101,17 @@ Legacy V1 bit read answer: 2 bytes, forced-bits byte then value byte, bit = addr
   same address PL7 uses, with PL7 closed.
 - TSX PCX 1031: RS-232 ↔ RS-485 converter with a selector; keep the position used for PL7.
 
+## 5b. Measured on a TSX (listen-only, 2026-10-29)
+
+- TER port at **9600 baud**: polls decode cleanly; 19200 / 4800 give only garbage.
+- Parity not measurable by listening (Windows does not report parity errors);
+  odd assumed, to be confirmed by the first exchange.
+- The master polls link addresses **1 to 8**, in order, `DLE ENQ <addr>`.
+- With no slave answering: about 3 polls per second, i.e. the master waits ~0.3 s
+  per silent address. A slave therefore has at least that long to start answering.
+- PL7 closed: no address answers, so the PC can use address 1 (like PL7).
+- Still unknown: what a slave sends when polled with nothing to say (EOT expected).
+
 ## 6. How to fill the "to verify" gaps
 
 1. **Schneider manuals:** Uni-Telway reference 35000789 and the UNI-TE / communication
