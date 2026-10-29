@@ -4,6 +4,7 @@ Multi-brand PLC diagnostic tool: read live data from PLCs of several brands from
 without the vendor software.
 
 One driver per protocol, a shared engine on top (table of expected values → polling → comparison).
+Architecture and plan: [docs/architecture.md](docs/architecture.md).
 Background and field notes: [docs/rapport-technique-2026-10-23.md](docs/rapport-technique-2026-10-23.md).
 
 | Brand | Protocol | Status |
@@ -11,6 +12,7 @@ Background and field notes: [docs/rapport-technique-2026-10-23.md](docs/rapport-
 | Panasonic FP0R | MEWTOCOL-COM, serial tool port | driver + tools in this repo |
 | Siemens S7-300 | S7 via S7ONLINE (libnodave, 32-bit Python) | driver + read tool (Windows only) |
 | Omron CJ1M | Host Link (C-mode), peripheral port | driver + echo test and read tool |
+| Schneider Modicon | Modbus RTU (serial) / Modbus TCP | driver + read tool, not yet tested on a PLC |
 
 ## Layout
 
@@ -20,6 +22,7 @@ plc_online/
   drivers/panasonic.py FP0R (MEWTOCOL): checks BCC, header and length on every reply
   drivers/omron.py     CJ1M (Host Link): checks FCS, header, end code and length
   drivers/siemens.py   S7-300 (libnodave + S7ONLINE)
+  drivers/modbus.py    Modicon (Modbus RTU / TCP): checks CRC or MBAP, function, byte count
 scripts/<brand>/       command-line tools (French prompts)
 vendor/libnodave/      libnodave.dll (32-bit)
 tests/                 tests against a simulated PLC, no hardware needed
@@ -63,6 +66,16 @@ py -3.14-32 scripts/siemens/s7read.py --zone DB --db 10 --debut 20 --nombre 2
 ```
 
 `libnodave.dll` is taken from `vendor/libnodave/` by default; use `--dll` for another copy.
+
+## Modicon tool
+
+Close SoMachine / EcoStruxure first if it uses the same port.
+Serial settings (speed, parity, slave number) must match the PLC's serial line configuration.
+
+```
+python scripts/modicon/mb_read.py --port COM6 --baud 19200 --parite E --esclave 1   # %MW0..%MW9
+python scripts/modicon/mb_read.py --ip 192.168.0.10 --zone M --nombre 16           # %M0..%M15
+```
 
 ## Tests
 
