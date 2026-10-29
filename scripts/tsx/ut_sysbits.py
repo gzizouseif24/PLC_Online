@@ -204,6 +204,7 @@ SYSTEM_BITS = {
     19: "depassement periode tache",
     20: "debordement d'index",
     21: "initialisation GRAFCET",
+    30: "activation tache maitre (a confirmer)",
     50: "mise a l'heure horodateur",
     51: "perte de l'heure horodateur",
     66: "affichage voyant BAT",

@@ -139,6 +139,16 @@ Legacy V1 bit read answer: 2 bytes, forced-bits byte then value byte, bit = addr
   Without an application these may simply not be maintained: not usable for diagnosis
   until the application is reloaded.
 
+## 5f. Second TSX, with an application (STOP, RUN flashing, I/O LED on, ERR off)
+
+- %S4, %S5, %S6 all change between reads: every clock bit is live (on the first PLC,
+  without application, %S4 looked frozen).
+- **%S10 = 0 (I/O fault) matches the I/O LED.** First cross-check of a %S label against
+  the PLC's own LEDs.
+- %S16 = 1 (no I/O fault in the task: likely not updated in STOP), %S21 = 1,
+  %S30 = 1 (master task active, to confirm), %S51 = 1 (real-time clock time lost), %S8 = 1.
+- Battery bits %S66..%S68 = 0, BAT LED off: consistent.
+
 ## 6. How to fill the "to verify" gaps
 
 1. **Schneider manuals:** Uni-Telway reference 35000789 and the UNI-TE / communication
