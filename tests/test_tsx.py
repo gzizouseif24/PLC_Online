@@ -23,6 +23,7 @@ class FakeTsx:
         self.sw = [0] * 200
         self.sw[11], self.sw[13] = 250, 254
         self.sw[49:54] = [0x0001, 0x0700, 0x0521, 0x0121, 0xA001]   # clock words as read
+        self.sw[96:98] = [0x0000, 0xFFFF]                             # as read on the bench
         self.s = [0] * 128
         self.s[4], self.s[8], self.s[30], self.s[51] = 1, 1, 1, 1    # %S10 = 0: I/O fault
         self.mode = "STOP"
@@ -146,6 +147,16 @@ class TsxTests(unittest.TestCase):
         self.assertIn("!!  %S51", text)
         self.assertIn("05:21:07", text)
         self.assertIn("250 ms", text)
+        self.assertIn("aucune sauvegarde valide", text)   # %SW96 = 0 on the bench PLC
+        self.assertIn("%SW97 = -1", text)
+
+    def test_flash_backup_valid_with_words(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            tsx.show_flash_backup([0x0042, 100])   # bit 6 valid, bit 1 done, no error
+        self.assertIn("VALIDE", out.getvalue())
+        self.assertIn("100 premiers %MW", out.getvalue())
+        self.assertIn("sans erreur", out.getvalue())
 
 
 if __name__ == "__main__":

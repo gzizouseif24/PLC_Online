@@ -311,6 +311,36 @@ def cmd_etat(tsx):
     print(f"\nHorloge automate : {sw[3] & 0xFF:02X}/{sw[3] >> 8:02X}/{sw[4]:04X} "
           f"{sw[2] >> 8:02X}:{sw[2] & 0xFF:02X}:{sw[1] >> 8:02X}  (jour {sw[0]})")
     print(f"Chien de garde : {tsx.read('SW', 11, 1)[0]} ms")
+    show_flash_backup(tsx.read("SW", 96, 2))
+
+
+BACKUP_ERRORS = {
+    1: "plus de %MW demandes que de %MW configures",
+    2: "nombre de %MW hors 0..1000",
+    3: "plus de %MW a restituer que de %MW configures",
+    4: "application en RAM > 15 Kmots",
+    5: "service interdit en RUN",
+    6: "cartouche Backup presente",
+    7: "defaut d'ecriture Flash EPROM",
+}
+
+
+def show_flash_backup(sw):
+    """%SW96 / %SW97 (TSX 37 uniquement) : sauvegarde du programme en Flash EPROM interne."""
+    sw96, sw97 = sw
+    valid = sw96 >> 6 & 1
+    print("\nSauvegarde interne (Flash EPROM, TSX 37) :")
+    print(f"   programme : {'VALIDE' if valid else 'aucune sauvegarde valide'}   (%SW96 bit 6 = {valid})")
+    if sw97 == 0xFFFF:
+        print("   %MW sauvegardes : aucun   (%SW97 = -1)")
+    else:
+        print(f"   %MW sauvegardes : {sw97} premiers %MW   (%SW97 = {sw97})")
+    if sw96 >> 1 & 1:
+        if sw96 >> 2 & 1:
+            code = sw96 >> 8
+            print(f"   derniere sauvegarde : ERREUR {code} {BACKUP_ERRORS.get(code, '')}")
+        else:
+            print("   derniere sauvegarde : terminee sans erreur")
 
 
 def cmd_lire(tsx, zone, start, count):

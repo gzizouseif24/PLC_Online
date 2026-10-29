@@ -306,6 +306,19 @@ in Schneider's "TSX DR NET" manual (not in the help).
   Uni-Telway on the terminal port: module 0, channel 0, slaves 1..8.
 - `ut_modules.py` probes 4F / 44 / 49 / 43 parameter layouts (reads only).
 
+## 5r. BACKUP vs UPLOAD (PL7 help)
+
+- **BACKUP (`45`) stays inside the PLC:** copies the executable from RAM to the internal Flash
+  EPROM backup zone (PL7 menu "Backup"). On TSX 37 driven by %SW96 / %SW97:
+  %SW96 bit 0 = start (rising edge), bit 1 = done, bit 2 = error, bits 8-15 = error code,
+  bit 6 = valid program backup (= %S96); %SW97 = number of %MW saved with it (-1 = none).
+  Refused in RUN. Writing it overwrites the Flash backup.
+- Bench PLC: %SW96 = 0, %SW97 = FFFF → no valid program backup in Flash, no %MW saved.
+  Now shown by `tsx.py etat`.
+- **Copy to the PC = UPLOAD:** `3D` OPEN_UPLOAD, `3E` READ_UPLOAD (segments), `3F` CLOSE_UPLOAD
+  (PL7 "UploadStation"; errors include "PLC blank", "application reserved").
+  Parameter layout unknown; the result is PL7's binary application image.
+
 ## 6. How to fill the "to verify" gaps
 
 1. **Schneider manuals:** Uni-Telway reference 35000789 and the UNI-TE / communication
