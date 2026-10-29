@@ -179,6 +179,14 @@ segment mapping, the byte order and which V1 code reads which area.
   %SW126/127 blocking fault address (TSX Micro, from memory).
 - %SW120..%SW127 all 0, consistent with no blocking fault (ERR off; I/O LED only).
 
+## 5i. tsx.py first run on the bench
+
+- Read (%MW10 via segment 68) worked. Write `37` and RUN `24` both stopped at
+  "waiting for ACK": the PLC never acknowledged the frame. Those runs answered polls on
+  addresses 1-3, so the request may have gone out on address 2 or 3.
+- Default set back to address 1 only; the tool now resends when polled again without ACK.
+  To check with `--trace`, address 1 vs 1-3.
+
 ## 6. How to fill the "to verify" gaps
 
 1. **Schneider manuals:** Uni-Telway reference 35000789 and the UNI-TE / communication

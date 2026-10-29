@@ -7,7 +7,7 @@
     python tsx.py ecrire MW 10 1234             ecrire UN mot, avec confirmation et relecture
     python tsx.py run | stop                    passer l'automate en RUN / STOP, avec confirmation
 
-Options : --port COM6, --adresses 1-3 (adresses esclave utilisees par le PC, comme PL7).
+Options : --port COM6, --trace (octets), --adresses 1-3 (plus rapide, a l'essai : 1 par defaut).
 Fermer PL7 avant. Cable TSX PCX 1031 : meme position qu'avec PL7.
 
 Confirme sur TSX 3721 : etat, lecture %S, %SW. Probable : %MW, %MD, %KW, %KD, %M.
@@ -117,7 +117,7 @@ class UniteError(Exception):
 class Slave:
     """Le PC repond aux scrutations de plusieurs adresses (comme PL7) : plus de requetes par cycle."""
 
-    def __init__(self, ser, addrs=(1, 2, 3), category=0, trace=False):
+    def __init__(self, ser, addrs=(1,), category=0, trace=False):
         self.ser, self.addrs, self.category, self.trace = ser, tuple(addrs), category, trace
         self.parser = Parser()
         self.t0 = time.time()
@@ -134,7 +134,7 @@ class Slave:
         """Envoie une requete UNI-TE a la prochaine scrutation d'une de nos adresses."""
         payload = XWAY_TO_PLC + list(unite)
         state, frame, used = "attente scrutation", None, None
-        nak = 0
+        nak = resent = 0
         deadline = time.time() + timeout
         while time.time() < deadline:
             data = self.ser.read(self.ser.in_waiting or 1)
@@ -142,7 +142,12 @@ class Slave:
                 self.log("API ->", data)
             for ev in self.parser.feed(data):
                 kind = ev[0]
-                if kind == "poll" and ev[1] in self.addrs and state == "attente scrutation":
+                if kind == "poll" and ev[1] == used and state == "attente ACK":
+                    resent += 1
+                    if resent > 2:
+                        raise UniteError(f"l'automate ne confirme pas la trame (adresse {used}, renvoyee 2 fois)")
+                    self.send(frame)  # scrute a nouveau sans ACK : trame perdue, on la renvoie
+                elif kind == "poll" and ev[1] in self.addrs and state == "attente scrutation":
                     used = ev[1]
                     frame = build_frame(used, payload)
                     self.send(frame)
@@ -361,7 +366,7 @@ def main():
     p.add_argument("--port", default="COM6")
     p.add_argument("--baud", type=int, default=9600)
     p.add_argument("--parite", default="O", choices=["O", "E", "N"])
-    p.add_argument("--adresses", default="1-3", help="adresses esclave du PC, ex. 1-3 ou 1")
+    p.add_argument("--adresses", default="1", help="adresses esclave du PC : 1 (sur) ou 1-3 (plus rapide, a l'essai)")
     p.add_argument("--categorie", type=int, default=0, choices=range(8))
     p.add_argument("--trace", action="store_true")
     a = p.parse_args()
