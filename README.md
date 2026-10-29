@@ -13,6 +13,7 @@ Background and field notes: [docs/rapport-technique-2026-10-23.md](docs/rapport-
 | Siemens S7-300 | S7 via S7ONLINE (libnodave, 32-bit Python) | driver + read tool (Windows only) |
 | Omron CJ1M | Host Link (C-mode), peripheral port | driver + echo test and read tool |
 | Schneider Modicon | Modbus RTU (serial) / Modbus TCP | driver + read tool, not yet tested on a PLC |
+| Schneider TSX Micro / Premium | Uni-Telway, TER port (PCX 1031) | `scripts/tsx/tsx.py`: status, read, monitor (tested on TSX 3721); write, RUN/STOP experimental |
 
 ## Layout
 
@@ -76,6 +77,21 @@ Serial settings (speed, parity, slave number) must match the PLC's serial line c
 python scripts/modicon/mb_read.py --port COM6 --baud 19200 --parite E --esclave 1   # %MW0..%MW9
 python scripts/modicon/mb_read.py --ip 192.168.0.10 --zone M --nombre 16           # %M0..%M15
 ```
+
+## TSX tool (Uni-Telway)
+
+Single file, `pip install pyserial`. Close PL7 first.
+
+```
+python scripts/tsx/tsx.py etat                  # identification, faults, battery, clock
+python scripts/tsx/tsx.py lire MW 0 20          # zones: MW MD KW KD SW S M
+python scripts/tsx/tsx.py surveiller MW 0 100   # print what changes
+python scripts/tsx/tsx.py ecrire MW 10 1234     # one word, confirmation + read-back (experimental)
+python scripts/tsx/tsx.py run                   # or stop, with confirmation (experimental)
+```
+
+Protocol notes and what is confirmed: [docs/unitelway.md](docs/unitelway.md).
+Discovery scripts used to work it out: `ut_listen.py`, `ut_test.py`, `ut_probe.py`, `ut_sysbits.py`, `ut_words.py`.
 
 ## Tests
 
