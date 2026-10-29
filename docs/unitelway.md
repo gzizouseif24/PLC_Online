@@ -251,6 +251,14 @@ Round 2: gates 5 and 8 with ext1 0..5, ext2 0..3.
   terminal port (ext1 20). Consistent with the rack being empty.
 - Slot numbering still unknown: needs one module in the rack.
 
+## 5o. Modules added: TSX DEZ 32D2 (32 digital inputs) + TSX AEZ 414 (4 analog inputs)
+
+- Gate 8, ext1 0..63: still only CPU (0 / 16) and terminal port (20). Simple I/O modules
+  have no communication server, so they do not answer identification.
+- Their %I / %IW and status words need the I/O object request codes, still unknown.
+- Plan: capture PL7 talking to the PLC through `ut_spy.py` (relay between a com0com
+  virtual port and the real port, decodes every request and answer).
+
 ## 6. How to fill the "to verify" gaps
 
 1. **Schneider manuals:** Uni-Telway reference 35000789 and the UNI-TE / communication
