@@ -319,6 +319,30 @@ in Schneider's "TSX DR NET" manual (not in the help).
   (PL7 "UploadStation"; errors include "PLC blank", "application reserved").
   Parameter layout unknown; the result is PL7's binary application image.
 
+## 5s. Program upload, captured from PL7 (2026-10-29, bench TSX 3721, through a proxy)
+
+PL7 → PLC sequence (category 07 everywhere), run twice to the end in the capture:
+
+| Step | Request | Answer |
+|---|---|---|
+| link check | `FA 07` + up to 126 bytes | `FB 00` + echo |
+| identification | `0F 07` | `3F FF 04 65 08 "TSX 3721" ...` |
+| reserve | `1D 07 FF FE 90 36` | `FE` (sent again before each step) |
+| application info | `92 07 0A 00 00 00 00 00 00 60` | `C2 0A 00 "STATION" ... + 96 bytes` (name, version, signature?) |
+| other info block | `92 07 01 00 00 00 00 20` | `C2 01 00 dd dd 77 77 ...` (32 bytes) |
+| CPU diagnostic | `4F 07` | `7F 00 02 0B ...` (77 bytes, contains "STATION") |
+| open upload | `3D 07 00 00 00 00 00 00 00 00 77 00` | `6D 00` |
+| read segment n | `3E 07 <n lo> <n hi>` (n = 1, 2, ...) | `6E <status> <n lo> <n hi> <len lo> <len hi> <len bytes>` |
+| close upload | `3F 07` | `6F 00` |
+| release | `1E 07` | `FE` |
+
+- Segments of 0x77 = 119 bytes; status `00` = more, **`0F` = last segment**.
+- Bench application: 38 segments, 4512 bytes; contains "STATION", "TSX 3721",
+  "TSX DEZ 32D2" (×2) and "TSX AEZ 414": the rack configuration is in the upload.
+- **EOT confirmed:** PL7 answers polls with `04` when it has nothing to send.
+- `92` is not in the help's request list.
+- Implemented: `tsx.py sauvegarder` / `tsx.py comparer`.
+
 ## 6. How to fill the "to verify" gaps
 
 1. **Schneider manuals:** Uni-Telway reference 35000789 and the UNI-TE / communication

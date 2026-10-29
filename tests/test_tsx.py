@@ -27,6 +27,10 @@ class FakeTsx:
         self.s = [0] * 128
         self.s[4], self.s[8], self.s[30], self.s[51] = 1, 1, 1, 1    # %S10 = 0: I/O fault
         self.mode = "STOP"
+        self.app = bytes((i * 7 + 3) % 256 for i in range(4512))   # same size as the bench application
+        self.reserved = False
+        self.upload_open = False
+        self.eots = 0
         self.out = bytearray()
         self.next_poll = 1
         self.polled_by = []
@@ -39,6 +43,7 @@ class FakeTsx:
         self.out.clear()
 
     def write(self, data):
+        self.eots += data == bytes([tsx.EOT])
         self.frames_sent = getattr(self, "frames_sent", 0) + data.startswith(bytes([tsx.DLE, tsx.STX]))
         self.out += data  # RS-485 echo
         evs = [e for e in tsx.Parser().feed(data) if e[0] == "frame"]
@@ -72,6 +77,27 @@ class FakeTsx:
             for i in range(words):
                 mem[addr * words + i] = struct.unpack("<H", raw[2 * i:2 * i + 2])[0]
             return [0xFE]
+        if code == tsx.RESERVE:
+            assert u[1:] == [7, 0xFF, 0xFE, 0x90, 0x36]
+            self.reserved = True
+            return [0xFE]
+        if code == tsx.RELEASE:
+            self.reserved = False
+            return [0xFE]
+        if code == tsx.APP_INFO:
+            return [0xC2, 0x0A, 0x00, *b"STATION", 0, 0, 0, 0, 0, 0, 0, 0x04, 0x30, 0x11, 0x02]
+        if code == tsx.OPEN_UPLOAD:
+            assert u[1:] == [7, 0, 0, 0, 0, 0, 0, 0, 0, 0x77, 0]   # as PL7 sends it
+            self.upload_open = True
+            return [0x6D, 0x00]
+        if code == tsx.READ_UPLOAD:
+            seg = u[2] | u[3] << 8
+            chunk = self.app[(seg - 1) * 119:seg * 119]
+            last = seg * 119 >= len(self.app)
+            return [0x6E, 0x0F if last else 0x00, seg & 0xFF, seg >> 8, len(chunk) & 0xFF, len(chunk) >> 8, *chunk]
+        if code == tsx.CLOSE_UPLOAD:
+            self.upload_open = False
+            return [0x6F, 0x00]
         if code in (tsx.RUN, tsx.STOP):
             self.mode = "RUN" if code == tsx.RUN else "STOP"
             return [0xFE]
@@ -132,6 +158,52 @@ class TsxTests(unittest.TestCase):
         self.plc.out += bytes([tsx.DLE, tsx.ENQ, 1]) * 5
         self.tsx.run()
         self.assertEqual(self.plc.frames_sent, 1)
+
+    def test_upload_reads_whole_application(self):
+        blob = self.tsx.upload()
+        self.assertEqual(blob, self.plc.app)
+        self.assertFalse(self.plc.upload_open)
+
+    def test_answer_polls_with_eot_while_waiting(self):
+        class Slow(FakeTsx):
+            """Answers only after polling the PC once more, like a busy PLC."""
+            def write(self, data):
+                if data == bytes([tsx.EOT]):
+                    self.eots += 1
+                    if self.pending:
+                        self.out += self.pending
+                        self.pending = None
+                    return
+                before = len(self.out)
+                super().write(data)
+                if data.startswith(bytes([tsx.DLE, tsx.STX])):
+                    reply = bytes(self.out[before + len(data) + 1:])          # keep echo + ACK
+                    del self.out[before + len(data) + 1:]
+                    self.pending = reply
+            pending = None
+        plc = Slow()
+        x = tsx.Tsx(tsx.Slave(plc, (1,)))
+        self.assertEqual(x.read("SW", 11, 1), [250])
+        self.assertGreaterEqual(plc.eots, 1)
+
+    def test_sauvegarder_and_comparer(self):
+        import os, tempfile
+        with tempfile.TemporaryDirectory() as d:
+            f = os.path.join(d, "bench.tsxbak")
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                tsx.cmd_sauvegarder(self.tsx, f)
+                tsx.cmd_comparer(self.tsx, f)
+            self.assertEqual(Path(f).read_bytes(), self.plc.app)
+            self.assertIn("application     : STATION", Path(f + ".txt").read_text())
+            self.assertIn("IDENTIQUE", out.getvalue())
+            self.assertFalse(self.plc.reserved)
+            self.plc.app = self.plc.app[:100] + b"X" + self.plc.app[101:]
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                tsx.cmd_comparer(self.tsx, f)
+            self.assertIn("1 octets differents", out.getvalue())
+            self.assertIn("octet 100", out.getvalue())
 
     def test_refused_request(self):
         with self.assertRaisesRegex(tsx.UniteError, "FD"):

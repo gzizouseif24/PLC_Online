@@ -87,7 +87,9 @@ python scripts/tsx/tsx.py etat                  # identification, faults, batter
 python scripts/tsx/tsx.py lire MW 0 20          # zones: MW MD KW KD SW S M
 python scripts/tsx/tsx.py surveiller MW 0 100   # print what changes
 python scripts/tsx/tsx.py ecrire MW 10 1234     # one word, confirmation + read-back (experimental)
-python scripts/tsx/tsx.py run                   # or stop, with confirmation (experimental)
+python scripts/tsx/tsx.py run                   # or stop, with confirmation
+python scripts/tsx/tsx.py sauvegarder           # copy the PLC program to a file (+ .txt summary)
+python scripts/tsx/tsx.py comparer FILE         # has the program changed since that backup?
 ```
 
 Protocol notes and what is confirmed: [docs/unitelway.md](docs/unitelway.md).

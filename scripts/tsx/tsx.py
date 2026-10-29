@@ -6,6 +6,8 @@
     python tsx.py surveiller MW 0 100           afficher ce qui change (Ctrl+C pour arreter)
     python tsx.py ecrire MW 10 1234             ecrire UN mot, avec confirmation et relecture
     python tsx.py run | stop                    passer l'automate en RUN / STOP, avec confirmation
+    python tsx.py sauvegarder [FICHIER]         copier le programme de l'automate dans un fichier
+    python tsx.py comparer FICHIER              le programme a-t-il change depuis cette sauvegarde ?
 
 Options : --port COM6, --trace (octets), --adresses 1-3 (plus rapide, a l'essai : 1 par defaut).
 Fermer PL7 avant. Cable TSX PCX 1031 : meme position qu'avec PL7.
@@ -151,6 +153,8 @@ class Slave:
                     if resent > 2:
                         raise UniteError(f"l'automate ne confirme pas la trame (adresse {used}, renvoyee 2 fois)")
                     self.send(frame)  # scrute a nouveau sans ACK : trame perdue, on la renvoie
+                elif kind == "poll" and ev[1] in self.addrs and state == "attente reponse":
+                    self.send(bytes([EOT]))  # rien a dire : EOT, comme PL7 (cycle plus rapide)
                 elif kind == "poll" and ev[1] in self.addrs and state == "attente scrutation":
                     used = ev[1]
                     frame = build_frame(used, payload)
@@ -193,6 +197,14 @@ READ_OBJECTS, WRITE_OBJECTS = 0x36, 0x37
 RUN, STOP = 0x24, 0x25
 OK_ANSWER = 0xFE
 WORD, DWORD = 0x07, 0x08
+
+# Sauvegarde : requetes et parametres exactement comme PL7 (capture du 29/10/2026)
+PL7_CATEGORY = 0x07
+RESERVE, RELEASE, APP_INFO = 0x1D, 0x1E, 0x92
+OPEN_UPLOAD, READ_UPLOAD, CLOSE_UPLOAD = 0x3D, 0x3E, 0x3F
+SEGMENT_SIZE = 0x77      # 119 octets par segment, comme PL7
+UPLOAD_LAST = 0x0F       # compte rendu du dernier segment
+MAX_SEGMENTS = 4000
 
 # zone -> (segment, type, taille en octets)
 WORD_ZONES = {
@@ -262,6 +274,51 @@ class Tsx:
         data = list((value & ((1 << 8 * size) - 1)).to_bytes(size, "little"))
         self._ask([WRITE_OBJECTS, self.slave.category, seg, typ,
                    addr & 0xFF, addr >> 8, 1, 0, *data], OK_ANSWER)
+
+    # ----- sauvegarde du programme (sequence relevee sur PL7) -----
+
+    def reserve(self) -> None:
+        self._ask([RESERVE, PL7_CATEGORY, 0xFF, 0xFE, 0x90, 0x36], OK_ANSWER)
+
+    def release(self) -> None:
+        self._ask([RELEASE, PL7_CATEGORY], OK_ANSWER)
+
+    def app_info(self) -> dict:
+        """Requete 92 bloc 0A (lue par PL7 avant le transfert) : nom et signature de l'application."""
+        data = self._ask([APP_INFO, PL7_CATEGORY, 0x0A, 0, 0, 0, 0, 0, 0, 0x60], APP_INFO + 0x30)
+        raw = bytes(data[2:])
+        name = raw[:raw.index(0)] if 0 in raw else raw
+        return {"nom": name.decode("ascii", "replace"), "brut": hexs(data)}
+
+    def upload(self, progress=None) -> bytes:
+        """Lit toute l'application : OPEN_UPLOAD, READ_UPLOAD segment par segment, CLOSE_UPLOAD."""
+        self._ask([OPEN_UPLOAD, PL7_CATEGORY, 0, 0, 0, 0, 0, 0, 0, 0, SEGMENT_SIZE, 0], OPEN_UPLOAD + 0x30)
+        blob = bytearray()
+        try:
+            seg = 1
+            while True:
+                data = self._ask([READ_UPLOAD, PL7_CATEGORY, seg & 0xFF, seg >> 8], READ_UPLOAD + 0x30)
+                if len(data) < 5:
+                    raise UniteError(f"segment {seg} : reponse trop courte {hexs(data)}")
+                status, got, length = data[0], data[1] | data[2] << 8, data[3] | data[4] << 8
+                chunk = bytes(data[5:])
+                if got != seg or len(chunk) != length:
+                    raise UniteError(f"segment {seg} : recu segment {got}, {len(chunk)} octets au lieu de {length}")
+                if status not in (0x00, UPLOAD_LAST):
+                    raise UniteError(f"segment {seg} : compte rendu {status:02X}")
+                blob += chunk
+                if progress:
+                    progress(seg, len(blob))
+                if status == UPLOAD_LAST:
+                    return bytes(blob)
+                seg += 1
+                if seg > MAX_SEGMENTS:
+                    raise UniteError("trop de segments : arret par securite")
+        finally:
+            try:
+                self._ask([CLOSE_UPLOAD, PL7_CATEGORY], CLOSE_UPLOAD + 0x30)
+            except UniteError:
+                pass
 
     def run(self) -> None:
         self._ask([RUN, self.slave.category], OK_ANSWER)
@@ -386,6 +443,56 @@ def cmd_run_stop(tsx, what):
     print(f"{what.upper()} accepte par l'automate. Verifier le voyant RUN.")
 
 
+def do_upload(tsx):
+    """Reserve, lit l'application, libere. Renvoie (infos, contenu)."""
+    ident = tsx.identification()
+    tsx.reserve()
+    try:
+        info = tsx.app_info()
+        print(f"Automate {ident['nom']}, application '{info['nom']}' : lecture...")
+        t0 = time.time()
+        blob = tsx.upload(lambda seg, n: print(f"\r   segment {seg:4d}   {n:7d} octets", end="", flush=True))
+        print(f"\r   {len(blob)} octets lus en {time.time() - t0:.0f} s" + " " * 20)
+    finally:
+        try:
+            tsx.release()
+        except UniteError:
+            pass
+    return ident, info, blob
+
+
+def cmd_sauvegarder(tsx, filename=None):
+    import hashlib
+    ident, info, blob = do_upload(tsx)
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    filename = filename or f"{info['nom'] or 'application'}_{stamp}.tsxbak"
+    with open(filename, "wb") as f:
+        f.write(blob)
+    with open(filename + ".txt", "w", encoding="utf-8") as f:
+        f.write(f"date            : {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"automate        : {ident['nom']}\n")
+        f.write(f"application     : {info['nom']}\n")
+        f.write(f"taille          : {len(blob)} octets\n")
+        f.write(f"sha256          : {hashlib.sha256(blob).hexdigest()}\n")
+        f.write(f"identification  : {ident['brut']}\n")
+        f.write(f"infos appli (92): {info['brut']}\n")
+    print(f"Sauvegarde : {filename}  (+ {filename}.txt)")
+
+
+def cmd_comparer(tsx, filename):
+    with open(filename, "rb") as f:
+        saved = f.read()
+    _, _, blob = do_upload(tsx)
+    if blob == saved:
+        print(f"IDENTIQUE : le programme de l'automate est le meme que {filename}")
+        return
+    diffs = [i for i in range(min(len(blob), len(saved))) if blob[i] != saved[i]]
+    print(f"DIFFERENT de {filename} : automate {len(blob)} octets, fichier {len(saved)} octets, "
+          f"{len(diffs)} octets differents")
+    if diffs:
+        print(f"   premiere difference a l'octet {diffs[0]}, derniere a l'octet {diffs[-1]}")
+
+
 def parse_addrs(text):
     if "-" in text:
         a, b = text.split("-")
@@ -395,7 +502,8 @@ def parse_addrs(text):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("commande", choices=["etat", "lire", "surveiller", "ecrire", "run", "stop"])
+    p.add_argument("commande", choices=["etat", "lire", "surveiller", "ecrire", "run", "stop",
+                                        "sauvegarder", "comparer"])
     p.add_argument("args", nargs="*", help="zone, adresse, nombre ou valeur")
     p.add_argument("--port", default="COM6")
     p.add_argument("--baud", type=int, default=9600)
@@ -411,6 +519,8 @@ def main():
             p.error(f"usage : {a.commande} ZONE ADRESSE {'VALEUR' if a.commande == 'ecrire' else 'NOMBRE'}"
                     f"   (zones : {' '.join(zones)})")
         zone, n1, n2 = a.args[0].upper(), int(a.args[1]), int(a.args[2])
+    if a.commande == "comparer" and len(a.args) != 1:
+        p.error("usage : comparer FICHIER.tsxbak")
 
     import serial
     ser = serial.Serial(a.port, a.baud, bytesize=8, parity=a.parite, stopbits=1, timeout=0.02)
@@ -424,6 +534,10 @@ def main():
             cmd_surveiller(tsx, zone, n1, n2)
         elif a.commande == "ecrire":
             cmd_ecrire(tsx, zone, n1, n2)
+        elif a.commande == "sauvegarder":
+            cmd_sauvegarder(tsx, a.args[0] if a.args else None)
+        elif a.commande == "comparer":
+            cmd_comparer(tsx, a.args[0])
         else:
             cmd_run_stop(tsx, a.commande)
     except UniteError as e:
