@@ -231,6 +231,18 @@ Round 2: gates 5 and 8 with ext1 0..5, ext2 0..3.
   the first valid slot number on a TSX 37-21. Next: gate 8, ext1 0..31, ext2 0; then a
   module in a slot to confirm the numbering.
 
+## 5m. Rack probe, round 3 (gate 8, ext1 0..31, ext2 0)
+
+- ext1 0 → CPU `TSX 3721`; **ext1 16 (0x10) → CPU again**;
+  **ext1 20 (0x14) → `TSX P37-21 Prise Terminal`** (the terminal port: a CPU sub-part
+  answering identification on its own). ext1 4 → reason `07`; all others → `0D`.
+- 0/16 and 4/20 differ by bit 0x10, so ext1 4 is most likely the terminal port addressed
+  without that flag. **The round-2 hypothesis "slot 4 configured but empty" is withdrawn.**
+- Identification layout: `FF 04 <type> <name length> <name> <version...>`
+  (type 65 = CPU, 10 = terminal port).
+- Next: ext1 32..127 (other built-in parts, module positions), ext2 0..7 on ext1 16 and 20,
+  and a module in a slot to anchor the numbering.
+
 ## 6. How to fill the "to verify" gaps
 
 1. **Schneider manuals:** Uni-Telway reference 35000789 and the UNI-TE / communication
