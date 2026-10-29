@@ -90,6 +90,7 @@ python scripts/tsx/tsx.py ecrire MW 10 1234     # one word, confirmation + read-
 python scripts/tsx/tsx.py run                   # or stop, with confirmation
 python scripts/tsx/tsx.py sauvegarder           # copy the PLC program to a file (+ .txt summary)
 python scripts/tsx/tsx.py comparer FILE         # has the program changed since that backup?
+python scripts/tsx/tsx.py sauvegarder-donnees   # all %MW and %KW values to a CSV file
 ```
 
 Protocol notes and what is confirmed: [docs/unitelway.md](docs/unitelway.md).

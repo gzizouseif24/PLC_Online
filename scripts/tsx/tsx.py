@@ -8,6 +8,7 @@
     python tsx.py run | stop                    passer l'automate en RUN / STOP, avec confirmation
     python tsx.py sauvegarder [FICHIER]         copier le programme de l'automate dans un fichier
     python tsx.py comparer FICHIER              le programme a-t-il change depuis cette sauvegarde ?
+    python tsx.py sauvegarder-donnees [FICHIER] copier tous les %MW et %KW dans un fichier CSV
 
 Options : --port COM6, --trace (octets), --adresses 1-3 (plus rapide, a l'essai : 1 par defaut).
 Fermer PL7 avant. Cable TSX PCX 1031 : meme position qu'avec PL7.
@@ -493,6 +494,49 @@ def cmd_comparer(tsx, filename):
         print(f"   premiere difference a l'octet {diffs[0]}, derniere a l'octet {diffs[-1]}")
 
 
+def read_whole_zone(tsx, zone, limit=32768):
+    """Lit une zone depuis l'adresse 0 jusqu'a ce que l'automate refuse (fin de la zone configuree)."""
+    values = []
+    addr = 0
+    while addr < limit:
+        n = min(60, limit - addr)
+        try:
+            values += tsx.read(zone, addr, n)
+            addr += n
+            continue
+        except UniteError as e:
+            if "FD" not in str(e):
+                raise
+        for a in range(addr, addr + n):       # la fin est dans ce bloc : mot par mot
+            try:
+                values += tsx.read(zone, a, 1)
+            except UniteError as e:
+                if "FD" in str(e):
+                    return values
+                raise
+        return values
+    return values
+
+
+def cmd_sauvegarder_donnees(tsx, filename=None):
+    ident = tsx.identification()
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    filename = filename or f"donnees_{stamp}.csv"
+    zones = {}
+    for zone in ("MW", "KW"):
+        print(f"Lecture %{zone}...", end="", flush=True)
+        zones[zone] = read_whole_zone(tsx, zone)
+        print(f" {len(zones[zone])} mots")
+    with open(filename, "w", encoding="utf-8") as f:
+        f.write(f"# date;{time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"# automate;{ident['nom']}\n")
+        f.write("zone;adresse;valeur;signe;hex\n")
+        for zone, values in zones.items():
+            for i, v in enumerate(values):
+                f.write(f"%{zone};{i};{v};{signed(v, 2)};{v:04X}\n")
+    print(f"Donnees : {filename}")
+
+
 def parse_addrs(text):
     if "-" in text:
         a, b = text.split("-")
@@ -503,7 +547,7 @@ def parse_addrs(text):
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("commande", choices=["etat", "lire", "surveiller", "ecrire", "run", "stop",
-                                        "sauvegarder", "comparer"])
+                                        "sauvegarder", "comparer", "sauvegarder-donnees"])
     p.add_argument("args", nargs="*", help="zone, adresse, nombre ou valeur")
     p.add_argument("--port", default="COM6")
     p.add_argument("--baud", type=int, default=9600)
@@ -538,6 +582,8 @@ def main():
             cmd_sauvegarder(tsx, a.args[0] if a.args else None)
         elif a.commande == "comparer":
             cmd_comparer(tsx, a.args[0])
+        elif a.commande == "sauvegarder-donnees":
+            cmd_sauvegarder_donnees(tsx, a.args[0] if a.args else None)
         else:
             cmd_run_stop(tsx, a.commande)
     except UniteError as e:

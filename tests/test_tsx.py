@@ -68,6 +68,8 @@ class FakeTsx:
             if mem is None or typ not in (7, 8) or (seg == 0x6A and typ == 8):
                 return [0xFD]
             words = 1 if typ == 7 else 2
+            if (addr + n) * words > len(mem):
+                return [0xFD]                                        # beyond the configured zone
             if code == tsx.READ_OBJECTS:
                 data = [b for i in range(n * words) for b in struct.pack("<H", mem[addr * words + i])]
                 return [0x66, typ, *data]
@@ -204,6 +206,20 @@ class TsxTests(unittest.TestCase):
                 tsx.cmd_comparer(self.tsx, f)
             self.assertIn("1 octets differents", out.getvalue())
             self.assertIn("octet 100", out.getvalue())
+
+    def test_sauvegarder_donnees_reads_up_to_the_end_of_each_zone(self):
+        import os, tempfile
+        self.plc.mw = [i * 3 for i in range(512)]   # 512 %MW and 128 %KW, as configured on the bench
+        self.plc.kw = [0xFFFF] * 128
+        with tempfile.TemporaryDirectory() as d:
+            f = os.path.join(d, "data.csv")
+            with contextlib.redirect_stdout(io.StringIO()):
+                tsx.cmd_sauvegarder_donnees(self.tsx, f)
+            lines = Path(f).read_text().splitlines()
+        self.assertIn("%MW;511;1533;1533;05FD", lines)
+        self.assertIn("%KW;127;65535;-1;FFFF", lines)
+        self.assertEqual(sum(l.startswith("%MW;") for l in lines), 512)
+        self.assertEqual(sum(l.startswith("%KW;") for l in lines), 128)
 
     def test_refused_request(self):
         with self.assertRaisesRegex(tsx.UniteError, "FD"):
