@@ -6,9 +6,13 @@ LECTURE SEULE : la seule requete envoyee est l'identification (0F).
 Rack vide : seule la CPU devrait repondre. Avec un module en place, il devrait
 repondre avec sa reference (ex. TSX DEZ ...).
 
-    python ut_rack.py --port COM6
+Premier essai (TSX 3721) : porte 0 = CPU (ignore ext1/ext2), porte 8 = CPU aussi,
+porte 5 refusee avec une raison differente (07) : probablement la porte modules/voies.
 
-Fichier autonome (pip install pyserial). Fermer PL7 avant. Environ 1 minute.
+    python ut_rack.py --port COM6                              (portes 5 et 8, ext1 0-5, ext2 0-3)
+    python ut_rack.py --port COM6 --portes 0-15 --ext1 0 --ext2 0
+
+Fichier autonome (pip install pyserial). Fermer PL7 avant. Environ 2 s par adresse.
 """
 import argparse
 import time
@@ -183,14 +187,24 @@ class Slave:
 
 # ---------- sonde ----------
 
-def candidates():
+def parse_list(text):
+    """'0-4,16' -> [0, 1, 2, 3, 4, 16]"""
+    out = []
+    for part in text.split(","):
+        if "-" in part:
+            a, b = part.split("-")
+            out += range(int(a), int(b) + 1)
+        elif part:
+            out.append(int(part))
+    return out
+
+
+def candidates(gates, ext1s, ext2s):
     """(libelle, en-tete X-WAY) : 0x20, reseau, station, porte, ext1, ext2."""
-    for gate in range(16):
-        yield f"porte {gate:2d}, module 0", [0x20, 0x00, 0xFE, gate, 0x00, 0x00]
-    for m in range(1, 6):
-        yield f"porte  0, ext1 = {m} (module ?)", [0x20, 0x00, 0xFE, 0x00, m, 0x00]
-    for m in range(1, 6):
-        yield f"porte  0, ext2 = {m} (voie ?)", [0x20, 0x00, 0xFE, 0x00, 0x00, m]
+    for gate in gates:
+        for e1 in ext1s:
+            for e2 in ext2s:
+                yield f"porte {gate:2d}, ext1 {e1:3d}, ext2 {e2:3d}", [0x20, 0x00, 0xFE, gate, e1, e2]
 
 
 def text(data):
@@ -202,6 +216,9 @@ def main():
     p.add_argument("--port", default="COM6")
     p.add_argument("--baud", type=int, default=9600)
     p.add_argument("--parite", default="O", choices=["O", "E", "N"])
+    p.add_argument("--portes", default="5,8", help="portes X-WAY, ex. 5,8 ou 0-15")
+    p.add_argument("--ext1", default="0-5", help="valeurs ext1 (module ?)")
+    p.add_argument("--ext2", default="0-3", help="valeurs ext2 (voie ?)")
     p.add_argument("--trace", action="store_true")
     a = p.parse_args()
 
@@ -211,11 +228,15 @@ def main():
     answered = []
     print(f"{a.port} @ {a.baud} 8{a.parite}1 - identification seulement\n")
     try:
-        for label, xway in candidates():
+        for label, xway in candidates(parse_list(a.portes), parse_list(a.ext1), parse_list(a.ext2)):
             try:
                 ans = slave.request([IDENTIFICATION, 0], timeout=8, xway=xway)
             except UniteError as e:
-                print(f"  {label:<32} -> {e}")
+                msg = str(e)
+                if "refuse par X-WAY" in msg:
+                    raw = msg.split(":")[-1].split()
+                    msg = f"refuse X-WAY, raison {raw[-1]}   ({' '.join(raw)})"
+                print(f"  {label:<32} -> {msg}")
                 continue
             if ans and ans[0] == 0x3F:
                 print(f"  {label:<32} -> REPOND : '{text(ans[1:])}'  {hexs(ans)}")

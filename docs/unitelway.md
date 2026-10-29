@@ -207,6 +207,20 @@ segment mapping, the byte order and which V1 code reads which area.
 - **Writing the configuration:** means downloading a modified application. Not planned:
   stays in PL7.
 
+## 5k. Rack probe, round 1 (TSX 3721, empty rack)
+
+Identification `0F` with header `20 00 FE <gate> <ext1> <ext2>`:
+- Gate 0: CPU answers, **ext1/ext2 ignored** (any value → TSX 3721). Gate 0 does not route to slots.
+- Gate 8, ext 0/0: CPU answers too.
+- Gate 1: answers `0F 00` (neither refusal nor identification; other service).
+- Refused (`22`), refusal layout `22 <net> <station> <gate> <ext1> <ext2> FF <reason>`:
+  gates 4, 6, 7, 9..15 → reason `0D`; **gate 5 → reason `07`**; gates 2 and 3 come back
+  rewritten as gate 5, ext1 FE, ext2 2 / 3, reason `0D`.
+  → gate 5 is probably the module/channel gate, needing ext1/ext2.
+- Identification differs from the first PLC: `08 03 22 30` here vs `08 05 24 30` (firmware?).
+
+Round 2: gates 5 and 8 with ext1 0..5, ext2 0..3.
+
 ## 6. How to fill the "to verify" gaps
 
 1. **Schneider manuals:** Uni-Telway reference 35000789 and the UNI-TE / communication
