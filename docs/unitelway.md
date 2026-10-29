@@ -185,7 +185,15 @@ segment mapping, the byte order and which V1 code reads which area.
   "waiting for ACK": the PLC never acknowledged the frame. Those runs answered polls on
   addresses 1-3, so the request may have gone out on address 2 or 3.
 - Default set back to address 1 only; the tool now resends when polled again without ACK.
-  To check with `--trace`, address 1 vs 1-3.
+- **Then confirmed with `--trace` (address 1):**
+  - **Write objects works:** `37 00 68 07 0A 00 01 00 D2 04` (%MW10 := 1234) → `FE`,
+    read back `66 07 D2 04`. Segment 68 = %MW confirmed with a non-zero value.
+  - **RUN works:** `24 00` → `FE`; the PLC went to RUN with the empty rack (I/O fault is
+    not blocking).
+  - Real cause of the failures: polls piled up in the PC's receive buffer while the user
+    typed OUI; the tool answered stale polls and talked out of turn (frame sent 2-3 times).
+    Fixed: receive buffer and parser are cleared at the start of every request.
+  - Address 2-3 mode is probably fine after this fix; to retest.
 
 ## 6. How to fill the "to verify" gaps
 

@@ -34,7 +34,11 @@ class FakeTsx:
     def in_waiting(self):
         return len(self.out)
 
+    def reset_input_buffer(self):
+        self.out.clear()
+
     def write(self, data):
+        self.frames_sent = getattr(self, "frames_sent", 0) + data.startswith(bytes([tsx.DLE, tsx.STX]))
         self.out += data  # RS-485 echo
         evs = [e for e in tsx.Parser().feed(data) if e[0] == "frame"]
         if not evs:
@@ -121,6 +125,12 @@ class TsxTests(unittest.TestCase):
         self.tsx.read("MW", 0, 1)
         self.tsx.read("MW", 0, 1)
         self.assertEqual(sorted(set(self.plc.polled_by)), [1, 2, 3])
+
+    def test_stale_polls_are_ignored(self):
+        # polls piled up while the user typed OUI: the frame must go out once, on a fresh poll
+        self.plc.out += bytes([tsx.DLE, tsx.ENQ, 1]) * 5
+        self.tsx.run()
+        self.assertEqual(self.plc.frames_sent, 1)
 
     def test_refused_request(self):
         with self.assertRaisesRegex(tsx.UniteError, "FD"):

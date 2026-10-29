@@ -136,6 +136,10 @@ class Slave:
         state, frame, used = "attente scrutation", None, None
         nak = resent = 0
         deadline = time.time() + timeout
+        # Oublier les scrutations accumulees pendant l'attente (ex. saisie de OUI) :
+        # repondre a une scrutation perimee ferait parler le PC hors de son tour.
+        self.ser.reset_input_buffer()
+        self.parser = Parser()
         while time.time() < deadline:
             data = self.ser.read(self.ser.in_waiting or 1)
             if data:
