@@ -120,6 +120,14 @@ Legacy V1 bit read answer: 2 bytes, forced-bits byte then value byte, bit = addr
   (length-prefixed product name; other bytes to decode).
 - Status `31`: negative answer `FD` (not supported on TSX, or refused without application).
 
+## 5d. Probe of read requests (TSX 3721, no application)
+
+- Accepted: **`01` (V1) at address 0 → `31 50`**: one data byte, no "forced" byte.
+  Probably system bits %S0..%S7 (%S4 and %S6 = clock bits). To confirm with `ut_sysbits.py`.
+- Refused (`FD`): V1 `00`, `02`..`07`; `36` with segments 0x64..0x6B × types 05..08.
+  `00` reads %M on a TSX (x-way-uni-te), so refusals are likely due to the missing
+  application (no %M/%MW memory). Re-run the probe once the application is reloaded.
+
 ## 6. How to fill the "to verify" gaps
 
 1. **Schneider manuals:** Uni-Telway reference 35000789 and the UNI-TE / communication
