@@ -149,6 +149,19 @@ Legacy V1 bit read answer: 2 bytes, forced-bits byte then value byte, bit = addr
   %S30 = 1 (master task active, to confirm), %S51 = 1 (real-time clock time lost), %S8 = 1.
 - Battery bits %S66..%S68 = 0, BAT LED off: consistent.
 
+## 5g. Probe with an application (second TSX)
+
+Accepted at address 0 (all values 0):
+- V1 `00` → `30 <2 bytes>` (%M: forced byte + value byte), `01` → `31 <byte>` (%S),
+  `04`, `05`, `06` → `3x <word>` (three word areas, which is which to confirm).
+- `36` segment `68`: word (07) and double word (08) → probably %MW / %MD.
+- `36` segment `69`: word and double word → probably %KW / %KD.
+- `36` segment `6A`: word only → probably %SW.
+- Answer: `66 <type> <data>`. Still refused: types 05 (bit) and 06 (byte), segments 64..67, 6B.
+
+Next: `ut_words.py` reads wider ranges and the real-time clock (%SW49..53) to confirm the
+segment mapping, the byte order and which V1 code reads which area.
+
 ## 6. How to fill the "to verify" gaps
 
 1. **Schneider manuals:** Uni-Telway reference 35000789 and the UNI-TE / communication
