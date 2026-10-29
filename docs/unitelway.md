@@ -162,6 +162,23 @@ Accepted at address 0 (all values 0):
 Next: `ut_words.py` reads wider ranges and the real-time clock (%SW49..53) to confirm the
 segment mapping, the byte order and which V1 code reads which area.
 
+## 5h. Segment mapping confirmed from the PLC itself (second TSX)
+
+- **Segment 6A = %SW, words little-endian:** %SW50 (seconds, `SS00` in BCD) read
+  0300 → 0400 → 0700 over ~3 s; %SW51 = 0521 (05:21), %SW52 = 0121 (21 Jan),
+  %SW49 = 1 (day of week). %SW53 = A001 is not valid BCD (clock lost, %S51 = 1).
+- %SW11 = 250 = watchdog time in ms (TSX default). %SW13 = 254 = 0xFE = the station
+  number we address in the X-WAY header. %SW15 = 6504 = bytes `04 65`, the same as in
+  the identification answer.
+- Other non-zero: %SW12 = 6, %SW18 = AAA8 (likely a running counter), %SW32 = FFFF,
+  %SW67 = 00D0, %SW68 = 0F00, %SW80 = %SW81 = 7A0E, %SW97 = FFFF, %SW98 = 010B, %SW99 = 010A.
+- Segments 68 and 69: words 0..119 all 0 (assumed %MW / %KW, not confirmed by a value yet).
+- **V1 `06` reads %SW** (address 11 → 00FA, same as segment 6A). `04` and `05` read 0 there,
+  consistent with %MW / %KW.
+- Fault words (to read next): %SW124 CPU fault type, %SW125 blocking fault type,
+  %SW126/127 blocking fault address (TSX Micro, from memory).
+- ERR LED turned steady red after this run (cause unknown).
+
 ## 6. How to fill the "to verify" gaps
 
 1. **Schneider manuals:** Uni-Telway reference 35000789 and the UNI-TE / communication
