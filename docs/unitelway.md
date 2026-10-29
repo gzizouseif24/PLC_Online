@@ -128,6 +128,17 @@ Legacy V1 bit read answer: 2 bytes, forced-bits byte then value byte, bit = addr
   `00` reads %M on a TSX (x-way-uni-te), so refusals are likely due to the missing
   application (no %M/%MW memory). Re-run the probe once the application is reloaded.
 
+## 5e. System bits confirmed (TSX 3721, no application)
+
+- **`01` = read system bit, confirmed.** Request `01 <cat> <bit addr lo> <hi>`, answer
+  `31 <byte>` = the 8 bits of the group containing the address (address 1 → same byte as 0,
+  address 8 → %S8..%S15).
+- %S5 and %S6 change between reads (clock bits): live data. %S4 read 1 seven times
+  (not explained yet), %S7 stayed 1 (1-min clock, consistent over ~1 min).
+- %S8 = 1, all of %S9..%S127 = 0, including %S10 (I/O fault when 0) and the battery bits.
+  Without an application these may simply not be maintained: not usable for diagnosis
+  until the application is reloaded.
+
 ## 6. How to fill the "to verify" gaps
 
 1. **Schneider manuals:** Uni-Telway reference 35000789 and the UNI-TE / communication

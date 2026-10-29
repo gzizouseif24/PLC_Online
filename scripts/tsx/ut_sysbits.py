@@ -182,7 +182,7 @@ class Slave:
 
 # ---------- bits systeme ----------
 
-READ_SYSTEM_BIT = 0x01  # accepte par le TSX 3721 (reponse 31 + 1 octet)
+READ_SYSTEM_BIT = 0x01  # TSX 3721 : reponse 31 + l'octet qui contient le bit demande (adresse = n de bit)
 
 # Bits systeme TSX Micro / Premium (de memoire, a confirmer avec la doc PL7)
 SYSTEM_BITS = {
@@ -192,6 +192,7 @@ SYSTEM_BITS = {
     5: "horloge 100 ms",
     6: "horloge 1 s",
     7: "horloge 1 min",
+    8: "test du cablage (a confirmer)",
     9: "mise en repli des sorties",
     10: "defaut E/S (0 = defaut)",
     11: "debordement chien de garde",
