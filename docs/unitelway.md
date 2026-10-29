@@ -112,6 +112,14 @@ Legacy V1 bit read answer: 2 bytes, forced-bits byte then value byte, bit = addr
 - PL7 closed: no address answers, so the PC can use address 1 (like PL7).
 - Still unknown: what a slave sends when polled with nothing to say (EOT expected).
 
+## 5c. First exchange (2026-10-29, TSX 3721, no valid application)
+
+- Mirror `FA` with 10 bytes: exact echo. **Confirmed:** 9600 8O1, PC = slave 1,
+  category 0, X-WAY header `20 00 FE 00 00 00`, frame and BCC rules.
+- Identification `0F`: `FF 04 65 08 "TSX 3721" 08 05 24 30 11 02 00 00`
+  (length-prefixed product name; other bytes to decode).
+- Status `31`: negative answer `FD` (not supported on TSX, or refused without application).
+
 ## 6. How to fill the "to verify" gaps
 
 1. **Schneider manuals:** Uni-Telway reference 35000789 and the UNI-TE / communication
