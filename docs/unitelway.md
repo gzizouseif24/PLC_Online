@@ -221,6 +221,16 @@ Identification `0F` with header `20 00 FE <gate> <ext1> <ext2>`:
 
 Round 2: gates 5 and 8 with ext1 0..5, ext2 0..3.
 
+## 5l. Rack probe, round 2 (gates 5 and 8, ext1 0..5, ext2 0..3)
+
+- **Gate 8 = module addressing:** ext1 0 / ext2 0 → CPU (TSX 3721).
+- Gate 8, **ext1 4 / ext2 0 → refused, reason `07`**; every other ext1 / ext2 → reason `0D`.
+- Gate 5: ext 0/0 → `07`, everything else `0D`.
+- Working hypothesis: `0D` = no such address, `07` = address exists but cannot answer.
+  Slot 4 would then be configured by the application but empty (→ the I/O fault), or 4 is
+  the first valid slot number on a TSX 37-21. Next: gate 8, ext1 0..31, ext2 0; then a
+  module in a slot to confirm the numbering.
+
 ## 6. How to fill the "to verify" gaps
 
 1. **Schneider manuals:** Uni-Telway reference 35000789 and the UNI-TE / communication
