@@ -25,7 +25,10 @@ read: it gives names and comments. Both feed the same logic model.
 
 Not done: anything around password-protected programs. For those, ask the customer.
 
-## Method: decode by comparison (TSX first)
+**Priority changed (30/10):** logic starts with the S7-300, where the program format is already
+decoded publicly: see [s7-300.md](s7-300.md). The TSX method below stays for later.
+
+## Method: decode by comparison (TSX, Omron)
 
 1. **Test programs that differ by one instruction.**
    `research/tsx/programmes_test/generer.py` writes them as `.FEF` (P00 empty program,

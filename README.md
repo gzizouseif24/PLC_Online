@@ -6,7 +6,7 @@ without the vendor software.
 One protocol module per brand, one command-line tool per brand, a shared engine on top (table of expected values → polling → comparison).
 Architecture and plan: [docs/architecture.md](docs/architecture.md).
 Background and field notes: [docs/rapport-technique-2026-10-23.md](docs/rapport-technique-2026-10-23.md).
-Next big step, understanding the PLC logic for diagnostics: [docs/logique.md](docs/logique.md).
+Next: S7-300 diagnostics and logic, plan in [docs/s7-300.md](docs/s7-300.md); logic understanding in general: [docs/logique.md](docs/logique.md).
 Work log: [docs/journal-2026-10-29.md](docs/journal-2026-10-29.md), [docs/journal-2026-10-30.md](docs/journal-2026-10-30.md).
 
 | Brand | Protocol | Status |
