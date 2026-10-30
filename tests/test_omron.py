@@ -300,6 +300,25 @@ class OmronTests(unittest.TestCase):
         self.fake.errors = []
         self.assertEqual(self.plc.error_log(), [])
 
+    def test_area_a_fallbacks(self):
+        a = self.fake.mem["A"]
+        a[400:403] = [0x80C0, 0x4000, 0x0010]
+        a[351:355] = [0x0509, 0x3014, 0x2610, 0x0005]       # 14:05:09, 30/10/2026, Friday
+        a[300] = 2
+        a[100:110] = [0x80C0, 0, 0x0507, 0x3014, 0x2610, 0x4105, 0, 0x0600, 0x3014, 0x2610]
+        s = self.plc.status_area_a()
+        self.assertEqual((s["mode"], s["fatal"], s["non_fatal"], s["code_erreur"]), (0x04, 0x4000, 0x0010, 0x80C0))
+        self.assertEqual(self.plc.clock_area_a(), {"date": "30/10/2026", "heure": "14:05:09", "jour": 5})
+        log = self.plc.error_log_area_a()
+        self.assertEqual(log[0], {"code": 0x80C0, "code2": 0, "date": "30/10/2026 14:05:07"})
+        self.assertEqual(log[1]["code"], 0x4105)
+
+    def test_read_only_auxiliary_area_is_refused(self):
+        self.plc.set_mode("monitor")
+        with self.assertRaisesRegex(ValueError, "lecture seule"):
+            self.plc.write("A", 402, [0])
+        self.plc.write("A", 500, [1])
+
     def test_clock(self):
         self.assertEqual(self.plc.clock(), {"date": "30/10/2026", "heure": "14:05:09", "jour": 5})
 
@@ -359,6 +378,16 @@ class OmronCliTests(unittest.TestCase):
         self.assertIn("erreur bus E/S", out)
         self.assertIn("30/10/2026 14:05:09", out)
         self.assertIn("2 enregistrement", out)
+
+    def test_etat_without_fins(self):
+        self.fake.fins = lambda cmd, p: (0x0401, "")      # FINS not supported
+        self.fake.mem["A"][401] = 0x4000
+        self.fake.mem["A"][351:354] = [0x0509, 0x3014, 0x2610]
+        out = self.run_cmd(self.cli.cmd_etat)
+        self.assertIn("Mode : RUN", out)
+        self.assertIn("erreur bus E/S", out)
+        self.assertIn("30/10/2026 14:05:09   (lue dans A351", out)
+        self.assertIn("code modele 30", out)
 
     def test_lire_shows_bits(self):
         self.fake.mem["CIO"][0] = 0b101

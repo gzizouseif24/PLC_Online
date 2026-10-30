@@ -64,17 +64,45 @@ characters max. The driver joins them and checks every FCS.
 
 ## 3. Memory areas (CJ1M)
 
+From the *CJ1M CPU Units Operation Manual*, **W393-E1-14**
+([download](https://files.omron.eu/downloads/latest/manual/en/w393_cj1m_g_h_cpu_units_operation_manual_en.pdf)), §2-1.
+
 | Zone | Content | Words | Shown as |
 |---|---|---|---|
-| `CIO` | inputs, outputs, internal relays | 0–6143 | word + 16 bits |
+| `CIO` | inputs, outputs, links, internal relays | 0–6143 | word + 16 bits |
 | `W` | work relays | 0–511 | word + 16 bits |
-| `H` | holding relays (kept at power off) | 0–511 | word + 16 bits |
-| `A` | auxiliary (system) relays | 0–959 | word + 16 bits |
-| `D` | data memory | 0–32767 | decimal / signed / hex |
+| `H` | holding relays (kept at power off) | 0–511 (H512–H1535: function blocks only) | word + 16 bits |
+| `A` | auxiliary (system) area | 0–959; **A0–A447 read-only** (the tool refuses to write there) | word + 16 bits |
+| `D` | data memory (kept at power off) | 0–32767 (D20000–D29599 Special I/O units, D30000–D31599 CPU Bus units) | decimal / signed / hex |
 | `T`, `C` | timer / counter current value | 0–4095 | decimal |
 
-CJ1M inputs usually start at CIO 0, outputs at CIO 100 (built-in I/O of the CPU21/22/23:
-inputs CIO 2960–2961, outputs CIO 2964). `surveiller CIO 0 4` prints each input bit that changes.
+Where the I/O is in CIO:
+- **I/O cards** (Basic I/O Units): CIO 0000–0079 by default, allocated **in rack order**, one
+  or more words per card, inputs and outputs in the same sequence. There is no fixed
+  "outputs at 100". Check CX-Programmer's I/O table for which word is which card.
+- **Built-in I/O** (CJ1M-CPU21/22/23 only): inputs **CIO 2960** bits 00–09, outputs
+  **CIO 2961** bits 00–05.
+- Special I/O Units (analog...): CIO 2000–2959, 10 words per unit number.
+- Internal relays free for the program: CIO 1200–1499 and CIO 3800–6143.
+
+`surveiller CIO 0 4` prints each input / output bit that changes.
+
+Useful A words (all read-only, readable with plain `RJ`):
+
+| Words | Content |
+|---|---|
+| A100–A199 | error log: 20 records × 5 words (code, details, min/s, day/hour, year/month, BCD) |
+| A300 | error log pointer (number of records) |
+| A351–A354 | clock: s/min, hour/day, month/year, day of week (BCD, low byte first) |
+| A400 | code of the current error |
+| A401 | fatal error flags: .06 FALS, .08 cycle too long, .09 program, .10 I/O setting, .11 too many I/O, .13 duplicate unit, .14 I/O bus, .15 memory |
+| A402 | non-fatal flags: .04 **battery**, .09 I/O verification, .10 PLC Setup, .12 Basic I/O unit, .13 interrupt task, .15 FAL |
+
+**Fallback without FINS:** if the CJ1M refuses the FINS commands, `etat` reads the mode with
+`MS` and the faults, error code and clock from A400–A402 and A351–A354; `erreurs` reads
+A100–A199. Everything except the model and the "battery present" bit is still shown.
+Order of the records in A100–A199 (newest first or oldest first): to check on the bench
+against CX-Programmer's error log.
 
 ## 4. Program backup (experimental)
 

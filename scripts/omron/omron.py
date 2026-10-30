@@ -64,20 +64,21 @@ def cmd_etat(plc):
         except HostLinkError as e2:
             print(f"Automate : modele non lu ({e2})")
 
+    fins = True
     try:
         s = plc.controller_status()
     except HostLinkError as e:
-        print(f"Etat FINS non lu ({e})")
-        ms = plc.status_cmode()
-        print(f"Mode : {ms['mode']}   (commande MS, donnees {ms['brut']})")
-        if ms["message"]:
-            print(f"   message FAL/FALS : {ms['message']}")
-        return
+        fins = False
+        print(f"(FINS 0601 refuse : {e})\n(etat lu par MS + A400..A402)")
+        s = plc.status_area_a()
     mode = FINS_MODES.get(s["mode"], f"inconnu ({s['mode']:02X})")
-    run = "CPU en attente (standby)" if s["standby"] else (
-        "programme en cours" if s["en_cours"] else "programme arrete")
-    print(f"Mode : {mode}   ({run})")
-    print(f"Pile : {'presente' if s['pile_presente'] else '!! ABSENTE'}")
+    if fins:
+        run = "CPU en attente (standby)" if s["standby"] else (
+            "programme en cours" if s["en_cours"] else "programme arrete")
+        print(f"Mode : {mode}   ({run})")
+        print(f"Pile : {'presente' if s['pile_presente'] else '!! ABSENTE'}")
+    else:
+        print(f"Mode : {mode}")
 
     print("\nDefauts :")
     fatal, non_fatal = flags(s["fatal"], FATAL_BITS), flags(s["non_fatal"], NON_FATAL_BITS)
@@ -95,22 +96,28 @@ def cmd_etat(plc):
 
     try:
         c = plc.clock()
-        print(f"\nHorloge automate : {c['date']} {c['heure']}")
-    except HostLinkError as e:
-        print(f"\nHorloge non lue ({e})")
+        source = ""
+    except HostLinkError:
+        c, source = plc.clock_area_a(), "   (lue dans A351..A354)"
+    print(f"\nHorloge automate : {c['date']} {c['heure']}{source}")
+    n = len(read_error_log(plc)[0])
+    print(f"Journal d'erreurs : {n} enregistrement(s){'  -> python omron.py erreurs' if n else ''}")
+
+
+def read_error_log(plc):
+    """FINS 2102, or A100..A199 if FINS is refused. Returns (records, source)."""
     try:
-        n = len(plc.error_log())
-        print(f"Journal d'erreurs : {n} enregistrement(s){'  -> python omron.py erreurs' if n else ''}")
-    except HostLinkError as e:
-        print(f"Journal d'erreurs non lu ({e})")
+        return plc.error_log(), "FINS 2102"
+    except HostLinkError:
+        return plc.error_log_area_a(), "A100..A199"
 
 
 def cmd_erreurs(plc):
-    records = plc.error_log()
+    records, source = read_error_log(plc)
     if not records:
         print("Journal d'erreurs vide.")
         return
-    print(f"Journal d'erreurs : {len(records)} enregistrement(s)\n")
+    print(f"Journal d'erreurs : {len(records)} enregistrement(s)   (lu par {source})\n")
     for i, r in enumerate(records):
         print(f"   {i + 1:3d}   {r['date']}   code {r['code']:04X} / {r['code2']:04X}   {error_log_text(r['code'])}")
 

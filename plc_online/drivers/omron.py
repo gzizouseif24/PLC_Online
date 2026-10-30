@@ -406,6 +406,8 @@ class Cj1m:
     def write(self, area: str, start: int, values: list) -> None:
         """Write words. C-mode writes are refused in RUN mode (end code 01): use MONITOR."""
         self._check_range(area, start, len(values))
+        if area == "A" and start < 448:
+            raise ValueError("A0..A447 sont en lecture seule (manuel W393) : écriture possible de A448 à A959")
         values = [v & 0xFFFF for v in values]
         end = start + len(values)
         i = 0
@@ -451,6 +453,42 @@ class Cj1m:
     def status(self) -> dict:
         s = self.controller_status()
         return {**s, "code_mode": s["mode"], "mode": FINS_MODES.get(s["mode"], f"{s['mode']:02X}")}
+
+    # ---- same information from the Auxiliary Area, C-mode only (W393 appendix) ----
+
+    def status_area_a(self) -> dict:
+        """Mode (MS) + A400 error code, A401 fatal flags, A402 non-fatal flags (RJ).
+
+        Same keys as controller_status(); battery presence and standby are not available.
+        """
+        ms = self.status_cmode()
+        code, fatal, non_fatal = self.read("A", 400, 3)
+        return {"en_cours": ms["mode"] != "PROGRAM", "flash": None, "pile_presente": None, "standby": None,
+                "mode": {"PROGRAM": 0x00, "MONITOR": 0x02, "RUN": 0x04}.get(ms["mode"], 0xFF),
+                "fatal": fatal, "non_fatal": non_fatal, "messages": 0, "code_erreur": code,
+                "message": ms["message"]}
+
+    def clock_area_a(self) -> dict:
+        """A351..A354: s/min, h/day, month/year, day of week (BCD, low byte first)."""
+        w = self.read("A", 351, 4)
+        s, mi, h, d, mo, y = (bcd(x) for x in (w[0] & 0xFF, w[0] >> 8, w[1] & 0xFF, w[1] >> 8,
+                                                 w[2] & 0xFF, w[2] >> 8))
+        return {"date": f"{d:02d}/{mo:02d}/{2000 + y}", "heure": f"{h:02d}:{mi:02d}:{s:02d}", "jour": bcd(w[3] & 0xFF)}
+
+    def error_log_area_a(self) -> list:
+        """A100..A199: 20 records of 5 words (code, details, min|s, day|h, year|month);
+        A300 = number of records (W393 §11-2). Order of the records: to check on the bench."""
+        count = min(self.read("A", 300, 1)[0], 20)
+        if not count:
+            return []
+        w = self.read("A", 100, 5 * count)
+        records = []
+        for i in range(count):
+            code, code2, ms, dh, ym = w[5 * i:5 * i + 5]
+            mi, s, d, h, y, mo = (bcd(x) for x in (ms >> 8, ms & 0xFF, dh >> 8, dh & 0xFF, ym >> 8, ym & 0xFF))
+            records.append({"code": code, "code2": code2,
+                            "date": f"{d:02d}/{mo:02d}/{2000 + y} {h:02d}:{mi:02d}:{s:02d}"})
+        return records
 
     def clock(self) -> dict:
         """FINS 0701: PLC clock (BCD)."""
