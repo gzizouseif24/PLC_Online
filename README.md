@@ -63,6 +63,7 @@ PLC side: peripheral port in Host Link, 9600 baud 7-E-2, unit 0, **DIP 4 ON**
 ```
 python tools/omron.py etat                  # model, mode, faults, battery, clock
 python tools/omron.py erreurs               # PLC error log
+python tools/omron.py parametres            # PLC Setup, units, registered I/O table (read only)
 python tools/omron.py lire D 0 4            # zones: CIO W H A D T C (or: lire D0 4)
 python tools/omron.py surveiller CIO 0 2    # print each input / output bit that changes
 python tools/omron.py ecrire D 100 1234     # one word, confirmation + read-back (MONITOR mode)

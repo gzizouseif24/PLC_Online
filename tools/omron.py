@@ -3,6 +3,7 @@
 
     python tools/omron.py etat                          modele, mode, defauts, pile, horloge
     python tools/omron.py erreurs                       journal d'erreurs de l'automate
+    python tools/omron.py parametres [FICHIER]          reglages automate, unites, table E/S (lecture)
     python tools/omron.py lire D 100 20                 lire D100..D119   (zones : CIO W H A D T C)
     python tools/omron.py lire CIO 0 2                  entrees / sorties : mots + bits
     python tools/omron.py surveiller CIO 0 4            afficher ce qui change, bit par bit (Ctrl+C)
@@ -30,7 +31,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from plc_online.protocols.hostlink import (  # noqa: E402
-    AREAS, FATAL_BITS, FINS_MODES, NON_FATAL_BITS, Cj1m, FinsRefused, HostLinkError,
+    AREAS, FATAL_BITS, FINS_MODES, NON_FATAL_BITS, decode_plc_setup, Cj1m, FinsRefused, HostLinkError,
     PlcRefused,
     error_log_text, open_port, parse_address, signed16)
 
@@ -120,6 +121,51 @@ def cmd_erreurs(plc):
     print(f"Journal d'erreurs : {len(records)} enregistrement(s)   (lu par {source})\n")
     for i, r in enumerate(records):
         print(f"   {i + 1:3d}   {r['date']}   code {r['code']:04X} / {r['code2']:04X}   {error_log_text(r['code'])}")
+
+
+def hexdump(words, per_line=8):
+    lines = []
+    for i in range(0, len(words), per_line):
+        chunk = words[i:i + per_line]
+        if any(chunk):
+            lines.append(f"   +{i:<5d} " + " ".join(f"{w:04X}" for w in chunk))
+    return lines
+
+
+UNIT_KINDS = [(0x00, 0x00, "CPU"), (0x10, 0x1F, "unite CPU Bus n°"), (0x20, 0x7F, "unite E/S speciale n°"),
+              (0xE1, 0xE1, "carte interne")]
+
+
+def cmd_parametres(plc, filename=None):
+    """PLC Setup, units and registered I/O table (read-only)."""
+    setup = plc.plc_setup()
+    print("Reglages automate (PLC Setup) :")
+    for label, text in decode_plc_setup(setup):
+        print(f"   {label:<48} {text}")
+
+    print("\nUnites declarees (CPU, CPU Bus, E/S speciales ; pas les cartes E/S simples) :")
+    try:
+        for addr, model in plc.units():
+            kind = next((f"{t}{addr - lo if lo else ''}" for lo, hi, t in UNIT_KINDS if lo <= addr <= hi),
+                        f"adresse {addr:02X}")
+            print(f"   {addr:02X}  {kind:<24} {model}")
+    except HostLinkError as e:
+        print(f"   non lues ({e})")
+
+    table = plc.io_table()
+    used = [i for i, w in enumerate(table) if w]
+    print(f"\nTable E/S enregistree : {len(used)} mots non nuls sur {len(table)} (format non documente,"
+          f" a comparer avec la table E/S de CX-Programmer)")
+    for line in hexdump(table)[:16]:
+        print(line)
+
+    filename = filename or f"omron_parametres_{time.strftime('%Y%m%d_%H%M%S')}.txt"
+    with open(filename, "w", encoding="utf-8") as f:
+        f.write(f"# date {time.strftime('%Y-%m-%d %H:%M:%S')}\n# PLC Setup (zone 8010), 512 mots, hex\n")
+        f.write("\n".join(hexdump(setup)) + "\n")
+        f.write("# Table E/S enregistree (zone 8012), 1280 mots, hex (lignes nulles omises)\n")
+        f.write("\n".join(hexdump(table)) + "\n")
+    print(f"\nCopie brute : {filename}")
 
 
 def cmd_lire(plc, area, start, count):
@@ -369,7 +415,7 @@ def parse_target(p, cmd, args):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("commande", choices=["etat", "erreurs", "lire", "surveiller", "ecrire",
+    p.add_argument("commande", choices=["etat", "erreurs", "parametres", "lire", "surveiller", "ecrire",
                                         "run", "monitor", "programme",
                                         "sauvegarder-donnees", "restaurer-donnees", "sauvegarder", "comparer"])
     p.add_argument("args", nargs="*", help="zone, adresse, nombre ou valeur ; ou fichier")
@@ -400,6 +446,8 @@ def main():
             cmd_etat(plc)
         elif a.commande == "erreurs":
             cmd_erreurs(plc)
+        elif a.commande == "parametres":
+            cmd_parametres(plc, a.args[0] if a.args else None)
         elif a.commande == "lire":
             cmd_lire(plc, area, n1, n2)
         elif a.commande == "surveiller":

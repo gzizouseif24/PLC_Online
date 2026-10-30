@@ -104,6 +104,20 @@ A100–A199. Everything except the model and the "battery present" bit is still 
 Order of the records in A100–A199 (newest first or oldest first): to check on the bench
 against CX-Programmer's error log.
 
+## 3b. PLC Setup, units and I/O table (`parametres`, read-only)
+
+- **PLC Setup**: FINS `0201` area `8010`, 512 words (W342 §5-3-7). Word numbers = the
+  "Programming Console address" of W393 §7-1-2. Decoded: startup mode (+81, raw), wait for
+  units (+83.15), battery and interrupt-task error detection (+128.15 / .14), peripheral port
+  (+144 format and mode, +145 speed, +147 unit), RS-232C port (+160, +161, +163), minimum
+  cycle time (+208), watch cycle time (+209). **Self-check on the bench:** the peripheral
+  port must read Host Link, 9600, 7 bits, even, 2 stop, unit 0.
+- **Units**: FINS `0502` gives the model of the CPU, CPU Bus Units (address 10-1F),
+  Special I/O Units (20-7F) and Inner Board (E1). Plain I/O cards (ID211, OC211) are not listed.
+- **Registered I/O table**: FINS `0201` area `8012`, 1280 words. Format not in the manuals:
+  `parametres` saves it raw; decode by comparing with CX-Programmer's I/O table window, then
+  with one card added or removed.
+
 ## 4. Program backup (experimental)
 
 FINS `0306` reads the user program memory (compiled code, not ladder text).

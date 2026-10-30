@@ -149,6 +149,40 @@ def error_log_text(code: int) -> str:
     }.get(code, "voir le manuel de la CPU ou CX-Programmer")
 
 
+BAUDS = {0x00: 9600, 0x01: 300, 0x02: 600, 0x03: 1200, 0x04: 2400, 0x05: 4800, 0x06: 9600,
+         0x07: 19200, 0x08: 38400, 0x09: 57600, 0x0A: 115200}
+
+
+def _port_setup(w, base):
+    """Serial port words (W393 §7-1-2): +base mode/format, +base+1 speed, +base+3 unit number."""
+    mode_word = w[base]
+    if not mode_word >> 15:
+        return "reglages standard (Host Link, 9600 bauds, 7 bits, parite paire, 2 stop)"
+    mode = mode_word >> 8 & 0x0F
+    mode_text = {0x0: "Host Link", 0x5: "Host Link"}.get(mode, f"autre mode (code {mode:X})")
+    parity = {0: "paire", 1: "impaire", 2: "aucune"}.get(mode_word & 3, "?")
+    return (f"{mode_text}, {BAUDS.get(w[base + 1] & 0xFF, '?')} bauds, "
+            f"{8 if mode_word >> 3 & 1 else 7} bits, parite {parity}, "
+            f"{1 if mode_word >> 2 & 1 else 2} stop, unite {w[base + 3] & 0xFF}")
+
+
+def decode_plc_setup(w: list) -> list:
+    """The PLC Setup settings useful for diagnostics, as (label, text) pairs.
+    Word numbers are the 'Programming Console address' of W393 §7-1-2."""
+    watch = w[209]
+    return [
+        ("Mode au demarrage (+81)", f"{w[81]:04X} (codes non detailles dans le manuel : voir CX-Programmer)"),
+        ("Attendre les unites au demarrage (+83.15)", "non" if w[83] >> 15 & 1 else "oui"),
+        ("Detection defaut pile (+128.15)", "NON (desactivee)" if w[128] >> 15 & 1 else "oui"),
+        ("Detection erreur tache d'interruption (+128.14)", "non" if w[128] >> 14 & 1 else "oui"),
+        ("Port peripherique (+144..147)", _port_setup(w, 144)),
+        ("Port RS-232C (+160..163)", _port_setup(w, 160)),
+        ("Temps de cycle minimum (+208)", f"{w[208]} ms" if w[208] else "aucun (cycle variable)"),
+        ("Temps de cycle maxi surveille (+209)",
+         f"{(watch & 0x7FFF) * 10} ms" if watch >> 15 else "1000 ms (defaut)"),
+    ]
+
+
 class HostLinkError(Exception):
     """Missing, corrupted or unexpected reply."""
 
@@ -549,6 +583,46 @@ class Cj1m:
                 break
             first += got
         return records
+
+    # ---- FINS: parameter areas (PLC Setup, I/O table) and units ----
+
+    def parameter_area(self, area: int, words: int, block: int = 200) -> list:
+        """FINS 0201 PARAMETER AREA READ (W342 §5-3-7). area: 0x8010 PLC Setup (512 words),
+        0x8012 registered I/O table (1280 words). Read-only; works in every mode."""
+        out = []
+        while len(out) < words:
+            n = min(block, words - len(out))
+            data = self.fins("0201", f"{area:04X}{len(out):04X}{n:04X}", accept=(0x1104,))
+            if len(data) < 12 or int(data[0:4], 16) != area or int(data[4:8], 16) != len(out):
+                raise HostLinkError(f"réponse 0201 inattendue : {data[:24]!r}")
+            got = decode_words(data[12:])
+            if (int(data[8:12], 16) & 0x7FFF) != len(got):
+                raise HostLinkError(f"réponse 0201 : {len(got)} mots reçus, annoncé {int(data[8:12], 16) & 0x7FFF}")
+            out += got
+            if not got or int(data[8:12], 16) & 0x8000:
+                break
+        return out
+
+    def plc_setup(self) -> list:
+        return self.parameter_area(0x8010, 512)
+
+    def io_table(self) -> list:
+        return self.parameter_area(0x8012, 1280)
+
+    def units(self) -> list:
+        """FINS 0502 CONNECTION DATA READ: [(unit address, model)] for the CPU, CPU Bus Units
+        (10-1F), Special I/O Units (20-7F) and Inner Board (E1). Basic I/O Units are not listed."""
+        raw = bytes.fromhex(self.fins("0502", "0019"))
+        if len(raw) < 2:
+            raise HostLinkError(f"réponse 0502 trop courte : {raw.hex()}")
+        count = raw[1] & 0x7F
+        units = []
+        for i in range(count):
+            r = raw[2 + 21 * i:23 + 21 * i]
+            if len(r) < 21:
+                break
+            units.append((r[0], r[1:21].split(b"\x00")[0].decode("ascii", "replace").strip()))
+        return units
 
     # ---- FINS: program read (experimental) ----
 

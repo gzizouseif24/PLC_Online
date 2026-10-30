@@ -41,6 +41,12 @@ class FakeCj1m:
         self.corrupt_next = 0
         self.fa_end_code = False   # True: '@00FA00...' variant seen in some documents
         self.battery = True
+        self.setup = [0] * 512
+        self.setup[128] = 0x8000              # battery errors not detected
+        self.setup[144] = 0x8000              # peripheral port: PLC Setup, Host Link, 7 bits, 2 stop, even
+        self.io_table = [0] * 1280
+        self.io_table[0:4] = [0x0001, 0x1100, 0x0001, 0x1200]   # made-up content
+        self.unit_list = [(0x00, b"CJ1M_CPU11")]
         self.end_code = "00"
         self.cut_to = None   # return fewer words than asked
         self.requests = []
@@ -139,6 +145,20 @@ class FakeCj1m:
             for i, w in enumerate(decode_words(p[12:])):
                 self.mem[area][addr + i] = w
             return 0, ""
+        if cmd == "0201":
+            area, start, count = int(p[0:4], 16), int(p[4:8], 16), int(p[8:12], 16)
+            table = {0x8010: self.setup, 0x8012: self.io_table}[area]
+            words = table[start:start + count]
+            last = 0x8000 if start + len(words) >= len(table) else 0
+            code = 0x1104 if start + count > len(table) else 0
+            return code, f"{area:04X}{start:04X}{len(words) | last:04X}" + "".join(f"{w:04X}" for w in words)
+        if cmd == "0502":
+            first, count = int(p[0:2], 16), int(p[2:4], 16)
+            units = [u for u in self.unit_list if u[0] >= first][:count]
+            raw = bytes([first, len(units) | 0x80])
+            for addr, model in units:
+                raw += bytes([addr]) + model.ljust(20, b" ")
+            return 0, raw.hex().upper()
         if cmd == "0501":
             return 0, (b"CJ1M-CPU12".ljust(20, b" ") + b"02.00".ljust(20, b" ") + bytes(40)).hex().upper()
         if cmd == "0601":
@@ -330,6 +350,13 @@ class OmronTests(unittest.TestCase):
         self.assertEqual(error_log_text(0x80C0), "erreur bus E/S")
         self.assertEqual(error_log_text(0x4105), "FAL 5")
 
+    def test_parameter_area_is_read_in_blocks(self):
+        self.fake.setup[511] = 0x1234
+        setup = self.plc.plc_setup()
+        self.assertEqual(len(setup), 512)
+        self.assertEqual(setup[511], 0x1234)
+        self.assertEqual(len(self.plc.io_table()), 1280)
+
     # program
     def test_program_read(self):
         for unit in (1, 2, 4):
@@ -426,6 +453,19 @@ class OmronCliTests(unittest.TestCase):
         self.assertIn("erreur bus E/S", out)
         self.assertIn("30/10/2026 14:05:09   (lue dans A351", out)
         self.assertIn("code modele 30", out)
+
+    def test_parametres(self):
+        with tempfile.TemporaryDirectory() as d:
+            name = os.path.join(d, "p.txt")
+            out = self.run_cmd(self.cli.cmd_parametres, name)
+            saved = Path(name).read_text(encoding="utf-8")
+        self.assertIn("Host Link, 9600 bauds, 7 bits, parite paire, 2 stop, unite 0", out)
+        self.assertIn("Detection defaut pile (+128.15)", out)
+        self.assertIn("NON (desactivee)", out)
+        self.assertIn("CJ1M_CPU11", out)
+        self.assertIn("4 mots non nuls", out)
+        self.assertIn("+128   8000", saved)
+        self.assertIn("+0     0001 1100 0001 1200", saved)
 
     def test_lire_shows_bits(self):
         self.fake.mem["CIO"][0] = 0b101
