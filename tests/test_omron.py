@@ -8,7 +8,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 
 from plc_online.checksum import xor_checksum
-from plc_online.drivers.omron import (
+from plc_online.protocols.hostlink import (
     AREAS, Cj1m, FinsRefused, HostLinkError, PlcRefused, decode_words, error_log_text, parse_address, signed16)
 
 CMODE_READ = {"RR": "CIO", "RH": "H", "RJ": "A", "RD": "D"}
@@ -351,7 +351,7 @@ class OmronTests(unittest.TestCase):
 
 
 def load_cli():
-    path = Path(__file__).resolve().parents[1] / "scripts" / "omron" / "omron.py"
+    path = Path(__file__).resolve().parents[1] / "tools" / "omron.py"
     spec = importlib.util.spec_from_file_location("omron_cli", path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)

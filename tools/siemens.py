@@ -3,15 +3,15 @@
 
 Python 32 bits obligatoire, SIMATIC Manager ferme, interface PG/PC = USB.S7USB.1.
 
-    py -3.14-32 scripts/siemens/s7read.py                 (MB0..MB3)
-    py -3.14-32 scripts/siemens/s7read.py --zone DB --db 10 --debut 20 --nombre 2
+    py -3.14-32 tools/siemens.py                 (MB0..MB3)
+    py -3.14-32 tools/siemens.py --zone DB --db 10 --debut 20 --nombre 2
 """
 import argparse
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from plc_online.drivers.siemens import AREAS, DEFAULT_DLL, S7300, S7Error, word_be  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from plc_online.protocols.s7 import AREAS, DEFAULT_DLL, S7300, S7Error, word_be  # noqa: E402
 
 
 def main():

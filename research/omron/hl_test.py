@@ -4,14 +4,14 @@
 L'automate doit renvoyer exactement la trame envoyee : prouve cable, reglages et FCS.
 Fermer CX-Programmer (ou passer hors ligne) avant : il utilise le meme port COM.
 
-    python scripts/omron/hl_test.py --port COM6
+    python research/omron/hl_test.py --port COM6
 """
 import argparse
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from plc_online.drivers.omron import Cj1m, HostLinkError, open_port  # noqa: E402
+from plc_online.protocols.hostlink import Cj1m, HostLinkError, open_port  # noqa: E402
 
 
 def main():

@@ -1,6 +1,6 @@
 # Omron CJ1M (Host Link) — notes
 
-Tool: `scripts/omron/omron.py`. Driver: `plc_online/drivers/omron.py`.
+Tool: `tools/omron.py`. Driver: `plc_online/protocols/hostlink.py`.
 Wiring and PLC settings: [rapport technique §4](rapport-technique-2026-10-23.md)
 (peripheral port in Host Link, 9600 7-E-2, unit 0, **DIP 4 ON**).
 
@@ -120,7 +120,7 @@ address is always a multiple of 4.
 
 Close CX-Programmer, DIP 4 ON. In this order:
 
-1. `python scripts/omron/omron.py lire D 0 4` (should match the report: F5BD 6C5D BD07 D1DD).
+1. `python tools/omron.py lire D 0 4` (should match the report: F5BD 6C5D BD07 D1DD).
 2. `etat`: model, mode, faults, clock. Compare with CX-Programmer.
 3. `lire CIO 0 2`, `lire W 0 4`, `lire H 0 4`, `lire A 400 4`, `lire T 0 4`.
 4. `surveiller CIO 0 2` and press an input.

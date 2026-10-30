@@ -3,14 +3,14 @@
 
 Fermer CX-Programmer avant : il utilise le meme port COM.
 
-    python scripts/omron/hl_read.py --port COM6 --debut 0 --nombre 4
+    python research/omron/hl_read.py --port COM6 --debut 0 --nombre 4
 """
 import argparse
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from plc_online.drivers.omron import Cj1m, HostLinkError, open_port, signed16  # noqa: E402
+from plc_online.protocols.hostlink import Cj1m, HostLinkError, open_port, signed16  # noqa: E402
 
 
 def main():

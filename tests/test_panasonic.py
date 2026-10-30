@@ -5,7 +5,7 @@
 import unittest
 
 from plc_online.checksum import xor_checksum
-from plc_online.drivers.panasonic import (
+from plc_online.protocols.mewtocol import (
     Fp0r, MewtocolError, PlcRefused, decode_words, dint, encode_word)
 
 

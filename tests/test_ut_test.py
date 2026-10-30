@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 _spec = importlib.util.spec_from_file_location(
-    "ut_test", Path(__file__).resolve().parents[1] / "scripts" / "tsx" / "ut_test.py")
+    "ut_test", Path(__file__).resolve().parents[1] / "research" / "tsx" / "ut_test.py")
 ut = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(ut)
 

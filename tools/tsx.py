@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """TSX Micro / Premium par le port TER (Uni-Telway), sans PL7.
 
-    python tsx.py etat                          identification, defauts, pile, horloge
-    python tsx.py lire MW 0 20                  lire %MW0..%MW19  (zones : MW MD KW KD SW S M)
-    python tsx.py surveiller MW 0 100           afficher ce qui change (Ctrl+C pour arreter)
-    python tsx.py ecrire MW 10 1234             ecrire UN mot, avec confirmation et relecture
-    python tsx.py run | stop                    passer l'automate en RUN / STOP, avec confirmation
-    python tsx.py sauvegarder [FICHIER]         copier le programme de l'automate dans un fichier
-    python tsx.py comparer FICHIER              le programme a-t-il change depuis cette sauvegarde ?
-    python tsx.py restaurer FICHIER             remettre un programme sauvegarde dans l'automate
-    python tsx.py sauvegarder-donnees [FICHIER] copier tous les %MW et %KW dans un fichier CSV
-    python tsx.py restaurer-donnees FICHIER     remettre les %MW du fichier CSV dans l'automate
+    python tools/tsx.py etat                          identification, defauts, pile, horloge
+    python tools/tsx.py lire MW 0 20                  lire %MW0..%MW19  (zones : MW MD KW KD SW S M)
+    python tools/tsx.py surveiller MW 0 100           afficher ce qui change (Ctrl+C pour arreter)
+    python tools/tsx.py ecrire MW 10 1234             ecrire UN mot, avec confirmation et relecture
+    python tools/tsx.py run | stop                    passer l'automate en RUN / STOP, avec confirmation
+    python tools/tsx.py sauvegarder [FICHIER]         copier le programme de l'automate dans un fichier
+    python tools/tsx.py comparer FICHIER              le programme a-t-il change depuis cette sauvegarde ?
+    python tools/tsx.py restaurer FICHIER             remettre un programme sauvegarde dans l'automate
+    python tools/tsx.py sauvegarder-donnees [FICHIER] copier tous les %MW et %KW dans un fichier CSV
+    python tools/tsx.py restaurer-donnees FICHIER     remettre les %MW du fichier CSV dans l'automate
 
 Options : --port COM6, --trace (octets), --adresses 1-3 (plus rapide, a l'essai : 1 par defaut).
 Fermer PL7 avant. Cable TSX PCX 1031 : meme position qu'avec PL7.
@@ -480,7 +480,7 @@ def cmd_ecrire(tsx, zone, addr, value):
     size = WORD_ZONES[zone][2]
     ok = back == value & ((1 << 8 * size) - 1)
     print(f"Relu : %{zone}{addr} = {back}  {'OK' if ok else '!! DIFFERENT'}")
-    print(f"Pour revenir en arriere : python tsx.py ecrire {zone} {addr} {old}")
+    print(f"Pour revenir en arriere : python tools/tsx.py ecrire {zone} {addr} {old}")
 
 
 def cmd_run_stop(tsx, what):
@@ -554,7 +554,7 @@ def cmd_restaurer(tsx, filename):
     print("Verification : relecture du programme...")
     _, _, back = do_upload(tsx)
     if back == blob:
-        print("Restauration OK : le programme relu est identique au fichier. L'automate est en STOP (python tsx.py run).")
+        print("Restauration OK : le programme relu est identique au fichier. L'automate est en STOP (python tools/tsx.py run).")
     else:
         print(f"!! Le programme relu ({len(back)} octets) differe du fichier ({len(blob)} octets).")
         print("   Le programme d'avant est dans le fichier avant_restauration_*.tsxbak.")

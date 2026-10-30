@@ -268,7 +268,7 @@ Round 2: gates 5 and 8 with ext1 0..5, ext2 0..3.
 
 ## 5q. Official UNI-TE request list (PL7 help, tcom1 "Liste des requêtes")
 
-Extracted from the PL7 help files with `tools/hlp2txt.py`. Byte coding of parameters is
+Extracted from the PL7 help files with `research/hlp2txt.py`. Byte coding of parameters is
 in Schneider's "TSX DR NET" manual (not in the help).
 
 | Group | Request | Code | Answer |

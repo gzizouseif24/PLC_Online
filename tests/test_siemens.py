@@ -2,7 +2,7 @@
 import ctypes
 import unittest
 
-from plc_online.drivers.siemens import DEFAULT_DLL, S7Error, load_dll, word_be
+from plc_online.protocols.s7 import DEFAULT_DLL, S7Error, load_dll, word_be
 
 
 class SiemensTests(unittest.TestCase):

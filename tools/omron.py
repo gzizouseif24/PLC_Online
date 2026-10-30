@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """Omron CJ1M par le port peripherique (Host Link), sans CX-Programmer.
 
-    python omron.py etat                          modele, mode, defauts, pile, horloge
-    python omron.py erreurs                       journal d'erreurs de l'automate
-    python omron.py lire D 100 20                 lire D100..D119   (zones : CIO W H A D T C)
-    python omron.py lire CIO 0 2                  entrees / sorties : mots + bits
-    python omron.py surveiller CIO 0 4            afficher ce qui change, bit par bit (Ctrl+C)
-    python omron.py ecrire D 100 1234             ecrire UN mot, avec confirmation et relecture
-    python omron.py run | monitor | programme     changer de mode, avec confirmation
-    python omron.py sauvegarder-donnees [FICHIER] tous les D, H, W dans un fichier CSV
-    python omron.py restaurer-donnees FICHIER     remettre les D, H, W du CSV (mots changes seulement)
-    python omron.py sauvegarder [FICHIER]         copier le programme dans un fichier (experimental)
-    python omron.py comparer FICHIER              le programme a-t-il change ? (experimental)
+    python tools/omron.py etat                          modele, mode, defauts, pile, horloge
+    python tools/omron.py erreurs                       journal d'erreurs de l'automate
+    python tools/omron.py lire D 100 20                 lire D100..D119   (zones : CIO W H A D T C)
+    python tools/omron.py lire CIO 0 2                  entrees / sorties : mots + bits
+    python tools/omron.py surveiller CIO 0 4            afficher ce qui change, bit par bit (Ctrl+C)
+    python tools/omron.py ecrire D 100 1234             ecrire UN mot, avec confirmation et relecture
+    python tools/omron.py run | monitor | programme     changer de mode, avec confirmation
+    python tools/omron.py sauvegarder-donnees [FICHIER] tous les D, H, W dans un fichier CSV
+    python tools/omron.py restaurer-donnees FICHIER     remettre les D, H, W du CSV (mots changes seulement)
+    python tools/omron.py sauvegarder [FICHIER]         copier le programme dans un fichier (experimental)
+    python tools/omron.py comparer FICHIER              le programme a-t-il change ? (experimental)
 
 Options : --port COM6, --baud 9600, --unite 0.
 Adresse aussi possible comme dans CX-Programmer : lire D100 20, surveiller W10 2.
@@ -28,8 +28,8 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from plc_online.drivers.omron import (  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from plc_online.protocols.hostlink import (  # noqa: E402
     AREAS, FATAL_BITS, FINS_MODES, NON_FATAL_BITS, Cj1m, FinsRefused, HostLinkError,
     PlcRefused,
     error_log_text, open_port, parse_address, signed16)
@@ -101,7 +101,7 @@ def cmd_etat(plc):
         c, source = plc.clock_area_a(), "   (lue dans A351..A354)"
     print(f"\nHorloge automate : {c['date']} {c['heure']}{source}")
     n = len(read_error_log(plc)[0])
-    print(f"Journal d'erreurs : {n} enregistrement(s){'  -> python omron.py erreurs' if n else ''}")
+    print(f"Journal d'erreurs : {n} enregistrement(s){'  -> python tools/omron.py erreurs' if n else ''}")
 
 
 def read_error_log(plc):
@@ -160,13 +160,13 @@ def cmd_ecrire(plc, area, addr, value):
         plc.write(area, addr, [value])
     except PlcRefused as e:
         if e.code == "01":
-            print("Refuse en mode RUN. Passer en MONITOR : python omron.py monitor")
+            print("Refuse en mode RUN. Passer en MONITOR : python tools/omron.py monitor")
             return
         raise
     back = plc.read(area, addr, 1)[0]
     ok = back == value & 0xFFFF
     print(f"Relu : {area}{addr} = {back} (signe {signed16(back)})  {'OK' if ok else '!! DIFFERENT'}")
-    print(f"Pour revenir en arriere : python omron.py ecrire {area} {addr} {signed16(old)}")
+    print(f"Pour revenir en arriere : python tools/omron.py ecrire {area} {addr} {signed16(old)}")
 
 
 def cmd_mode(plc, mode):
@@ -293,7 +293,7 @@ def cmd_restaurer_donnees(plc, filename):
                 plc.write(area, start, [d[a] for a in range(start, start + length)])
     except PlcRefused as e:
         if e.code == "01":
-            print("Refuse en mode RUN. Passer en MONITOR (python omron.py monitor) puis relancer.")
+            print("Refuse en mode RUN. Passer en MONITOR (python tools/omron.py monitor) puis relancer.")
             return
         raise
     wrong = []

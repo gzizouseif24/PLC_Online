@@ -8,7 +8,7 @@ import unittest.mock
 from pathlib import Path
 
 _spec = importlib.util.spec_from_file_location(
-    "tsx", Path(__file__).resolve().parents[1] / "scripts" / "tsx" / "tsx.py")
+    "tsx", Path(__file__).resolve().parents[1] / "tools" / "tsx.py")
 tsx = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(tsx)
 

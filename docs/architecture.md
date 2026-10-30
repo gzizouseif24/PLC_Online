@@ -29,6 +29,9 @@ only knows tags** (a name, an address, a type, a value and its quality).
 
 ## 1. Drivers
 
+Code: `plc_online/protocols/` (`hostlink.py` Omron, `mewtocol.py` Panasonic, `s7.py` Siemens,
+`modbus.py` Modicon). The command-line tools in `tools/` use the same modules.
+
 Each brand implements the same small interface. The engine never sees frames,
 checksums or byte order.
 

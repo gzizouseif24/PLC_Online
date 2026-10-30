@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Modicon - lecture Modbus (RTU serie ou TCP Ethernet), lecture seule.
 
-    python scripts/modicon/mb_read.py --port COM6 --baud 19200 --parite E      (%MW0..%MW9)
-    python scripts/modicon/mb_read.py --ip 192.168.0.10 --zone M --debut 0 --nombre 16
+    python tools/modicon.py --port COM6 --baud 19200 --parite E      (%MW0..%MW9)
+    python tools/modicon.py --ip 192.168.0.10 --zone M --debut 0 --nombre 16
 
 Zones : MW = registres de maintien (03), IW = registres d'entree (04),
         M = bits internes / coils (01), I = entrees TOR (02).
@@ -11,8 +11,8 @@ import argparse
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from plc_online.drivers.modbus import (  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from plc_online.protocols.modbus import (  # noqa: E402
     Modicon, ModbusError, RtuTransport, TcpTransport, open_serial, signed16)
 
 

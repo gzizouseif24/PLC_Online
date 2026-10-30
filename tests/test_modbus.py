@@ -2,7 +2,7 @@
 import struct
 import unittest
 
-from plc_online.drivers.modbus import (
+from plc_online.protocols.modbus import (
     Modicon, ModbusError, PlcRefused, RtuTransport, TcpTransport,
     crc16, dint_lw, real_lw)
 
