@@ -1,0 +1,136 @@
+# Omron CJ1M (Host Link) — notes
+
+Tool: `tools/omron.py`. Driver: `plc_online/protocols/hostlink.py`.
+Wiring and PLC settings: [rapport technique §4](rapport-technique-2026-10-23.md)
+(peripheral port in Host Link, 9600 7-E-2, unit 0, **DIP 4 ON**).
+
+**Bench** = tried on the bench CJ1M. **Manual** = checked against Omron's
+*CS/CJ/CP/NSJ Communications Commands Reference Manual*, **W342-E1-18** (July 2023,
+[download](https://files.omron.eu/downloads/latest/manual/en/w342_cs_cj_cp_nsj_communications_commands_reference_manual_en.pdf)),
+and tested against the simulator in `tests/test_omron.py`, which follows the manual's formats.
+Not yet run on the PLC.
+
+## 1. Two command sets in the same frame
+
+```
+@ 00 RD 0000 0004 FCS * CR                              C-mode: read D0..D3
+@ 00 FA 0 00000000 0101 82 0000 00 0004 FCS * CR        FINS in Host Link: same read
+```
+
+- **C-mode** (2-letter header): simple, but only the old areas, 4-digit addresses (up to 9999).
+- **FINS** (header `FA`, W342 §3-5): everything else. Text = response wait (1 digit) +
+  ICF DA2 SA2 SID (`00` each) + FINS command + parameters. Max 1,114 characters, never split.
+  Reply = `@00FA` + `40 00 00 00` (ICF DA2 SA2 SID) + command echo + response code (4 hex) + data,
+  at most 538 bytes of data. **The manual shows no Host Link end code after `FA`**; some
+  forum examples show `@00FA00 40...`. The driver accepts both (the command echo tells which):
+  note on the bench which one the CJ1M sends.
+- FINS response code (W342 §5-1-3): bit 15 = network relay error, bit 7 = fatal CPU error,
+  bit 6 = non-fatal CPU error. These are flags, not a failure of the command: `0040` = OK,
+  but the PLC has a non-fatal error (battery...). The driver masks them.
+
+## 2. What the tool uses
+
+| Command | Request | Status |
+|---|---|---|
+| echo | `TS` | **bench** |
+| read D0–D9999 | `RD` | **bench** |
+| read CIO 0–6143, H 0–511, A 0–959 | `RR`, `RH`, `RJ` | manual (same format as `RD`) |
+| read W, T, C, D10000+ | FINS `0101`, areas B1, 89, 89 + 8000h, 82 | manual. C-mode cannot reach W, T/C 2048+, D10000+ (W342 §4-3-1) |
+| write D, CIO, H, A | `WD`, `WR`, `WH`, `WJ` | manual. **Refused in RUN** (end code 01), OK in MONITOR and PROGRAM |
+| write W, T, C, D10000+ | FINS `0102` | manual |
+| mode | `SC` + `00` PROGRAM / `02` MONITOR / `03` RUN | manual |
+| model | FINS `0501` + `00` (92 bytes, reply in several frames), fallback `MM` (`30` = CS/CJ) | manual |
+| mode, faults, battery, error code, FAL/FALS message | FINS `0601` | manual |
+| mode (fallback) | `MS`: status bits 9-8 = 00 PROGRAM, 10 RUN, 11 MONITOR | manual |
+| clock | FINS `0701` (BCD, day of week 0 = Sunday) | manual |
+| error log | FINS `2102`, 4 records per request, 20 stored max | manual |
+| program read | FINS `0306`, program FFFF | manual + **experimental** (see §4) |
+
+Corrections made after reading W342 (none of this had run on the PLC yet):
+- `FA` reply without end code (above).
+- `0601` status byte is bits: 0 = program running, 1 = writing flash, 2 = battery present,
+  7 = standby. The field after the message flags is the code of the most serious error
+  (e.g. 4105 = FAL 5), not a FAL number.
+- `2102` returns the records with code 1104 when fewer are stored than asked; an empty log
+  returns no data. Both are handled.
+- `0306`: address and byte count multiples of 4, at most 528 bytes per request over Host Link.
+- More end codes (21, A4, A5, A8), all fault bits of `0601`, more error log codes.
+
+Block sizes keep every reply in one frame (131 characters max): 30 words for C-mode reads,
+26 for FINS reads, 29 for C-mode writes. Longer replies (`0501`, `0306`) come in several
+frames (W342 §2-2): each frame but the last ends with FCS + CR instead of FCS + `*` CR,
+the PC answers with a single CR to get the next one; frames after the first are 128
+characters max. The driver joins them and checks every FCS.
+
+## 3. Memory areas (CJ1M)
+
+From the *CJ1M CPU Units Operation Manual*, **W393-E1-14**
+([download](https://files.omron.eu/downloads/latest/manual/en/w393_cj1m_g_h_cpu_units_operation_manual_en.pdf)), §2-1.
+
+| Zone | Content | Words | Shown as |
+|---|---|---|---|
+| `CIO` | inputs, outputs, links, internal relays | 0–6143 | word + 16 bits |
+| `W` | work relays | 0–511 | word + 16 bits |
+| `H` | holding relays (kept at power off) | 0–511 (H512–H1535: function blocks only) | word + 16 bits |
+| `A` | auxiliary (system) area | 0–959; **A0–A447 read-only** (the tool refuses to write there) | word + 16 bits |
+| `D` | data memory (kept at power off) | 0–32767 (D20000–D29599 Special I/O units, D30000–D31599 CPU Bus units) | decimal / signed / hex |
+| `T`, `C` | timer / counter current value | 0–4095 | decimal |
+
+Where the I/O is in CIO:
+- **I/O cards** (Basic I/O Units): CIO 0000–0079 by default, allocated **in rack order**, one
+  or more words per card, inputs and outputs in the same sequence. There is no fixed
+  "outputs at 100". Check CX-Programmer's I/O table for which word is which card.
+- **Built-in I/O** (CJ1M-CPU21/22/23 only): inputs **CIO 2960** bits 00–09, outputs
+  **CIO 2961** bits 00–05.
+- Special I/O Units (analog...): CIO 2000–2959, 10 words per unit number.
+- Internal relays free for the program: CIO 1200–1499 and CIO 3800–6143.
+
+`surveiller CIO 0 4` prints each input / output bit that changes.
+
+Useful A words (all read-only, readable with plain `RJ`):
+
+| Words | Content |
+|---|---|
+| A100–A199 | error log: 20 records × 5 words (code, details, min/s, day/hour, year/month, BCD) |
+| A300 | error log pointer (number of records) |
+| A351–A354 | clock: s/min, hour/day, month/year, day of week (BCD, low byte first) |
+| A400 | code of the current error |
+| A401 | fatal error flags: .06 FALS, .08 cycle too long, .09 program, .10 I/O setting, .11 too many I/O, .13 duplicate unit, .14 I/O bus, .15 memory |
+| A402 | non-fatal flags: .04 **battery**, .09 I/O verification, .10 PLC Setup, .12 Basic I/O unit, .13 interrupt task, .15 FAL |
+
+**Fallback without FINS:** if the CJ1M refuses the FINS commands, `etat` reads the mode with
+`MS` and the faults, error code and clock from A400–A402 and A351–A354; `erreurs` reads
+A100–A199. Everything except the model and the "battery present" bit is still shown.
+Order of the records in A100–A199 (newest first or oldest first): to check on the bench
+against CX-Programmer's error log.
+
+## 4. Program backup (experimental)
+
+FINS `0306` reads the user program memory (compiled code, not ladder text).
+Good enough to answer "has the program changed?" (`comparer`), not to read the logic.
+W342 §5-3-10: allowed in RUN, MONITOR and PROGRAM; refused if the UM is read-protected or
+if "prohibit transferring program from PLC" is set in the project. Address relative to the
+start of the program area, multiple of 4; byte count multiple of 4; bit 15 of the count in
+the reply = last address reached. The manual does not say whether an address counts bytes
+or words, so the driver checks it first: it reads 64 bytes at address 0, then 16 bytes at
+address 8, and sees which offset they match. Blocks are multiples of 16 bytes so the next
+address is always a multiple of 4.
+
+## 5. Bench checklist
+
+Close CX-Programmer, DIP 4 ON. In this order:
+
+1. `python tools/omron.py lire D 0 4` (should match the report: F5BD 6C5D BD07 D1DD).
+2. `etat`: model, mode, faults, clock. Compare with CX-Programmer.
+3. `lire CIO 0 2`, `lire W 0 4`, `lire H 0 4`, `lire A 400 4`, `lire T 0 4`.
+4. `surveiller CIO 0 2` and press an input.
+5. `erreurs` (CX-Programmer: PLC → Error log, same list?).
+6. On a test machine only: `monitor`, then `ecrire D 1000 1234`, read-back, then put it back.
+7. `sauvegarder-donnees`, change one D on the test machine, `restaurer-donnees FILE`
+   (MONITOR mode; only D, H, W are written, never CIO outputs or A).
+8. `sauvegarder`, then `comparer FILE` (should say IDENTIQUE).
+
+Not done: program restore (FINS `0307` program write). Only after `sauvegarder` /
+`comparer` are confirmed, and ideally with a capture of CX-Programmer doing a transfer.
+
+If a step fails, the message gives the end code or FINS code. Note it here.
