@@ -613,15 +613,15 @@ class Cj1m:
         """FINS 0502 CONNECTION DATA READ: [(unit address, model)] for the CPU, CPU Bus Units
         (10-1F), Special I/O Units (20-7F) and Inner Board (E1). Basic I/O Units are not listed."""
         raw = bytes.fromhex(self.fins("0502", "0019"))
-        if len(raw) < 2:
-            raise HostLinkError(f"réponse 0502 trop courte : {raw.hex()}")
-        count = raw[1] & 0x7F
+        count = raw[1] & 0x7F if len(raw) >= 2 else 0
         units = []
         for i in range(count):
             r = raw[2 + 21 * i:23 + 21 * i]
             if len(r) < 21:
                 break
             units.append((r[0], r[1:21].split(b"\x00")[0].decode("ascii", "replace").strip()))
+        if not units:     # format not as read in W342 §5-3-16: show the raw reply to decode it
+            raise HostLinkError(f"réponse 0502 non décodée ({len(raw)} octets) : {raw.hex().upper()}")
         return units
 
     # ---- FINS: program read (experimental) ----

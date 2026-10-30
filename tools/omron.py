@@ -156,8 +156,14 @@ def cmd_parametres(plc, filename=None):
     used = [i for i, w in enumerate(table) if w]
     print(f"\nTable E/S enregistree : {len(used)} mots non nuls sur {len(table)} (format non documente,"
           f" a comparer avec la table E/S de CX-Programmer)")
+    slots = [(i, w) for i, w in enumerate(table[:40]) if w]
+    if slots:
+        print("   Debut de table (hypothese : un mot par emplacement du rack 0, a confirmer) :")
+        for i, w in slots:
+            print(f"      emplacement {i} : {w:04X}")
+    print("   Brut :")
     for line in hexdump(table)[:16]:
-        print(line)
+        print("   " + line)
 
     filename = filename or f"omron_parametres_{time.strftime('%Y%m%d_%H%M%S')}.txt"
     with open(filename, "w", encoding="utf-8") as f:
@@ -196,23 +202,50 @@ def confirm(question):
     return input(f"{question} (tapez OUI) > ").strip() == "OUI"
 
 
+def current_mode(plc):
+    try:
+        return FINS_MODES.get(plc.controller_status()["mode"], "?")
+    except HostLinkError:
+        return plc.status_cmode()["mode"]
+
+
+def make_writable(plc):
+    """Writes are refused in RUN (W342: end code 01). Offer MONITOR: the program keeps running.
+    Returns the mode to go back to afterwards ('RUN' or None), or False if the user declines."""
+    if current_mode(plc) != "RUN":
+        return None
+    print("L'automate est en RUN : il refuse les ecritures.")
+    if not confirm("Passer en MONITOR pour ecrire ? (le programme continue de tourner)"):
+        print("Annule, rien n'a ete ecrit.")
+        return False
+    plc.set_mode("monitor")
+    print(f"Mode : {current_mode(plc)}")
+    return "RUN"
+
+
+def back_to_run(plc, previous):
+    if previous == "RUN" and confirm("Remettre l'automate en RUN ?"):
+        plc.set_mode("run")
+        print(f"Mode : {current_mode(plc)}")
+    elif previous == "RUN":
+        print("L'automate reste en MONITOR (python tools/omron.py run pour revenir en RUN).")
+
+
 def cmd_ecrire(plc, area, addr, value):
     old = plc.read(area, addr, 1)[0]
     print(f"{area}{addr} actuel = {old} (signe {signed16(old)})")
     if not confirm(f"Ecrire {area}{addr} : {signed16(old)} -> {value} ? Machine en securite ?"):
         print("Annule, rien n'a ete ecrit.")
         return
-    try:
-        plc.write(area, addr, [value])
-    except PlcRefused as e:
-        if e.code == "01":
-            print("Refuse en mode RUN. Passer en MONITOR : python tools/omron.py monitor")
-            return
-        raise
+    previous = make_writable(plc)
+    if previous is False:
+        return
+    plc.write(area, addr, [value])
     back = plc.read(area, addr, 1)[0]
     ok = back == value & 0xFFFF
     print(f"Relu : {area}{addr} = {back} (signe {signed16(back)})  {'OK' if ok else '!! DIFFERENT'}")
     print(f"Pour revenir en arriere : python tools/omron.py ecrire {area} {addr} {signed16(old)}")
+    back_to_run(plc, previous)
 
 
 def cmd_mode(plc, mode):
@@ -301,9 +334,18 @@ def changed_runs(addrs):
     return runs
 
 
-def read_addresses(plc, area, addrs):
+def read_addresses(plc, area, addrs, show=False):
+    """Current values of the words from min(addrs) to max(addrs), with a progress counter."""
     lo, hi = min(addrs), max(addrs)
-    return dict(zip(range(lo, hi + 1), plc.read(area, lo, hi - lo + 1)))
+    values, t0 = [], time.time()
+    while lo + len(values) <= hi:
+        n = min(300, hi + 1 - lo - len(values))
+        values += plc.read(area, lo + len(values), n)
+        if show:
+            print(f"\rLecture {area} dans l'automate... {len(values)} / {hi - lo + 1} mots", end="", flush=True)
+    if show:
+        print(f"\rLecture {area} : {len(values)} mots en {time.time() - t0:.0f} s" + " " * 20)
+    return dict(zip(range(lo, hi + 1), values))
 
 
 def cmd_restaurer_donnees(plc, filename):
@@ -319,7 +361,7 @@ def cmd_restaurer_donnees(plc, filename):
         saved = {a: v for a, v in zones.get(area, {}).items() if a < AREAS[area]["size"]}
         if not saved:
             continue
-        current = read_addresses(plc, area, saved)
+        current = read_addresses(plc, area, saved, show=True)
         d = {a: v for a, v in saved.items() if current[a] != v}
         if d:
             diffs[area] = d
@@ -333,15 +375,12 @@ def cmd_restaurer_donnees(plc, filename):
     if not confirm(f"Ecrire ces {total} mots dans l'automate ? Machine en securite ?"):
         print("Annule, rien n'a ete ecrit.")
         return
-    try:
-        for area, d in diffs.items():
-            for start, length in changed_runs(d):
-                plc.write(area, start, [d[a] for a in range(start, start + length)])
-    except PlcRefused as e:
-        if e.code == "01":
-            print("Refuse en mode RUN. Passer en MONITOR (python tools/omron.py monitor) puis relancer.")
-            return
-        raise
+    previous = make_writable(plc)
+    if previous is False:
+        return
+    for area, d in diffs.items():
+        for start, length in changed_runs(d):
+            plc.write(area, start, [d[a] for a in range(start, start + length)])
     wrong = []
     for area, d in diffs.items():
         after = read_addresses(plc, area, d)
@@ -350,6 +389,7 @@ def cmd_restaurer_donnees(plc, filename):
         print(f"!! {len(wrong)} mots differents apres ecriture, premier : {wrong[0]}")
     else:
         print(f"Restauration OK : {total} mots ecrits et verifies.")
+    back_to_run(plc, previous)
 
 
 def do_upload(plc):
@@ -378,6 +418,12 @@ def cmd_sauvegarder(plc, filename=None):
 def cmd_comparer(plc, filename):
     with open(filename, "rb") as f:
         saved = f.read()
+    if filename.lower().endswith(".csv") or saved.startswith(b"# date;"):
+        print(f"{filename} est une sauvegarde de DONNEES (CSV), pas de programme.\n"
+              f"   comparer attend un fichier .cjbak (python tools/omron.py sauvegarder).\n"
+              f"   Pour les donnees : python tools/omron.py restaurer-donnees {filename} "
+              f"(montre les mots differents et demande avant d'ecrire).")
+        return
     blob = do_upload(plc)
     if blob == saved:
         print(f"IDENTIQUE : le programme de l'automate est le meme que {filename}")

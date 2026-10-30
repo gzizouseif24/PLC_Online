@@ -39,7 +39,7 @@ class FakeCj1m:
         self.program_unit = 2          # bytes per program address
         self.errors = [(0x80C0, 0, (26, 10, 30, 14, 5, 7)), (0x4105, 0, (26, 10, 30, 14, 6, 0))]
         self.corrupt_next = 0
-        self.fa_end_code = False   # True: '@00FA00...' variant seen in some documents
+        self.fa_end_code = True    # bench CJ1M: '@00FA00 40...' (False: W342 diagram, no end code)
         self.battery = True
         self.setup = [0] * 512
         self.setup[128] = 0x8000              # battery errors not detected
@@ -74,7 +74,7 @@ class FakeCj1m:
             if self.end_code != "00":
                 raise Refuse(self.end_code)
             answer = self.answer(header, text)
-            # W342 §3-5-3: no Host Link end code after 'FA' (unless fa_end_code is set)
+            # bench CJ1M sends '00' after 'FA'; the W342 §3-5-3 diagram shows none
             reply += answer if header == "FA" and not self.fa_end_code else "00" + answer
         except Refuse as e:
             reply += str(e)
@@ -306,8 +306,8 @@ class OmronTests(unittest.TestCase):
         self.assertTrue(s["pile_presente"])
         self.assertEqual(s["message"], "DEFAUT CONVOYEUR")
 
-    def test_fa_reply_with_end_code_is_accepted_too(self):
-        self.fake.fa_end_code = True
+    def test_fa_reply_as_drawn_in_the_manual_is_accepted_too(self):
+        self.fake.fa_end_code = False
         self.assertEqual(self.plc.read("W", 0, 1), [0])
         self.assertEqual(self.plc.status()["mode"], "RUN")
 
@@ -492,17 +492,51 @@ class OmronCliTests(unittest.TestCase):
             self.fake.mem["D"][11] = 2
             self.fake.mem["W"][3] = 3
             self.fake.mem["CIO"][100] = 0xFFFF       # outputs: must not be restored
+            answers = iter([True, False])     # write: yes; switch to MONITOR: no
+            self.cli.confirm = lambda q: next(answers)
             out = self.run_cmd(self.cli.cmd_restaurer_donnees, name)
-            self.assertIn("MONITOR", out)            # refused in RUN, nothing written
+            self.assertIn("refuse les ecritures", out)   # in RUN: nothing written
             self.assertEqual(self.fake.mem["D"][10], 1)
-            self.fake.mode = 0x02
+            self.cli.confirm = lambda q: True          # yes to everything: MONITOR, write, back to RUN
             out = self.run_cmd(self.cli.cmd_restaurer_donnees, name)
             self.assertIn("Restauration OK : 3 mots", out)
             self.assertIn("ignorees : CIO", out)
+            self.assertIn("Lecture D : 1000 mots", out)
+            self.assertEqual(self.fake.mode, 0x04)     # back in RUN
         self.assertEqual(self.fake.mem["D"][10:12], [70, 77])
         self.assertEqual(self.fake.mem["W"][3], 0)
         self.assertEqual(self.fake.mem["CIO"][100], 0xFFFF)
         self.assertEqual(self.fake.mem["H"][5], 55)
+
+    def test_write_in_run_switches_to_monitor_and_back(self):
+        self.cli.confirm = lambda q: True
+        out = self.run_cmd(self.cli.cmd_ecrire, "D", 5, 1234)
+        self.assertIn("Relu : D5 = 1234", out)
+        self.assertEqual(self.fake.mode, 0x04)
+        self.assertIn("@00SC02", self.fake.requests)
+        self.assertIn("@00SC03", self.fake.requests)
+
+    def test_write_in_monitor_does_not_change_mode(self):
+        self.cli.confirm = lambda q: True
+        self.plc.set_mode("monitor")
+        self.fake.requests.clear()
+        self.run_cmd(self.cli.cmd_ecrire, "D", 5, 1)
+        self.assertFalse([r for r in self.fake.requests if r[3:5] == "SC"])
+        self.assertEqual(self.fake.mode, 0x02)
+
+    def test_compare_refuses_a_data_csv(self):
+        with tempfile.TemporaryDirectory() as d:
+            name = os.path.join(d, "omron_donnees.csv")
+            Path(name).write_text("# date;2026-10-30\nzone;adresse\n", encoding="utf-8")
+            out = self.run_cmd(self.cli.cmd_comparer, name)
+        self.assertIn("sauvegarde de DONNEES", out)
+        self.assertFalse([r for r in self.fake.requests if "0306" in r])   # program not read
+
+    def test_units_reply_not_understood_is_shown_raw(self):
+        self.fake.unit_list = []
+        out = self.run_cmd(self.cli.cmd_parametres, os.path.join(tempfile.mkdtemp(), "p.txt"))
+        self.assertIn("réponse 0502 non décodée", out)
+        self.assertIn("emplacement 0 : 0001", out)
 
     def test_backup_then_compare(self):
         with tempfile.TemporaryDirectory() as d:
