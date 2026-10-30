@@ -10,17 +10,22 @@ end code and length. A corrupted reply is retried; a PLC end code is not.
 Words are hex, most significant digit first: "04D2" -> 1234 (no byte swap,
 unlike Panasonic). 32-bit values are two words, low word first.
 
-Two command sets share the same frame (notes: docs/omron.md):
-- C-mode commands (RD, RR, RH, RJ, WD, SC, MS, MM, TS): confirmed on the bench for TS and RD.
+Two command sets share the same frame (notes: docs/omron.md, formats from Omron manual
+W342-E1-18, CS/CJ/CP/NSJ Communications Commands):
+- C-mode commands (RD, RR, RH, RJ, WD, SC, MS, MM, TS): TS and RD confirmed on the bench.
 - FINS commands wrapped in a Host Link 'FA' frame: needed for W, T, C, D10000+,
-  model, status, clock, error log and program read. To verify on the bench.
+  model, status, clock, error log and program read. Not yet tried on the bench.
 """
 from ..checksum import xor_checksum
 
 # A single-frame RD reply holds up to 30 words; longer reads are split.
 MAX_WORDS_PER_FRAME = 30
-# FINS reply in one frame: 27 characters of overhead + 4 per word <= 131.
+# FINS reply in one frame: 25 characters of overhead + 4 per word <= 131 (26 leaves room
+# for the 2-character end code some documents show after 'FA').
 MAX_FINS_WORDS = 26
+# FINS reply data over Host Link: 538 bytes max (W342 §3-5-3). Program read: 8 bytes of
+# parameters echoed, the rest a multiple of 4.
+MAX_PROGRAM_BYTES = 528
 # C-mode write command in one frame: 13 characters of overhead + 4 per word <= 131.
 MAX_WRITE_WORDS = 29
 
@@ -35,8 +40,12 @@ END_CODES = {
     "16": "commande non supportée",
     "18": "trame trop longue",
     "19": "non exécutable",
+    "21": "impossible : erreur CPU",
     "23": "mémoire utilisateur protégée",
     "A3": "abandon : erreur FCS en transmission",
+    "A4": "abandon : erreur de format en transmission",
+    "A5": "abandon : erreur de donnée en transmission",
+    "A8": "abandon : trame trop longue en transmission",
     "IC": "commande inconnue de l'automate",
 }
 
@@ -75,13 +84,14 @@ AREAS = {
 
 MODES = {"programme": "00", "monitor": "02", "run": "03"}   # SC (status change)
 FINS_MODES = {0x00: "PROGRAM", 0x02: "MONITOR", 0x04: "RUN"}
-FINS_STATUS = {0x00: "programme arrêté", 0x01: "programme en cours", 0x80: "CPU en attente (standby)"}
+MS_MODES = {0b00: "PROGRAM", 0b10: "RUN", 0b11: "MONITOR"}  # MS status data bits 9-8
 
-# Fatal (A401) and non-fatal (A402) error flags, as returned by FINS 0601.
+# Fatal and non-fatal error flags, as returned by FINS 0601 (W342 §5-3-17).
 FATAL_BITS = {
     15: "erreur mémoire",
     14: "erreur bus E/S (capot CJ1W-TER01 ?)",
     13: "numéro d'unité en double",
+    12: "erreur fatale carte interne",
     11: "trop de points E/S",
     10: "erreur de configuration E/S (table E/S)",
     9: "erreur programme",
@@ -90,7 +100,19 @@ FATAL_BITS = {
 }
 NON_FATAL_BITS = {
     15: "FAL (erreur non fatale du programme)",
-    4: "pile (batterie) faible ou absente",
+    14: "erreur duplex",
+    13: "erreur de tâche d'interruption",
+    12: "erreur d'unité E/S de base",
+    10: "erreur de paramètres automate (PLC Setup)",
+    9: "erreur de vérification E/S (table E/S ≠ unités présentes)",
+    8: "erreur carte interne",
+    7: "erreur d'unité CPU Bus",
+    6: "erreur d'unité E/S spéciale",
+    5: "erreur SYSMAC BUS",
+    4: "erreur pile (batterie faible ou absente)",
+    3: "erreur de réglage d'unité CPU Bus",
+    2: "erreur de réglage d'unité E/S spéciale",
+    0: "autre erreur non fatale",
 }
 
 
@@ -102,16 +124,29 @@ def error_log_text(code: int) -> str:
         return f"FALS {code - 0xC100}"
     if 0x80C0 <= code <= 0x80C7:
         return "erreur bus E/S"
+    for lo, hi, text in ((0x0200, 0x020F, "erreur d'unité CPU Bus n°"), (0x0300, 0x035F, "erreur d'unité E/S spéciale n°"),
+                         (0x0400, 0x040F, "erreur de réglage d'unité CPU Bus n°"),
+                         (0x0500, 0x055F, "erreur de réglage d'unité E/S spéciale n°")):
+        if lo <= code <= hi:
+            return f"{text}{code & 0xFF}"
     return {
+        0x0000: "aucune erreur",
         0x80F1: "erreur mémoire",
-        0x80E0: "erreur de configuration E/S",
+        0x80E0: "erreur de configuration E/S (table E/S ≠ unités présentes)",
         0x80E1: "trop de points E/S",
         0x80E9: "numéro d'unité en double",
+        0x80EA: "mots E/S en double (premier mot de rack)",
         0x80F0: "erreur programme",
         0x809F: "temps de cycle trop long",
-        0x00F7: "erreur pile",
+        0x008A: "erreur E/S analogiques intégrées",
+        0x008B: "erreur de tâche d'interruption",
+        0x009A: "erreur d'unité E/S de base",
         0x009B: "erreur de paramètres automate (PLC Setup)",
-    }.get(code, "voir le manuel (journal d'erreurs) ou CX-Programmer")
+        0x00E7: "erreur de vérification E/S",
+        0x00F1: "erreur mémoire flash",
+        0x00F7: "erreur pile",
+        0x02F0: "erreur non fatale carte interne",
+    }.get(code, "voir le manuel de la CPU ou CX-Programmer")
 
 
 class HostLinkError(Exception):
@@ -225,8 +260,8 @@ class Cj1m:
                 body = "".join(parts) + text
                 return body + xor_checksum(body) + "*\r"
 
-    def _check_reply(self, reply: str, header: str) -> str:
-        """Return the text after the end code, or raise."""
+    def _check_reply(self, reply: str, header: str, end_code: bool = True) -> str:
+        """Return the text after the end code (or after the header), or raise."""
         if not reply:
             raise HostLinkError("pas de réponse (timeout, mauvais mode ou mauvais câble)")
         if not reply.endswith("*\r"):
@@ -237,9 +272,11 @@ class Cj1m:
         expected = f"@{self.unit:02d}{header}"
         if not body.startswith(expected):
             raise HostLinkError(f"en-tête inattendu (attendu {expected!r}) : {reply!r}")
-        end_code = body[len(expected):len(expected) + 2]
-        if end_code != "00":
-            raise PlcRefused(end_code, reply)
+        if not end_code:
+            return body[len(expected):]
+        code = body[len(expected):len(expected) + 2]
+        if code != "00":
+            raise PlcRefused(code, reply)
         return body[len(expected) + 2:]
 
     def _transact(self, header: str, text: str, data_len=None) -> str:
@@ -260,22 +297,44 @@ class Cj1m:
             return data
         raise last
 
-    def fins(self, command: str, params: str = "", data_len=None) -> str:
+    def fins(self, command: str, params: str = "", data_len=None, accept=()) -> str:
         """FINS command inside a Host Link 'FA' frame. Returns the response data (hex).
 
-        Frame text: response wait (1 digit) + ICF DA2 SA2 SID (4 bytes) + command + parameters.
-        Reply text: ICF DA2 SA2 SID (4 bytes) + command echo + response code + data.
+        Command text (W342 §3-5-3): response wait (1 digit) + ICF DA2 SA2 SID (00 each)
+        + command code + parameters.
+        Reply text: ICF DA2 SA2 SID (40 00 00 00) + command echo + response code + data.
+        The manual shows no Host Link end code after 'FA'; some documents show '00' there,
+        so both are accepted (the command echo tells which). To confirm on the bench.
+        accept: response codes that still carry data (ERROR LOG READ past the last record).
         """
-        full = None if data_len is None else 16 + data_len
-        data = self._transact("FA", "0" + "00000000" + command + params, full)
-        if len(data) < 16 or data[8:12] != command:
-            raise HostLinkError(f"réponse FINS inattendue à {command} : {data!r}")
-        code = int(data[12:16], 16)
-        # Bit 7 of each byte flags a relay or CPU error, not a failure of the command.
-        code &= 0x7F3F
-        if code:
-            raise FinsRefused(command, code)
-        return data[16:]
+        last = None
+        for _ in range(1 + self.retries):
+            try:
+                reply = self._exchange(self._frame("FA", "0" + "00000000" + command + params))
+                text = self._check_reply(reply, "FA", end_code=False)
+            except HostLinkError as e:
+                last = e
+                continue
+            if text[8:12] == command:
+                text = text[8:]
+            elif text[10:14] == command:
+                if text[:2] != "00":
+                    raise PlcRefused(text[:2], reply)
+                text = text[10:]
+            elif len(text) == 2:
+                raise PlcRefused(text, reply)        # Host Link error, no FINS part
+            else:
+                last = HostLinkError(f"réponse FINS inattendue à {command} : {reply!r}")
+                continue
+            code = int(text[4:8], 16) & 0x7F3F   # bits 15, 7, 6 are flags (relay, CPU errors)
+            if code and code not in accept:
+                raise FinsRefused(command, code)
+            data = text[8:]
+            if data_len is not None and len(data) != data_len:
+                last = HostLinkError(f"réponse FINS coupée : {len(data)} caractères au lieu de {data_len} : {reply!r}")
+                continue
+            return data
+        raise last
 
     # ---- C-mode commands ----
 
@@ -298,9 +357,13 @@ class Cj1m:
         """MM: 2-digit model code (C-mode)."""
         return self._transact("MM", "")[:2]
 
-    def status_cmode(self) -> str:
-        """MS: raw status data (C-mode), for when FINS is not available."""
-        return self._transact("MS", "")
+    def status_cmode(self) -> dict:
+        """MS (C-mode): mode and FAL/FALS message, for when FINS is not available."""
+        text = self._transact("MS", "")
+        if len(text) < 4:
+            raise HostLinkError(f"réponse MS trop courte : {text!r}")
+        data = int(text[:4], 16)
+        return {"mode": MS_MODES.get(data >> 8 & 3, "?"), "brut": text[:4], "message": text[4:20].strip()}
 
     def set_mode(self, mode: str) -> None:
         """SC: 'programme', 'monitor' or 'run'."""
@@ -368,17 +431,20 @@ class Cj1m:
         return {"modele": text(raw[0:20]), "version": text(raw[20:40])}
 
     def controller_status(self) -> dict:
-        """FINS 0601: run status, mode, fatal and non-fatal error flags, FAL/FALS number, message."""
+        """FINS 0601: run status, mode, fatal and non-fatal error flags, error code, FAL/FALS message."""
         raw = bytes.fromhex(self.fins("0601", ""))
         if len(raw) < 10:
             raise HostLinkError(f"état automate trop court : {raw.hex()}")
         return {
-            "etat": raw[0],
+            "en_cours": bool(raw[0] & 0x01),       # user program running
+            "flash": bool(raw[0] & 0x02),          # writing built-in flash memory
+            "pile_presente": bool(raw[0] & 0x04),
+            "standby": bool(raw[0] & 0x80),
             "mode": raw[1],
             "fatal": int.from_bytes(raw[2:4], "big"),
             "non_fatal": int.from_bytes(raw[4:6], "big"),
             "messages": int.from_bytes(raw[6:8], "big"),
-            "fal": int.from_bytes(raw[8:10], "big"),
+            "code_erreur": int.from_bytes(raw[8:10], "big"),   # most serious current error
             "message": raw[10:26].split(b"\x00")[0].decode("ascii", "replace").strip(),
         }
 
@@ -396,10 +462,16 @@ class Cj1m:
                 "jour": raw[6] if len(raw) > 6 else None}
 
     def error_log(self, chunk: int = 4) -> list:
-        """FINS 2102: every stored error log record, as dicts."""
+        """FINS 2102: every stored error log record (20 max), as dicts.
+
+        Asking for more records than stored returns them with code 1104 (W342 §5-3-28);
+        an empty log returns no data at all.
+        """
         records, first, stored = [], 0, None
         while stored is None or first < stored:
-            raw = bytes.fromhex(self.fins("2102", f"{first:04X}{chunk:04X}"))
+            raw = bytes.fromhex(self.fins("2102", f"{first:04X}{chunk:04X}", accept=(0x1103, 0x1104)))
+            if not raw:
+                break
             if len(raw) < 6:
                 raise HostLinkError(f"journal d'erreurs trop court : {raw.hex()}")
             stored = int.from_bytes(raw[2:4], "big")
@@ -419,7 +491,11 @@ class Cj1m:
     # ---- FINS: program read (experimental) ----
 
     def _program_read(self, addr: int, count: int):
-        """FINS 0306 on the user program (number FFFF). Returns (bytes, last block flag)."""
+        """FINS 0306 on the user program (number FFFF). Returns (bytes, last block flag).
+
+        W342 §5-3-10: address relative to the start of the program area, multiple of 4;
+        byte count multiple of 4; bit 15 of the count in the reply = last address included.
+        """
         data = self.fins("0306", f"FFFF{addr:08X}{count:04X}")
         if len(data) < 16 or int(data[4:12], 16) != addr:
             raise HostLinkError(f"réponse de lecture programme inattendue : {data[:40]!r}")
@@ -430,7 +506,9 @@ class Cj1m:
         return blob, bool(n & 0x8000)
 
     def _program_address_unit(self) -> int:
-        """Bytes per program address: read 64 bytes at 0, then 16 at address 8, and compare."""
+        """Bytes per program address: read 64 bytes at 0, then 16 at address 8, and compare.
+
+        The manual does not say whether the address counts bytes or words."""
         first, _ = self._program_read(0, 64)
         second, _ = self._program_read(8, 16)
         matches = [u for u in (1, 2, 4) if first[8 * u:8 * u + 16] == second]
@@ -439,16 +517,18 @@ class Cj1m:
                                 f"(début {first.hex()}, adresse 8 : {second.hex()})")
         return matches[0]
 
-    def read_program(self, block: int = 200, progress=None, limit: int = 4 << 20) -> bytes:
+    def read_program(self, block: int = 512, progress=None, limit: int = 4 << 20) -> bytes:
         """Read the user program area from the start until the PLC flags the last block."""
         unit = self._program_address_unit()
-        blob, n = b"", block
+        # Blocks of a multiple of 16 bytes: the next address stays a multiple of 4
+        # whether an address counts 1, 2 or 4 bytes.
+        blob, n = b"", max(16, min(block, MAX_PROGRAM_BYTES) // 16 * 16)
         while len(blob) < limit:
             try:
                 data, last = self._program_read(len(blob) // unit, n)
             except FinsRefused as e:
-                if e.code in (0x1103, 0x1104) and n > 2:   # past the end: smaller blocks
-                    n //= 2
+                if e.code in (0x1103, 0x1104) and n > 16:   # past the end: smaller blocks
+                    n = max(16, n // 2 // 16 * 16)
                     continue
                 if e.code in (0x1103, 0x1104) and blob:
                     break

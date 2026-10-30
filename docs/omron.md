@@ -4,9 +4,11 @@ Tool: `scripts/omron/omron.py`. Driver: `plc_online/drivers/omron.py`.
 Wiring and PLC settings: [rapport technique §4](rapport-technique-2026-10-23.md)
 (peripheral port in Host Link, 9600 7-E-2, unit 0, **DIP 4 ON**).
 
-**Confirmed** = tried on the bench CJ1M. **To verify** = from the Omron manuals
-(W342 *Communications Commands*, W227 *FINS*), tested only against the simulator in
-`tests/test_omron.py`.
+**Bench** = tried on the bench CJ1M. **Manual** = checked against Omron's
+*CS/CJ/CP/NSJ Communications Commands Reference Manual*, **W342-E1-18** (July 2023,
+[download](https://files.omron.eu/downloads/latest/manual/en/w342_cs_cj_cp_nsj_communications_commands_reference_manual_en.pdf)),
+and tested against the simulator in `tests/test_omron.py`, which follows the manual's formats.
+Not yet run on the PLC.
 
 ## 1. Two command sets in the same frame
 
@@ -16,34 +18,49 @@ Wiring and PLC settings: [rapport technique §4](rapport-technique-2026-10-23.md
 ```
 
 - **C-mode** (2-letter header): simple, but only the old areas, 4-digit addresses (up to 9999).
-- **FINS** (header `FA`): everything else. Text = response wait (1 digit) + ICF DA2 SA2 SID
-  (4 bytes, all `00`) + FINS command + parameters.
-  Reply = `@00FA` + end code `00` + ICF DA2 SA2 SID + command echo + response code (4 hex) + data.
-- FINS response code: bit 7 of each byte is a flag (relay error, CPU fatal / non-fatal
-  error), not a failure. Example: `0040` = OK, but the PLC has a non-fatal error (battery...).
-  The driver masks those bits.
+- **FINS** (header `FA`, W342 §3-5): everything else. Text = response wait (1 digit) +
+  ICF DA2 SA2 SID (`00` each) + FINS command + parameters. Max 1,114 characters, never split.
+  Reply = `@00FA` + `40 00 00 00` (ICF DA2 SA2 SID) + command echo + response code (4 hex) + data,
+  at most 538 bytes of data. **The manual shows no Host Link end code after `FA`**; some
+  forum examples show `@00FA00 40...`. The driver accepts both (the command echo tells which):
+  note on the bench which one the CJ1M sends.
+- FINS response code (W342 §5-1-3): bit 15 = network relay error, bit 7 = fatal CPU error,
+  bit 6 = non-fatal CPU error. These are flags, not a failure of the command: `0040` = OK,
+  but the PLC has a non-fatal error (battery...). The driver masks them.
 
 ## 2. What the tool uses
 
 | Command | Request | Status |
 |---|---|---|
-| echo | `TS` | **confirmed** |
-| read D0–D9999 | `RD` | **confirmed** |
-| read CIO, H, A | `RR`, `RH`, `RJ` | to verify (same format as `RD`) |
-| read W, T, C, D10000+ | FINS `0101` (area B1, 89, 89+8000h, 82) | to verify |
-| write D, CIO, H, A | `WD`, `WR`, `WH`, `WJ` | to verify. **Refused in RUN** (end code 01): use MONITOR |
-| write W, T, C, D10000+ | FINS `0102` | to verify |
-| mode | `SC` + `00` PROGRAM / `02` MONITOR / `03` RUN | to verify |
-| model | FINS `0501` (reply in several frames), fallback `MM` | to verify |
-| mode, faults, FAL/FALS, message | FINS `0601` | to verify |
-| clock | FINS `0701` (BCD) | to verify |
-| error log | FINS `2102`, 4 records per request | to verify |
-| program read | FINS `0306`, program FFFF | **experimental** (see §4) |
+| echo | `TS` | **bench** |
+| read D0–D9999 | `RD` | **bench** |
+| read CIO 0–6143, H 0–511, A 0–959 | `RR`, `RH`, `RJ` | manual (same format as `RD`) |
+| read W, T, C, D10000+ | FINS `0101`, areas B1, 89, 89 + 8000h, 82 | manual. C-mode cannot reach W, T/C 2048+, D10000+ (W342 §4-3-1) |
+| write D, CIO, H, A | `WD`, `WR`, `WH`, `WJ` | manual. **Refused in RUN** (end code 01), OK in MONITOR and PROGRAM |
+| write W, T, C, D10000+ | FINS `0102` | manual |
+| mode | `SC` + `00` PROGRAM / `02` MONITOR / `03` RUN | manual |
+| model | FINS `0501` + `00` (92 bytes, reply in several frames), fallback `MM` (`30` = CS/CJ) | manual |
+| mode, faults, battery, error code, FAL/FALS message | FINS `0601` | manual |
+| mode (fallback) | `MS`: status bits 9-8 = 00 PROGRAM, 10 RUN, 11 MONITOR | manual |
+| clock | FINS `0701` (BCD, day of week 0 = Sunday) | manual |
+| error log | FINS `2102`, 4 records per request, 20 stored max | manual |
+| program read | FINS `0306`, program FFFF | manual + **experimental** (see §4) |
+
+Corrections made after reading W342 (none of this had run on the PLC yet):
+- `FA` reply without end code (above).
+- `0601` status byte is bits: 0 = program running, 1 = writing flash, 2 = battery present,
+  7 = standby. The field after the message flags is the code of the most serious error
+  (e.g. 4105 = FAL 5), not a FAL number.
+- `2102` returns the records with code 1104 when fewer are stored than asked; an empty log
+  returns no data. Both are handled.
+- `0306`: address and byte count multiples of 4, at most 528 bytes per request over Host Link.
+- More end codes (21, A4, A5, A8), all fault bits of `0601`, more error log codes.
 
 Block sizes keep every reply in one frame (131 characters max): 30 words for C-mode reads,
 26 for FINS reads, 29 for C-mode writes. Longer replies (`0501`, `0306`) come in several
-frames: each intermediate frame ends with FCS + CR (no `*`), the PC sends a CR to get the
-next one. The driver joins them and checks every FCS.
+frames (W342 §2-2): each frame but the last ends with FCS + CR instead of FCS + `*` CR,
+the PC answers with a single CR to get the next one; frames after the first are 128
+characters max. The driver joins them and checks every FCS.
 
 ## 3. Memory areas (CJ1M)
 
@@ -63,10 +80,13 @@ inputs CIO 2960–2961, outputs CIO 2964). `surveiller CIO 0 4` prints each inpu
 
 FINS `0306` reads the user program memory (compiled code, not ladder text).
 Good enough to answer "has the program changed?" (`comparer`), not to read the logic.
-The manual is unclear whether the address counts bytes or words, so the driver checks it
-first: it reads 64 bytes at address 0, then 16 bytes at address 8, and sees which offset
-they match. If the PLC refuses (`2201`/`2202`: mode, `3001`: access right), try in PROGRAM
-mode and note the code here.
+W342 §5-3-10: allowed in RUN, MONITOR and PROGRAM; refused if the UM is read-protected or
+if "prohibit transferring program from PLC" is set in the project. Address relative to the
+start of the program area, multiple of 4; byte count multiple of 4; bit 15 of the count in
+the reply = last address reached. The manual does not say whether an address counts bytes
+or words, so the driver checks it first: it reads 64 bytes at address 0, then 16 bytes at
+address 8, and sees which offset they match. Blocks are multiples of 16 bytes so the next
+address is always a multiple of 4.
 
 ## 5. Bench checklist
 

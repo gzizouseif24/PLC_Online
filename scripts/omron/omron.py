@@ -19,9 +19,9 @@ Adresse aussi possible comme dans CX-Programmer : lire D100 20, surveiller W10 2
 Reglages automate (rapport §4.2) : port peripherique en Host Link, 9600 7-E-2, unite 0, DIP 4 ON.
 Fermer CX-Programmer avant : il utilise le meme port COM.
 
-Confirme sur CJ1M : echo, lecture D (RD). Commandes C-mode (CIO, H, A, ecriture, mode) : format
-du manuel, a valider. Commandes FINS (W, T, C, D10000+, etat, horloge, journal, programme) :
-a valider sur l'automate d'essai.
+Confirme sur CJ1M : echo, lecture D (RD). Le reste suit le manuel Omron W342 (commandes de
+communication CS/CJ) mais n'a pas encore tourne sur l'automate : C-mode (CIO, H, A, ecriture,
+mode) et FINS (W, T, C, D10000+, etat, horloge, journal, programme).
 """
 import argparse
 import sys
@@ -30,7 +30,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from plc_online.drivers.omron import (  # noqa: E402
-    AREAS, FATAL_BITS, FINS_MODES, FINS_STATUS, NON_FATAL_BITS, Cj1m, FinsRefused, HostLinkError,
+    AREAS, FATAL_BITS, FINS_MODES, NON_FATAL_BITS, Cj1m, FinsRefused, HostLinkError,
     PlcRefused,
     error_log_text, open_port, parse_address, signed16)
 
@@ -68,11 +68,16 @@ def cmd_etat(plc):
         s = plc.controller_status()
     except HostLinkError as e:
         print(f"Etat FINS non lu ({e})")
-        print(f"Etat brut (MS) : {plc.status_cmode()}")
+        ms = plc.status_cmode()
+        print(f"Mode : {ms['mode']}   (commande MS, donnees {ms['brut']})")
+        if ms["message"]:
+            print(f"   message FAL/FALS : {ms['message']}")
         return
     mode = FINS_MODES.get(s["mode"], f"inconnu ({s['mode']:02X})")
-    run = FINS_STATUS.get(s["etat"], f"etat {s['etat']:02X}")
+    run = "CPU en attente (standby)" if s["standby"] else (
+        "programme en cours" if s["en_cours"] else "programme arrete")
     print(f"Mode : {mode}   ({run})")
+    print(f"Pile : {'presente' if s['pile_presente'] else '!! ABSENTE'}")
 
     print("\nDefauts :")
     fatal, non_fatal = flags(s["fatal"], FATAL_BITS), flags(s["non_fatal"], NON_FATAL_BITS)
@@ -82,9 +87,9 @@ def cmd_etat(plc):
         print(f"   !  non fatal  {f}")
     if not fatal and not non_fatal:
         print("   aucun defaut signale")
-    print(f"   (brut : fatal A401 = {s['fatal']:04X}, non fatal A402 = {s['non_fatal']:04X})")
-    if s["fal"]:
-        print(f"   FAL/FALS numero {s['fal']}")
+    print(f"   (brut : fatal = {s['fatal']:04X}, non fatal = {s['non_fatal']:04X})")
+    if s["code_erreur"]:
+        print(f"   erreur la plus grave : code {s['code_erreur']:04X}  {error_log_text(s['code_erreur'])}")
     if s["message"]:
         print(f"   message : {s['message']}")
 

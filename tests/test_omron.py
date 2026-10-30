@@ -39,6 +39,8 @@ class FakeCj1m:
         self.program_unit = 2          # bytes per program address
         self.errors = [(0x80C0, 0, (26, 10, 30, 14, 5, 7)), (0x4105, 0, (26, 10, 30, 14, 6, 0))]
         self.corrupt_next = 0
+        self.fa_end_code = False   # True: '@00FA00...' variant seen in some documents
+        self.battery = True
         self.end_code = "00"
         self.cut_to = None   # return fewer words than asked
         self.requests = []
@@ -65,7 +67,9 @@ class FakeCj1m:
         try:
             if self.end_code != "00":
                 raise Refuse(self.end_code)
-            reply += "00" + self.answer(header, text)
+            answer = self.answer(header, text)
+            # W342 §3-5-3: no Host Link end code after 'FA' (unless fa_end_code is set)
+            reply += answer if header == "FA" and not self.fa_end_code else "00" + answer
         except Refuse as e:
             reply += str(e)
         self._send(reply)
@@ -112,7 +116,8 @@ class FakeCj1m:
         if header == "MM":
             return "30"
         if header == "MS":
-            return "0100"
+            ms_mode = {0x00: 0b00, 0x04: 0b10, 0x02: 0b11}[self.mode]
+            return f"{ms_mode << 8 | 0x30:04X}"
         if header == "FA":
             assert text[0:9] == "000000000"
             cmd, params = text[9:13], text[13:]
@@ -137,22 +142,25 @@ class FakeCj1m:
         if cmd == "0501":
             return 0, (b"CJ1M-CPU12".ljust(20, b" ") + b"02.00".ljust(20, b" ") + bytes(40)).hex().upper()
         if cmd == "0601":
-            status = 0x01 if self.mode else 0x00
+            status = (0x01 if self.mode else 0x00) | (0x04 if self.battery else 0)
             raw = bytes([status, self.mode]) + self.fatal.to_bytes(2, "big") + self.non_fatal.to_bytes(2, "big")
-            raw += bytes(2) + (5).to_bytes(2, "big") + b"DEFAUT CONVOYEUR"
+            raw += bytes(2) + (0x4105).to_bytes(2, "big") + b"DEFAUT CONVOYEUR"
             return 0, raw.hex().upper()
         if cmd == "0701":
             return 0, bytes([bcd(26), bcd(10), bcd(30), bcd(14), bcd(5), bcd(9), 5]).hex().upper()
         if cmd == "2102":
             first, count = int(p[0:4], 16), int(p[4:8], 16)
+            if first >= len(self.errors):
+                return 0x1103, ""            # W342: command and end code only
             recs = self.errors[first:first + count]
             raw = (20).to_bytes(2, "big") + len(self.errors).to_bytes(2, "big") + len(recs).to_bytes(2, "big")
             for c1, c2, (y, mo, d, h, mi, s) in recs:
                 raw += c1.to_bytes(2, "big") + c2.to_bytes(2, "big") + bytes(bcd(x) for x in (mi, s, d, h, y, mo))
-            return 0, raw.hex().upper()
+            return (0x1104 if len(recs) < count else 0), raw.hex().upper()
         if cmd == "0306":
             assert p[0:4] == "FFFF"
             addr, count = int(p[4:12], 16), int(p[12:16], 16)
+            assert addr % 4 == 0 and count % 4 == 0 and count <= 528, "W342: multiples of 4, 538-byte reply max"
             start = addr * self.program_unit
             if start >= len(self.program):
                 return 0x1104, ""
@@ -273,8 +281,24 @@ class OmronTests(unittest.TestCase):
         s = self.plc.status()
         self.assertEqual(s["mode"], "RUN")
         self.assertEqual(s["non_fatal"], 0x0010)
-        self.assertEqual(s["fal"], 5)
+        self.assertEqual(s["code_erreur"], 0x4105)
+        self.assertTrue(s["en_cours"])
+        self.assertTrue(s["pile_presente"])
         self.assertEqual(s["message"], "DEFAUT CONVOYEUR")
+
+    def test_fa_reply_with_end_code_is_accepted_too(self):
+        self.fake.fa_end_code = True
+        self.assertEqual(self.plc.read("W", 0, 1), [0])
+        self.assertEqual(self.plc.status()["mode"], "RUN")
+
+    def test_ms_fallback(self):
+        self.assertEqual(self.plc.status_cmode()["mode"], "RUN")
+        self.plc.set_mode("monitor")
+        self.assertEqual(self.plc.status_cmode()["mode"], "MONITOR")
+
+    def test_empty_error_log(self):
+        self.fake.errors = []
+        self.assertEqual(self.plc.error_log(), [])
 
     def test_clock(self):
         self.assertEqual(self.plc.clock(), {"date": "30/10/2026", "heure": "14:05:09", "jour": 5})
@@ -292,6 +316,7 @@ class OmronTests(unittest.TestCase):
         for unit in (1, 2, 4):
             self.fake.program_unit = unit
             self.assertEqual(self.plc.read_program(block=100), self.fake.program)
+            self.assertEqual(self.plc.read_program(), self.fake.program)
 
     # addresses
     def test_parse_address(self):
