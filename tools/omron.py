@@ -31,7 +31,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from plc_online.protocols.hostlink import (  # noqa: E402
-    AREAS, FATAL_BITS, FINS_MODES, NON_FATAL_BITS, decode_plc_setup, Cj1m, FinsRefused, HostLinkError,
+    AREAS, FATAL_BITS, FINS_MODES, NON_FATAL_BITS, decode_plc_setup, rack_layout, Cj1m, FinsRefused, HostLinkError,
     PlcRefused,
     error_log_text, open_port, parse_address, signed16)
 
@@ -101,6 +101,7 @@ def cmd_etat(plc):
     except HostLinkError:
         c, source = plc.clock_area_a(), "   (lue dans A351..A354)"
     print(f"\nHorloge automate : {c['date']} {c['heure']}{source}")
+    show_cards(plc)
     n = len(read_error_log(plc)[0])
     print(f"Journal d'erreurs : {n} enregistrement(s){'  -> python tools/omron.py erreurs' if n else ''}")
 
@@ -121,6 +122,30 @@ def cmd_erreurs(plc):
     print(f"Journal d'erreurs : {len(records)} enregistrement(s)   (lu par {source})\n")
     for i, r in enumerate(records):
         print(f"   {i + 1:3d}   {r['date']}   code {r['code']:04X} / {r['code2']:04X}   {error_log_text(r['code'])}")
+
+
+def show_cards(plc):
+    """Cards of the registered I/O table, with their CIO word and its live value."""
+    try:
+        cards = rack_layout(plc.io_table(40))
+    except HostLinkError as e:
+        print(f"\nCartes : table E/S non lue ({e})")
+        return
+    print("\nCartes (table E/S enregistree) :")
+    if not cards:
+        print("   aucune carte enregistree")
+    for c in cards:
+        where = f"rack {c['rack']} emplacement {c['slot']:02d}"
+        if c["cio"] is None:
+            print(f"   {where}  {c['model']}")
+            continue
+        words = plc.read("CIO", c["cio"], c["words"])
+        for k, v in enumerate(words):
+            b = f"{v:016b}"
+            print(f"   {where}  {c['model']:<11} {c['kind']:<18} CIO {c['cio'] + k:<4}"
+                  f" = {b[0:4]} {b[4:8]} {b[8:12]} {b[12:16]}  (bits 15..0)")
+    if any(c["cio"] is None for c in cards):
+        print("   (carte inconnue : envoyer le code et le modele vu dans CX-Programmer pour l'ajouter)")
 
 
 def hexdump(words, per_line=8):
@@ -156,11 +181,9 @@ def cmd_parametres(plc, filename=None):
     used = [i for i, w in enumerate(table) if w]
     print(f"\nTable E/S enregistree : {len(used)} mots non nuls sur {len(table)} (format non documente,"
           f" a comparer avec la table E/S de CX-Programmer)")
-    slots = [(i, w) for i, w in enumerate(table[:40]) if w]
-    if slots:
-        print("   Debut de table (hypothese : un mot par emplacement du rack 0, a confirmer) :")
-        for i, w in slots:
-            print(f"      emplacement {i} : {w:04X}")
+    for c in rack_layout(table):
+        cio = f"CIO {c['cio']}" if c["cio"] is not None else "CIO ?"
+        print(f"   rack {c['rack']} emplacement {c['slot']:02d} : {c['code']:04X}  {c['model']} {c['kind']}  {cio}")
     print("   Brut :")
     for line in hexdump(table)[:16]:
         print("   " + line)

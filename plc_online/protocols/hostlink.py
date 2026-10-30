@@ -166,6 +166,37 @@ def _port_setup(w, base):
             f"{1 if mode_word >> 2 & 1 else 2} stop, unite {w[base + 3] & 0xFF}")
 
 
+# Registered I/O table (FINS 0201, area 8012): one word per slot, rack 0 first, 10 slots per
+# rack (format not in the manuals). Codes confirmed on the bench by comparing with
+# CX-Programmer's I/O table window. Add a line here for each new card seen.
+#   code: (model, kind, words of CIO used)
+IO_UNIT_CODES = {
+    0x0402: ("CJ1W-ID211", "16 entrees CC", 1),       # bench 30/10/2026
+    0x0450: ("CJ1W-OC211", "16 sorties relais", 1),   # bench 30/10/2026
+}
+SLOTS_PER_RACK = 10
+
+
+def rack_layout(table: list, first_word: int = 0) -> list:
+    """Registered I/O table words -> cards with their CIO words (allocated in slot order).
+
+    Stops allocating CIO words at the first unknown card: its size is unknown."""
+    cards, cio, known = [], first_word, True
+    for i, code in enumerate(table[:4 * SLOTS_PER_RACK]):
+        if not code:
+            continue
+        model, kind, words = IO_UNIT_CODES.get(code, (None, None, None))
+        card = {"rack": i // SLOTS_PER_RACK, "slot": i % SLOTS_PER_RACK, "code": code,
+                "model": model or f"carte inconnue (code {code:04X})", "kind": kind or "",
+                "cio": cio if known and model else None, "words": words}
+        if model and known:
+            cio += words
+        else:
+            known = False
+        cards.append(card)
+    return cards
+
+
 def decode_plc_setup(w: list) -> list:
     """The PLC Setup settings useful for diagnostics, as (label, text) pairs.
     Word numbers are the 'Programming Console address' of W393 §7-1-2."""
@@ -606,8 +637,8 @@ class Cj1m:
     def plc_setup(self) -> list:
         return self.parameter_area(0x8010, 512)
 
-    def io_table(self) -> list:
-        return self.parameter_area(0x8012, 1280)
+    def io_table(self, words: int = 1280) -> list:
+        return self.parameter_area(0x8012, words)
 
     def units(self) -> list:
         """FINS 0502 CONNECTION DATA READ: [(unit address, model)] for the CPU, CPU Bus Units

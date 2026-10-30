@@ -119,8 +119,14 @@ against CX-Programmer's error log.
 - **Registered I/O table**: FINS `0201` area `8012`, 1280 words. Format not in the manuals.
   **Bench, rack = CPU11 + CJ1W-ID211 (16 DC inputs) + CJ1W-OC211 (16 relay outputs):**
   36 non-zero words: `+0 0402 0450`, `+746..+777` all `2020` (64 spaces: a name or comment?),
-  `+988 BBBB 0003`. Hypothesis: one word per slot of rack 0, `0402` = ID211, `0450` = OC211.
-  To confirm with CX-Programmer's I/O table window, then with the cards swapped or one removed.
+  `+988 BBBB 0003`. **Confirmed with CX-Programmer's I/O table window:** one word per slot,
+  rack 0 slots 00–09 = words +0..+9 (`0000` = empty slot), `0402` = CJ1W-ID211 at CIO 0000,
+  `0450` = CJ1W-OC211 at CIO 0001. CIO words are given in slot order from CIO 0000.
+  Known codes are in `IO_UNIT_CODES` (`plc_online/protocols/hostlink.py`): add one line per
+  new card seen (code from `parametres`, model from CX-Programmer). `etat` lists the cards
+  with their CIO word and live value; an unknown card stops the CIO numbering (its size is
+  unknown). Still to check: expansion racks (assumed 10 words per rack) and a changed
+  first I/O word in the PLC Setup.
 
 ## 4. Program backup (experimental)
 

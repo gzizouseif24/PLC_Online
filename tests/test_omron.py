@@ -45,7 +45,9 @@ class FakeCj1m:
         self.setup[128] = 0x8000              # battery errors not detected
         self.setup[144] = 0x8000              # peripheral port: PLC Setup, Host Link, 7 bits, 2 stop, even
         self.io_table = [0] * 1280
-        self.io_table[0:4] = [0x0001, 0x1100, 0x0001, 0x1200]   # made-up content
+        self.io_table[0:2] = [0x0402, 0x0450]       # bench: CJ1W-ID211, CJ1W-OC211
+        self.io_table[746:778] = [0x2020] * 32
+        self.io_table[988:990] = [0xBBBB, 0x0003]
         self.unit_list = [(0x00, b"CJ1M_CPU11")]
         self.end_code = "00"
         self.cut_to = None   # return fewer words than asked
@@ -463,9 +465,24 @@ class OmronCliTests(unittest.TestCase):
         self.assertIn("Detection defaut pile (+128.15)", out)
         self.assertIn("NON (desactivee)", out)
         self.assertIn("CJ1M_CPU11", out)
-        self.assertIn("4 mots non nuls", out)
+        self.assertIn("36 mots non nuls", out)
+        self.assertIn("rack 0 emplacement 01 : 0450  CJ1W-OC211 16 sorties relais  CIO 1", out)
         self.assertIn("+128   8000", saved)
-        self.assertIn("+0     0001 1100 0001 1200", saved)
+        self.assertIn("+0     0402 0450", saved)
+
+    def test_etat_lists_cards_with_live_cio(self):
+        self.fake.mem["CIO"][0] = 0b101
+        out = self.run_cmd(self.cli.cmd_etat)
+        self.assertIn("rack 0 emplacement 00  CJ1W-ID211  16 entrees CC      CIO 0    = 0000 0000 0000 0101", out)
+        self.assertIn("CJ1W-OC211  16 sorties relais  CIO 1", out)
+
+    def test_unknown_card_stops_cio_allocation(self):
+        from plc_online.protocols.hostlink import rack_layout
+        cards = rack_layout([0x0402, 0x9999, 0x0450] + [0] * 37)
+        self.assertEqual([c["cio"] for c in cards], [0, None, None])
+        self.assertIn("code 9999", cards[1]["model"])
+        cards = rack_layout([0] * 10 + [0x0402])            # rack 1, slot 0
+        self.assertEqual((cards[0]["rack"], cards[0]["slot"], cards[0]["cio"]), (1, 0, 0))
 
     def test_lire_shows_bits(self):
         self.fake.mem["CIO"][0] = 0b101
@@ -536,7 +553,7 @@ class OmronCliTests(unittest.TestCase):
         self.fake.unit_list = []
         out = self.run_cmd(self.cli.cmd_parametres, os.path.join(tempfile.mkdtemp(), "p.txt"))
         self.assertIn("réponse 0502 non décodée", out)
-        self.assertIn("emplacement 0 : 0001", out)
+        self.assertIn("emplacement 00 : 0402  CJ1W-ID211", out)
 
     def test_backup_then_compare(self):
         with tempfile.TemporaryDirectory() as d:
