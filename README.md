@@ -6,12 +6,13 @@ without the vendor software.
 One driver per protocol, a shared engine on top (table of expected values → polling → comparison).
 Architecture and plan: [docs/architecture.md](docs/architecture.md).
 Background and field notes: [docs/rapport-technique-2026-10-23.md](docs/rapport-technique-2026-10-23.md).
+Work log: [docs/journal-2026-10-29.md](docs/journal-2026-10-29.md), [docs/journal-2026-10-30.md](docs/journal-2026-10-30.md).
 
 | Brand | Protocol | Status |
 |---|---|---|
 | Panasonic FP0R | MEWTOCOL-COM, serial tool port | driver + tools in this repo |
 | Siemens S7-300 | S7 via S7ONLINE (libnodave, 32-bit Python) | driver + read tool (Windows only) |
-| Omron CJ1M | Host Link (C-mode), peripheral port | driver + echo test and read tool |
+| Omron CJ1M | Host Link (C-mode), peripheral port | driver + echo test and read tool (**next**) |
 | Schneider Modicon | Modbus RTU (serial) / Modbus TCP | driver + read tool, not yet tested on a PLC |
 | Schneider TSX Micro / Premium | Uni-Telway, TER port (PCX 1031) | `scripts/tsx/tsx.py`: status, read, monitor, write, RUN/STOP, program and data backup/restore (tested on TSX 3721) |
 
@@ -25,9 +26,11 @@ plc_online/
   drivers/siemens.py   S7-300 (libnodave + S7ONLINE)
   drivers/modbus.py    Modicon (Modbus RTU / TCP): checks CRC or MBAP, function, byte count
 scripts/<brand>/       command-line tools (French prompts)
+scripts/tsx/           tsx.py (the TSX tool, single file) + discovery scripts and proxies
+tools/hlp2txt.py       extracts text from old Windows Help (.hlp) files, e.g. PL7's help
 vendor/libnodave/      libnodave.dll (32-bit)
-tests/                 tests against a simulated PLC, no hardware needed
-docs/                  technical report
+tests/                 tests against simulated PLCs, no hardware needed
+docs/                  technical report, architecture, protocol notes, work log
 ```
 
 ## Panasonic tools
@@ -83,10 +86,10 @@ python scripts/modicon/mb_read.py --ip 192.168.0.10 --zone M --nombre 16        
 Single file, `pip install pyserial`. Close PL7 first.
 
 ```
-python scripts/tsx/tsx.py etat                  # identification, faults, battery, clock
+python scripts/tsx/tsx.py etat                  # identification, faults, battery, clock, Flash backup
 python scripts/tsx/tsx.py lire MW 0 20          # zones: MW MD KW KD SW S M
 python scripts/tsx/tsx.py surveiller MW 0 100   # print what changes
-python scripts/tsx/tsx.py ecrire MW 10 1234     # one word, confirmation + read-back (experimental)
+python scripts/tsx/tsx.py ecrire MW 10 1234     # one word, confirmation + read-back
 python scripts/tsx/tsx.py run                   # or stop, with confirmation
 python scripts/tsx/tsx.py sauvegarder           # copy the PLC program to a file (+ .txt summary)
 python scripts/tsx/tsx.py comparer FILE         # has the program changed since that backup?
@@ -96,7 +99,11 @@ python scripts/tsx/tsx.py restaurer-donnees F   # write back the %MW from that C
 ```
 
 Protocol notes and what is confirmed: [docs/unitelway.md](docs/unitelway.md).
-Discovery scripts used to work it out: `ut_listen.py`, `ut_test.py`, `ut_probe.py`, `ut_sysbits.py`, `ut_words.py`.
+All commands tested on a TSX 3721 (9600 baud, 8 bits, odd parity; PC = slave 1).
+Discovery scripts used to work it out: `ut_listen.py`, `ut_test.py`, `ut_probe.py`, `ut_sysbits.py`,
+`ut_words.py`, `ut_rack.py`, `ut_modules.py`, `ut_io_probe.py`.
+Capturing PL7 traffic: `tsx_serial_proxy.py` (low-latency proxy, Python 2.7 on XP) or Portmon
+with "Show Hex" on and "Max Output Bytes" ≥ 512.
 
 ## Tests
 
