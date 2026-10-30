@@ -8,7 +8,7 @@
     python tsx.py run | stop                    passer l'automate en RUN / STOP, avec confirmation
     python tsx.py sauvegarder [FICHIER]         copier le programme de l'automate dans un fichier
     python tsx.py comparer FICHIER              le programme a-t-il change depuis cette sauvegarde ?
-    python tsx.py restaurer FICHIER             remettre un programme sauvegarde dans l'automate (experimental)
+    python tsx.py restaurer FICHIER             remettre un programme sauvegarde dans l'automate
     python tsx.py sauvegarder-donnees [FICHIER] copier tous les %MW et %KW dans un fichier CSV
     python tsx.py restaurer-donnees FICHIER     remettre les %MW du fichier CSV dans l'automate
 
@@ -16,7 +16,7 @@ Options : --port COM6, --trace (octets), --adresses 1-3 (plus rapide, a l'essai 
 Fermer PL7 avant. Cable TSX PCX 1031 : meme position qu'avec PL7.
 
 Confirme sur TSX 3721 : etat, lecture %S, %SW. Probable : %MW, %MD, %KW, %KD, %M.
-Experimental (a valider sur un automate d'essai) : restaurer.
+Teste sur TSX 3721 : toutes les commandes ci-dessus.
 
 pip install pyserial
 """

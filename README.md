@@ -13,7 +13,7 @@ Background and field notes: [docs/rapport-technique-2026-10-23.md](docs/rapport-
 | Siemens S7-300 | S7 via S7ONLINE (libnodave, 32-bit Python) | driver + read tool (Windows only) |
 | Omron CJ1M | Host Link (C-mode), peripheral port | driver + echo test and read tool |
 | Schneider Modicon | Modbus RTU (serial) / Modbus TCP | driver + read tool, not yet tested on a PLC |
-| Schneider TSX Micro / Premium | Uni-Telway, TER port (PCX 1031) | `scripts/tsx/tsx.py`: status, read, monitor (tested on TSX 3721); write, RUN/STOP experimental |
+| Schneider TSX Micro / Premium | Uni-Telway, TER port (PCX 1031) | `scripts/tsx/tsx.py`: status, read, monitor, write, RUN/STOP, program and data backup/restore (tested on TSX 3721) |
 
 ## Layout
 
@@ -90,7 +90,7 @@ python scripts/tsx/tsx.py ecrire MW 10 1234     # one word, confirmation + read-
 python scripts/tsx/tsx.py run                   # or stop, with confirmation
 python scripts/tsx/tsx.py sauvegarder           # copy the PLC program to a file (+ .txt summary)
 python scripts/tsx/tsx.py comparer FILE         # has the program changed since that backup?
-python scripts/tsx/tsx.py restaurer FILE        # put a backed-up program back (experimental)
+python scripts/tsx/tsx.py restaurer FILE        # put a backed-up program back
 python scripts/tsx/tsx.py sauvegarder-donnees   # all %MW and %KW values to a CSV file
 python scripts/tsx/tsx.py restaurer-donnees F   # write back the %MW from that CSV (changed words only)
 ```
