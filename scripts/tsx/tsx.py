@@ -9,6 +9,7 @@
     python tsx.py sauvegarder [FICHIER]         copier le programme de l'automate dans un fichier
     python tsx.py comparer FICHIER              le programme a-t-il change depuis cette sauvegarde ?
     python tsx.py sauvegarder-donnees [FICHIER] copier tous les %MW et %KW dans un fichier CSV
+    python tsx.py restaurer-donnees FICHIER     remettre les %MW du fichier CSV dans l'automate
 
 Options : --port COM6, --trace (octets), --adresses 1-3 (plus rapide, a l'essai : 1 par defaut).
 Fermer PL7 avant. Cable TSX PCX 1031 : meme position qu'avec PL7.
@@ -267,6 +268,20 @@ class Tsx:
                 values[group + i] = byte >> i & 1
             group += 8
         return [values[a] for a in range(start, start + count)]
+
+    def write_words(self, zone: str, start: int, values: list) -> None:
+        """Ecrit des mots consecutifs (%MW), par blocs de 60 au plus."""
+        if zone != "MW":
+            raise UniteError(f"ecriture en bloc non autorisee sur %{zone}")
+        seg, typ, _ = WORD_ZONES[zone]
+        i = 0
+        while i < len(values):
+            chunk = values[i:i + MAX_DATA // 2]
+            addr = start + i
+            data = [b for v in chunk for b in (v & 0xFFFF).to_bytes(2, "little")]
+            self._ask([WRITE_OBJECTS, self.slave.category, seg, typ, addr & 0xFF, addr >> 8,
+                       len(chunk) & 0xFF, len(chunk) >> 8, *data], OK_ANSWER)
+            i += len(chunk)
 
     def write(self, zone: str, addr: int, value: int) -> None:
         if zone not in WRITABLE:
@@ -537,6 +552,68 @@ def cmd_sauvegarder_donnees(tsx, filename=None):
     print(f"Donnees : {filename}")
 
 
+def read_data_csv(filename):
+    """CSV de sauvegarder-donnees -> ({zone: {adresse: valeur}}, nom de l'automate)."""
+    zones, plc = {}, None
+    with open(filename, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith("# automate;"):
+                plc = line.split(";", 1)[1]
+            if not line or line.startswith("#") or line.startswith("zone;"):
+                continue
+            zone, addr, value = line.split(";")[:3]
+            zones.setdefault(zone.lstrip("%").upper(), {})[int(addr)] = int(value) & 0xFFFF
+    return zones, plc
+
+
+def changed_runs(addrs):
+    """[3, 4, 5, 9] -> [(3, 3), (9, 1)] : suites d'adresses consecutives (debut, longueur)."""
+    runs = []
+    for a in sorted(addrs):
+        if runs and a == runs[-1][0] + runs[-1][1]:
+            runs[-1] = (runs[-1][0], runs[-1][1] + 1)
+        else:
+            runs.append((a, 1))
+    return runs
+
+
+def cmd_restaurer_donnees(tsx, filename):
+    zones, plc_in_file = read_data_csv(filename)
+    ident = tsx.identification()
+    if plc_in_file and plc_in_file != ident["nom"]:
+        print(f"ATTENTION : fichier pris sur {plc_in_file}, automate connecte : {ident['nom']}")
+    if "KW" in zones:
+        print(f"%KW du fichier ignores ({len(zones['KW'])} mots) : restauration des constantes pas encore validee.")
+    saved = zones.get("MW", {})
+    if not saved:
+        print("Aucun %MW dans le fichier.")
+        return
+    current = read_whole_zone(tsx, "MW")
+    beyond = [a for a in saved if a >= len(current)]
+    if beyond:
+        print(f"ATTENTION : {len(beyond)} %MW du fichier n'existent pas dans l'automate "
+              f"(il a {len(current)} %MW) : ils seront ignores.")
+    diffs = {a: v for a, v in saved.items() if a < len(current) and current[a] != v}
+    if not diffs:
+        print(f"Rien a restaurer : les {len(saved) - len(beyond)} %MW de l'automate sont deja identiques au fichier.")
+        return
+    print(f"{len(diffs)} %MW different du fichier, par exemple :")
+    for a in sorted(diffs)[:10]:
+        print(f"   %MW{a:<5} automate = {current[a]:6d}   fichier = {diffs[a]:6d}")
+    if not confirm(f"Ecrire ces {len(diffs)} %MW dans l'automate ? Automate en STOP / machine en securite ?"):
+        print("Annule, rien n'a ete ecrit.")
+        return
+    for start, length in changed_runs(diffs):
+        tsx.write_words("MW", start, [saved[a] for a in range(start, start + length)])
+    after = read_whole_zone(tsx, "MW")
+    wrong = [a for a in saved if a < len(after) and after[a] != saved[a]]
+    if wrong:
+        print(f"!! {len(wrong)} %MW differents apres ecriture, premier : %MW{wrong[0]}")
+    else:
+        print(f"Restauration OK : {len(diffs)} %MW ecrits et verifies.")
+
+
 def parse_addrs(text):
     if "-" in text:
         a, b = text.split("-")
@@ -547,7 +624,8 @@ def parse_addrs(text):
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("commande", choices=["etat", "lire", "surveiller", "ecrire", "run", "stop",
-                                        "sauvegarder", "comparer", "sauvegarder-donnees"])
+                                        "sauvegarder", "comparer", "sauvegarder-donnees",
+                                        "restaurer-donnees"])
     p.add_argument("args", nargs="*", help="zone, adresse, nombre ou valeur")
     p.add_argument("--port", default="COM6")
     p.add_argument("--baud", type=int, default=9600)
@@ -565,6 +643,8 @@ def main():
         zone, n1, n2 = a.args[0].upper(), int(a.args[1]), int(a.args[2])
     if a.commande == "comparer" and len(a.args) != 1:
         p.error("usage : comparer FICHIER.tsxbak")
+    if a.commande == "restaurer-donnees" and len(a.args) != 1:
+        p.error("usage : restaurer-donnees FICHIER.csv")
 
     import serial
     ser = serial.Serial(a.port, a.baud, bytesize=8, parity=a.parite, stopbits=1, timeout=0.02)
@@ -584,6 +664,8 @@ def main():
             cmd_comparer(tsx, a.args[0])
         elif a.commande == "sauvegarder-donnees":
             cmd_sauvegarder_donnees(tsx, a.args[0] if a.args else None)
+        elif a.commande == "restaurer-donnees":
+            cmd_restaurer_donnees(tsx, a.args[0])
         else:
             cmd_run_stop(tsx, a.commande)
     except UniteError as e:

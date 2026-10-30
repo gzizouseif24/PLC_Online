@@ -91,6 +91,7 @@ python scripts/tsx/tsx.py run                   # or stop, with confirmation
 python scripts/tsx/tsx.py sauvegarder           # copy the PLC program to a file (+ .txt summary)
 python scripts/tsx/tsx.py comparer FILE         # has the program changed since that backup?
 python scripts/tsx/tsx.py sauvegarder-donnees   # all %MW and %KW values to a CSV file
+python scripts/tsx/tsx.py restaurer-donnees F   # write back the %MW from that CSV (changed words only)
 ```
 
 Protocol notes and what is confirmed: [docs/unitelway.md](docs/unitelway.md).

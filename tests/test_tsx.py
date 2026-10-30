@@ -4,6 +4,7 @@ import importlib.util
 import io
 import struct
 import unittest
+import unittest.mock
 from pathlib import Path
 
 _spec = importlib.util.spec_from_file_location(
@@ -76,8 +77,10 @@ class FakeTsx:
             if seg != 0x68:
                 return [0xFD]
             raw = bytes(u[8:])
-            for i in range(words):
+            assert len(raw) == 2 * n * words
+            for i in range(n * words):
                 mem[addr * words + i] = struct.unpack("<H", raw[2 * i:2 * i + 2])[0]
+            self.writes = getattr(self, "writes", []) + [(addr, n)]
             return [0xFE]
         if code == tsx.RESERVE:
             assert u[1:] == [7, 0xFF, 0xFE, 0x90, 0x36]
@@ -220,6 +223,41 @@ class TsxTests(unittest.TestCase):
         self.assertIn("%KW;127;65535;-1;FFFF", lines)
         self.assertEqual(sum(l.startswith("%MW;") for l in lines), 512)
         self.assertEqual(sum(l.startswith("%KW;") for l in lines), 128)
+
+    def test_restaurer_donnees_writes_only_changed_words(self):
+        import os, tempfile
+        self.plc.mw = [i for i in range(512)]
+        with tempfile.TemporaryDirectory() as d:
+            f = os.path.join(d, "data.csv")
+            with contextlib.redirect_stdout(io.StringIO()):
+                tsx.cmd_sauvegarder_donnees(self.tsx, f)
+            saved = list(self.plc.mw)
+            for a in (3, 4, 5, 200, 511):            # the machine changed some words
+                self.plc.mw[a] = 9999
+            self.plc.writes = []
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out), unittest.mock.patch("builtins.input", return_value="OUI"):
+                tsx.cmd_restaurer_donnees(self.tsx, f)
+        self.assertEqual(self.plc.mw, saved)
+        self.assertEqual(self.plc.writes, [(3, 3), (200, 1), (511, 1)])
+        self.assertIn("5 %MW ecrits et verifies", out.getvalue())
+
+    def test_restaurer_donnees_cancel_writes_nothing(self):
+        import os, tempfile
+        with tempfile.TemporaryDirectory() as d:
+            f = os.path.join(d, "data.csv")
+            Path(f).write_text("# automate;TSX 3721\nzone;adresse;valeur;signe;hex\n%MW;7;42;42;002A\n")
+            self.plc.writes = []
+            with contextlib.redirect_stdout(io.StringIO()), unittest.mock.patch("builtins.input", return_value="non"):
+                tsx.cmd_restaurer_donnees(self.tsx, f)
+        self.assertEqual(self.plc.writes, [])
+        self.assertEqual(self.plc.mw[7], 0)
+
+    def test_write_words_split_in_blocks_of_60(self):
+        self.plc.writes = []
+        self.tsx.write_words("MW", 10, list(range(130)))
+        self.assertEqual(self.plc.writes, [(10, 60), (70, 60), (130, 10)])
+        self.assertEqual(self.plc.mw[10:140], list(range(130)))
 
     def test_refused_request(self):
         with self.assertRaisesRegex(tsx.UniteError, "FD"):
