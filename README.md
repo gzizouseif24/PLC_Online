@@ -12,7 +12,7 @@ Work log: [docs/journal-2026-10-29.md](docs/journal-2026-10-29.md), [docs/journa
 |---|---|---|
 | Panasonic FP0R | MEWTOCOL-COM, serial tool port | `tools/panasonic.py`: fast counters, DT change scan, write one DT, program dump |
 | Siemens S7-300 | S7 via S7ONLINE (libnodave, 32-bit Python) | `tools/siemens.py`: read (Windows only) |
-| Omron CJ1M | Host Link (C-mode + FINS), peripheral port | `tools/omron.py`: status, read, monitor, error log, data backup/restore (D read and echo tested on a CJ1M, rest to verify); write, mode, program backup experimental |
+| Omron CJ1M | Host Link (C-mode + FINS), peripheral port | `tools/omron.py`: status with I/O cards, read, monitor, error log, PLC Setup, write, mode, data and program backup (tested on a CJ1M-CPU11); data restore to confirm |
 | Schneider Modicon | Modbus RTU (serial) / Modbus TCP | `tools/modicon.py`: read, not yet tested on a PLC |
 | Schneider TSX Micro / Premium | Uni-Telway, TER port (PCX 1031) | `tools/tsx.py`: status, read, monitor, write, RUN/STOP, program and data backup/restore (tested on TSX 3721) |
 
@@ -57,25 +57,40 @@ Options: `--port`, `--baud`, `--parite`, `--station`.
 
 ## Omron tool
 
+Tested on a CJ1M-CPU11 with a CJ1W-ID211 (16 inputs) and a CJ1W-OC211 (16 relay outputs).
+
 PLC side: peripheral port in Host Link, 9600 baud 7-E-2, unit 0, **DIP 4 ON**
 (report §4.2). Close CX-Programmer first: it uses the same COM port.
 
 ```
-python tools/omron.py etat                  # model, mode, faults, battery, clock
+python tools/omron.py etat                  # model, mode, faults, battery, clock, I/O cards + live CIO
 python tools/omron.py erreurs               # PLC error log
-python tools/omron.py parametres            # PLC Setup, units, registered I/O table (read only)
+python tools/omron.py parametres            # PLC Setup (ports, battery detection, cycle), I/O table
 python tools/omron.py lire D 0 4            # zones: CIO W H A D T C (or: lire D0 4)
 python tools/omron.py surveiller CIO 0 2    # print each input / output bit that changes
-python tools/omron.py ecrire D 100 1234     # one word, confirmation + read-back (MONITOR mode)
+python tools/omron.py ecrire D 100 1234     # one word, confirmation + read-back
 python tools/omron.py monitor               # or run, programme, with confirmation
 python tools/omron.py sauvegarder-donnees   # all D, H, W to a CSV file (--zones D,H,W,CIO)
-python tools/omron.py restaurer-donnees FILE  # write back changed D, H, W from that CSV, then check
-python tools/omron.py sauvegarder           # program to a file (experimental)
-python tools/omron.py comparer FILE         # has the program changed? (experimental)
-python research/omron/hl_test.py --port COM6        # TS echo test only
+python tools/omron.py restaurer-donnees FILE  # write back the changed D, H, W from that CSV, then check
+python tools/omron.py sauvegarder           # program to a .cjbak file (compiled code, not ladder)
+python tools/omron.py comparer FILE.cjbak   # has the program changed since that backup?
 ```
 
-Notes, what is confirmed and a bench checklist: [docs/omron.md](docs/omron.md).
+Options: `--port COM6`, `--baud 9600`, `--unite 0`, `--trace` (prints every frame).
+
+Good to know:
+- The PLC refuses writes in RUN. `ecrire` and `restaurer-donnees` offer to switch to MONITOR
+  (the program keeps running) and back to RUN afterwards. They never write CIO (outputs) or
+  A0–A447 (read-only system area).
+- At 9600 baud, all of D (32,768 words) takes about 5 minutes to read; the program about 1 minute.
+- `etat` names the cards from the registered I/O table. Known codes: `0402` = CJ1W-ID211,
+  `0450` = CJ1W-OC211. For another card, `etat` shows its code: add it to `IO_UNIT_CODES` in
+  `plc_online/protocols/hostlink.py` with the model shown in CX-Programmer's I/O table.
+- If FINS is refused, `etat` and `erreurs` fall back to the system area (A400–A402, A351–A354,
+  A100–A199).
+
+Protocol notes, what is confirmed, bench results and checklist: [docs/omron.md](docs/omron.md).
+Formats checked against Omron manuals W342 (communication commands) and W393 (CJ1M operation).
 
 ## Siemens tool
 
