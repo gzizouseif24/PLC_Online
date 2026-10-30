@@ -349,6 +349,29 @@ class OmronCliTests(unittest.TestCase):
         self.assertEqual(sum(1 for l in lines if l.startswith("W;")), 512)
         self.assertIn("D;1;7;7;0007", lines)
 
+    def test_data_restore(self):
+        self.cli.confirm = lambda q: True
+        with tempfile.TemporaryDirectory() as d:
+            name = os.path.join(d, "x.csv")
+            self.fake.mem["H"][5] = 55
+            self.run_cmd(self.cli.cmd_sauvegarder_donnees, name, ("D", "H", "W", "CIO"))
+            self.assertIn("# automate;CJ1M-CPU12", Path(name).read_text(encoding="utf-8"))
+            self.fake.mem["D"][10] = 1
+            self.fake.mem["D"][11] = 2
+            self.fake.mem["W"][3] = 3
+            self.fake.mem["CIO"][100] = 0xFFFF       # outputs: must not be restored
+            out = self.run_cmd(self.cli.cmd_restaurer_donnees, name)
+            self.assertIn("MONITOR", out)            # refused in RUN, nothing written
+            self.assertEqual(self.fake.mem["D"][10], 1)
+            self.fake.mode = 0x02
+            out = self.run_cmd(self.cli.cmd_restaurer_donnees, name)
+            self.assertIn("Restauration OK : 3 mots", out)
+            self.assertIn("ignorees : CIO", out)
+        self.assertEqual(self.fake.mem["D"][10:12], [70, 77])
+        self.assertEqual(self.fake.mem["W"][3], 0)
+        self.assertEqual(self.fake.mem["CIO"][100], 0xFFFF)
+        self.assertEqual(self.fake.mem["H"][5], 55)
+
     def test_backup_then_compare(self):
         with tempfile.TemporaryDirectory() as d:
             name = os.path.join(d, "p.cjbak")

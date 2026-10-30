@@ -9,6 +9,7 @@
     python omron.py ecrire D 100 1234             ecrire UN mot, avec confirmation et relecture
     python omron.py run | monitor | programme     changer de mode, avec confirmation
     python omron.py sauvegarder-donnees [FICHIER] tous les D, H, W dans un fichier CSV
+    python omron.py restaurer-donnees FICHIER     remettre les D, H, W du CSV (mots changes seulement)
     python omron.py sauvegarder [FICHIER]         copier le programme dans un fichier (experimental)
     python omron.py comparer FICHIER              le programme a-t-il change ? (experimental)
 
@@ -198,11 +199,99 @@ def cmd_sauvegarder_donnees(plc, filename=None, zones=("D", "H", "W")):
         print(f"\rLecture {area} : {len(data[area])} mots en {time.time() - t0:.0f} s" + " " * 10)
     with open(filename, "w", encoding="utf-8") as f:
         f.write(f"# date;{time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"# automate;{model_name(plc)}\n")
         f.write("zone;adresse;valeur;signe;hex\n")
         for area, values in data.items():
             for i, v in enumerate(values):
                 f.write(f"{area};{i};{v};{signed16(v)};{v:04X}\n")
     print(f"Donnees : {filename}")
+
+
+RESTORABLE = ("D", "H", "W")     # never CIO (outputs) or A (system)
+
+
+def model_name(plc):
+    try:
+        return plc.controller_data()["modele"]
+    except HostLinkError:
+        return "?"
+
+
+def read_data_csv(filename):
+    """CSV from sauvegarder-donnees -> ({zone: {address: value}}, model or None)."""
+    zones, model = {}, None
+    with open(filename, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith("# automate;"):
+                model = line.split(";", 1)[1]
+            if not line or line.startswith("#") or line.startswith("zone;"):
+                continue
+            zone, addr, value = line.split(";")[:3]
+            zones.setdefault(zone.upper(), {})[int(addr)] = int(value)
+    return zones, model
+
+
+def changed_runs(addrs):
+    """Sorted addresses -> (start, length) of consecutive runs."""
+    runs = []
+    for a in sorted(addrs):
+        if runs and runs[-1][0] + runs[-1][1] == a:
+            runs[-1][1] += 1
+        else:
+            runs.append([a, 1])
+    return runs
+
+
+def read_addresses(plc, area, addrs):
+    lo, hi = min(addrs), max(addrs)
+    return dict(zip(range(lo, hi + 1), plc.read(area, lo, hi - lo + 1)))
+
+
+def cmd_restaurer_donnees(plc, filename):
+    zones, model_in_file = read_data_csv(filename)
+    model = model_name(plc)
+    if model_in_file and model_in_file not in ("?", model):
+        print(f"ATTENTION : fichier pris sur {model_in_file}, automate connecte : {model}")
+    skipped = [z for z in zones if z not in RESTORABLE]
+    if skipped:
+        print(f"Zones du fichier ignorees : {' '.join(skipped)} (seules {' '.join(RESTORABLE)} sont restaurees)")
+    diffs = {}
+    for area in RESTORABLE:
+        saved = {a: v for a, v in zones.get(area, {}).items() if a < AREAS[area]["size"]}
+        if not saved:
+            continue
+        current = read_addresses(plc, area, saved)
+        d = {a: v for a, v in saved.items() if current[a] != v}
+        if d:
+            diffs[area] = d
+            print(f"{area} : {len(d)} mots differents du fichier, par exemple :")
+            for a in sorted(d)[:5]:
+                print(f"   {area}{a:<6} automate = {signed16(current[a]):6d}   fichier = {signed16(d[a]):6d}")
+    if not diffs:
+        print("Rien a restaurer : l'automate a deja les valeurs du fichier.")
+        return
+    total = sum(len(d) for d in diffs.values())
+    if not confirm(f"Ecrire ces {total} mots dans l'automate ? Machine en securite ?"):
+        print("Annule, rien n'a ete ecrit.")
+        return
+    try:
+        for area, d in diffs.items():
+            for start, length in changed_runs(d):
+                plc.write(area, start, [d[a] for a in range(start, start + length)])
+    except PlcRefused as e:
+        if e.code == "01":
+            print("Refuse en mode RUN. Passer en MONITOR (python omron.py monitor) puis relancer.")
+            return
+        raise
+    wrong = []
+    for area, d in diffs.items():
+        after = read_addresses(plc, area, d)
+        wrong += [f"{area}{a}" for a in d if after[a] != d[a]]
+    if wrong:
+        print(f"!! {len(wrong)} mots differents apres ecriture, premier : {wrong[0]}")
+    else:
+        print(f"Restauration OK : {total} mots ecrits et verifies.")
 
 
 def do_upload(plc):
@@ -214,10 +303,7 @@ def do_upload(plc):
 
 def cmd_sauvegarder(plc, filename=None):
     import hashlib
-    try:
-        model = plc.controller_data()["modele"]
-    except HostLinkError:
-        model = "?"
+    model = model_name(plc)
     print(f"Automate {model} : lecture du programme...")
     blob = do_upload(plc)
     filename = filename or f"omron_{time.strftime('%Y%m%d_%H%M%S')}.cjbak"
@@ -273,7 +359,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("commande", choices=["etat", "erreurs", "lire", "surveiller", "ecrire",
                                         "run", "monitor", "programme",
-                                        "sauvegarder-donnees", "sauvegarder", "comparer"])
+                                        "sauvegarder-donnees", "restaurer-donnees", "sauvegarder", "comparer"])
     p.add_argument("args", nargs="*", help="zone, adresse, nombre ou valeur ; ou fichier")
     p.add_argument("--port", default="COM6")
     p.add_argument("--baud", type=int, default=9600)
@@ -285,6 +371,8 @@ def main():
         area, n1, n2 = parse_target(p, a.commande, a.args)
     if a.commande == "comparer" and len(a.args) != 1:
         p.error("usage : comparer FICHIER.cjbak")
+    if a.commande == "restaurer-donnees" and len(a.args) != 1:
+        p.error("usage : restaurer-donnees FICHIER.csv")
     zones = [z.strip().upper() for z in a.zones.split(",")]
     if any(z not in AREAS for z in zones):
         p.error(f"--zones : zones possibles {' '.join(AREAS)}")
@@ -306,6 +394,8 @@ def main():
             cmd_mode(plc, a.commande)
         elif a.commande == "sauvegarder-donnees":
             cmd_sauvegarder_donnees(plc, a.args[0] if a.args else None, zones)
+        elif a.commande == "restaurer-donnees":
+            cmd_restaurer_donnees(plc, a.args[0])
         elif a.commande == "sauvegarder":
             cmd_sauvegarder(plc, a.args[0] if a.args else None)
         elif a.commande == "comparer":

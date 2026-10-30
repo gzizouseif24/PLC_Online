@@ -12,7 +12,7 @@ Work log: [docs/journal-2026-10-29.md](docs/journal-2026-10-29.md), [docs/journa
 |---|---|---|
 | Panasonic FP0R | MEWTOCOL-COM, serial tool port | driver + tools in this repo |
 | Siemens S7-300 | S7 via S7ONLINE (libnodave, 32-bit Python) | driver + read tool (Windows only) |
-| Omron CJ1M | Host Link (C-mode + FINS), peripheral port | `scripts/omron/omron.py`: status, read, monitor, error log (D read and echo tested on a CJ1M, rest to verify); write, mode, program backup experimental |
+| Omron CJ1M | Host Link (C-mode + FINS), peripheral port | `scripts/omron/omron.py`: status, read, monitor, error log, data backup/restore (D read and echo tested on a CJ1M, rest to verify); write, mode, program backup experimental |
 | Schneider Modicon | Modbus RTU (serial) / Modbus TCP | driver + read tool, not yet tested on a PLC |
 | Schneider TSX Micro / Premium | Uni-Telway, TER port (PCX 1031) | `scripts/tsx/tsx.py`: status, read, monitor, write, RUN/STOP, program and data backup/restore (tested on TSX 3721) |
 
@@ -57,6 +57,7 @@ python scripts/omron/omron.py surveiller CIO 0 2    # print each input / output 
 python scripts/omron/omron.py ecrire D 100 1234     # one word, confirmation + read-back (MONITOR mode)
 python scripts/omron/omron.py monitor               # or run, programme, with confirmation
 python scripts/omron/omron.py sauvegarder-donnees   # all D, H, W to a CSV file (--zones D,H,W,CIO)
+python scripts/omron/omron.py restaurer-donnees FILE  # write back changed D, H, W from that CSV, then check
 python scripts/omron/omron.py sauvegarder           # program to a file (experimental)
 python scripts/omron/omron.py comparer FILE         # has the program changed? (experimental)
 python scripts/omron/hl_test.py --port COM6         # TS echo test only

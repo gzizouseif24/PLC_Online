@@ -78,6 +78,11 @@ Close CX-Programmer, DIP 4 ON. In this order:
 4. `surveiller CIO 0 2` and press an input.
 5. `erreurs` (CX-Programmer: PLC → Error log, same list?).
 6. On a test machine only: `monitor`, then `ecrire D 1000 1234`, read-back, then put it back.
-7. `sauvegarder`, then `comparer FILE` (should say IDENTIQUE).
+7. `sauvegarder-donnees`, change one D on the test machine, `restaurer-donnees FILE`
+   (MONITOR mode; only D, H, W are written, never CIO outputs or A).
+8. `sauvegarder`, then `comparer FILE` (should say IDENTIQUE).
+
+Not done: program restore (FINS `0307` program write). Only after `sauvegarder` /
+`comparer` are confirmed, and ideally with a capture of CX-Programmer doing a transfer.
 
 If a step fails, the message gives the end code or FINS code. Note it here.
