@@ -13,7 +13,7 @@
     python tools/omron.py sauvegarder [FICHIER]         copier le programme dans un fichier (experimental)
     python tools/omron.py comparer FICHIER              le programme a-t-il change ? (experimental)
 
-Options : --port COM6, --baud 9600, --unite 0.
+Options : --port COM6, --baud 9600, --unite 0, --trace (affiche les trames).
 Adresse aussi possible comme dans CX-Programmer : lire D100 20, surveiller W10 2.
 
 Reglages automate (rapport §4.2) : port peripherique en Host Link, 9600 7-E-2, unite 0, DIP 4 ON.
@@ -377,6 +377,7 @@ def main():
     p.add_argument("--baud", type=int, default=9600)
     p.add_argument("--unite", type=int, default=0, help="numero d'unite Host Link")
     p.add_argument("--zones", default="D,H,W", help="sauvegarder-donnees : zones, ex. D,H,W,CIO,A")
+    p.add_argument("--trace", action="store_true", help="afficher les trames envoyees et recues")
     a = p.parse_args()
 
     if a.commande in ("lire", "surveiller", "ecrire"):
@@ -389,8 +390,11 @@ def main():
     if any(z not in AREAS for z in zones):
         p.error(f"--zones : zones possibles {' '.join(AREAS)}")
 
-    ser = open_port(a.port, a.baud)
-    plc = Cj1m(ser, a.unite)
+    try:
+        ser = open_port(a.port, a.baud)
+    except HostLinkError as e:
+        raise SystemExit(f"ECHEC : {e}")
+    plc = Cj1m(ser, a.unite, trace=a.trace)
     try:
         if a.commande == "etat":
             cmd_etat(plc)

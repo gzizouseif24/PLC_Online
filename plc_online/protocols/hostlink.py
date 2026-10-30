@@ -171,11 +171,26 @@ class FinsRefused(HostLinkError):
         self.code = code
 
 
-def open_port(port: str, baud: int = 9600, timeout: float = 2.0):
-    """Open the serial port with the Host Link 'Standard' settings (7, E, 2)."""
+def open_port(port: str, baud: int = 9600, timeout: float = 2.0, wait: float = 3.0):
+    """Open the serial port with the Host Link 'Standard' settings (7, E, 2).
+
+    Windows can keep a USB serial port busy for a moment after the previous program
+    closed it ('Accès refusé'): retry for up to `wait` seconds before giving up.
+    """
+    import time
     import serial  # imported here so the rest of the module works without pyserial
 
-    return serial.Serial(port, baud, bytesize=7, parity="E", stopbits=2, timeout=timeout)
+    deadline = time.monotonic() + wait
+    while True:
+        try:
+            return serial.Serial(port, baud, bytesize=7, parity="E", stopbits=2, timeout=timeout)
+        except serial.SerialException as e:
+            busy = "denied" in str(e).lower() or "refus" in str(e).lower() or "PermissionError" in str(e)
+            if not busy or time.monotonic() > deadline:
+                raise HostLinkError(f"impossible d'ouvrir {port} : "
+                                    + ("port occupé (CX-Programmer ou une autre fenêtre ouverte dessus ?)"
+                                       if busy else str(e))) from None
+            time.sleep(0.3)
 
 
 def decode_words(hexdata: str) -> list:
@@ -224,10 +239,15 @@ class Cj1m:
 
     brand = "omron"
 
-    def __init__(self, ser, unit: int = 0, retries: int = 2):
+    def __init__(self, ser, unit: int = 0, retries: int = 2, trace: bool = False):
         self.ser = ser
         self.unit = unit
         self.retries = retries
+        self.trace = trace
+
+    def _log(self, direction: str, data: str):
+        if self.trace:
+            print(f"      {direction} {data!r}")
 
     # ---- framing ----
 
@@ -238,8 +258,10 @@ class Cj1m:
     def _exchange(self, frame: str) -> str:
         """Send one frame, return the reply as one frame (multi-frame replies are joined)."""
         self.ser.reset_input_buffer()
+        self._log("->", frame)
         self.ser.write(frame.encode("ascii"))
         reply = self.ser.read_until(b"\r").decode("ascii", "replace")
+        self._log("<-", reply)
         if not reply.endswith("\r") or reply.endswith("*\r") or len(reply) < 4:
             return reply
         # Long reply: each intermediate frame ends with FCS + CR (no '*'); a CR asks for the next.
@@ -249,8 +271,10 @@ class Cj1m:
             if xor_checksum(text) != fcs.upper():
                 raise HostLinkError(f"FCS faux dans une trame intermédiaire : {reply!r}")
             parts.append(text)
+            self._log("->", "\r")
             self.ser.write(b"\r")
             reply = self.ser.read_until(b"\r").decode("ascii", "replace")
+            self._log("<-", reply)
             if not reply:
                 raise HostLinkError("réponse en plusieurs trames : trame suivante manquante")
             if reply.endswith("*\r"):

@@ -350,6 +350,44 @@ class OmronTests(unittest.TestCase):
                 parse_address(bad)
 
 
+class OpenPortTests(unittest.TestCase):
+    """Windows keeps a USB serial port busy for a moment after it is closed."""
+
+    def fake_serial(self, busy_times):
+        import sys
+        import types
+        mod = types.ModuleType("serial")
+
+        class SerialException(Exception):
+            pass
+
+        calls = []
+
+        def Serial(*a, **k):
+            calls.append(1)
+            if len(calls) <= busy_times:
+                raise SerialException("could not open port 'COM6': PermissionError(13, 'Accès refusé.', None, 5)")
+            return "port"
+
+        mod.SerialException, mod.Serial = SerialException, Serial
+        old = sys.modules.get("serial")
+        self.addCleanup(lambda: sys.modules.__setitem__("serial", old) if old else sys.modules.pop("serial", None))
+        sys.modules["serial"] = mod
+        return calls
+
+    def test_busy_port_is_retried(self):
+        from plc_online.protocols.hostlink import open_port
+        calls = self.fake_serial(busy_times=2)
+        self.assertEqual(open_port("COM6", wait=2), "port")
+        self.assertEqual(len(calls), 3)
+
+    def test_port_still_busy_gives_a_clear_message(self):
+        from plc_online.protocols.hostlink import open_port
+        self.fake_serial(busy_times=100)
+        with self.assertRaisesRegex(HostLinkError, "port occupé"):
+            open_port("COM6", wait=0.5)
+
+
 def load_cli():
     path = Path(__file__).resolve().parents[1] / "tools" / "omron.py"
     spec = importlib.util.spec_from_file_location("omron_cli", path)

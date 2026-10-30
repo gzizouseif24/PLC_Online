@@ -34,16 +34,16 @@ Not yet run on the PLC.
 |---|---|---|
 | echo | `TS` | **bench** |
 | read D0–D9999 | `RD` | **bench** |
-| read CIO 0–6143, H 0–511, A 0–959 | `RR`, `RH`, `RJ` | manual (same format as `RD`) |
-| read W, T, C, D10000+ | FINS `0101`, areas B1, 89, 89 + 8000h, 82 | manual. C-mode cannot reach W, T/C 2048+, D10000+ (W342 §4-3-1) |
+| read CIO 0–6143, H 0–511, A 0–959 | `RR`, `RH`, `RJ` | **bench** |
+| read W, T, C, D10000+ | FINS `0101`, areas B1, 89, 89 + 8000h, 82 | **bench** (W, T, D10000; C same code as T). C-mode cannot reach W, T/C 2048+, D10000+ (W342 §4-3-1) |
 | write D, CIO, H, A | `WD`, `WR`, `WH`, `WJ` | manual. **Refused in RUN** (end code 01), OK in MONITOR and PROGRAM |
 | write W, T, C, D10000+ | FINS `0102` | manual |
 | mode | `SC` + `00` PROGRAM / `02` MONITOR / `03` RUN | manual |
-| model | FINS `0501` + `00` (92 bytes, reply in several frames), fallback `MM` (`30` = CS/CJ) | manual |
-| mode, faults, battery, error code, FAL/FALS message | FINS `0601` | manual |
+| model | FINS `0501` + `00` (92 bytes, reply in several frames), fallback `MM` (`30` = CS/CJ) | **bench** (multi-frame reply works) |
+| mode, faults, battery, error code, FAL/FALS message | FINS `0601` | **bench** |
 | mode (fallback) | `MS`: status bits 9-8 = 00 PROGRAM, 10 RUN, 11 MONITOR | manual |
-| clock | FINS `0701` (BCD, day of week 0 = Sunday) | manual |
-| error log | FINS `2102`, 4 records per request, 20 stored max | manual |
+| clock | FINS `0701` (BCD, day of week 0 = Sunday) | **bench** |
+| error log | FINS `2102`, 4 records per request, 20 stored max | **bench** (empty log only) |
 | program read | FINS `0306`, program FFFF | manual + **experimental** (see §4) |
 
 Corrections made after reading W342 (none of this had run on the PLC yet):
@@ -116,7 +116,27 @@ or words, so the driver checks it first: it reads 64 bytes at address 0, then 16
 address 8, and sees which offset they match. Blocks are multiples of 16 bytes so the next
 address is always a multiple of 4.
 
-## 5. Bench checklist
+## 5. Bench results, 30/10/2026 (CJ1M-CPU11, unit version 04.10)
+
+| Command | Result |
+|---|---|
+| `lire D 0 4` | OK (B7A9 6C55 B645 D95B: values changed since 23/10, program running) |
+| `etat` | OK through FINS: model `CJ1M_CPU11` version 04.10, RUN, no fault, clock 04/02/2022 20:31:12 |
+| `lire CIO 0 2`, `H 0 4`, `A 400 3` | OK (C-mode) |
+| `lire W 0 4`, `T 0 4`, `D 10000 2` | OK (FINS) |
+| `erreurs` | OK, log empty |
+| `surveiller CIO 0 2` | ran, nothing changed (CPU11 has no built-in I/O; which cards are on the rack?) |
+
+Notes:
+- FINS works on this CJ1M through the peripheral port. Which `FA` reply form it uses (with or
+  without `00` after `FA`) is still unknown: both are accepted. `--trace` shows the frames.
+- **No battery** reported (status bit 2 = 0) but no battery error: the PLC Setup probably has
+  battery detection off. Consistent with the clock being wrong (04/02/2022). Without a battery,
+  D and H can be lost at power off.
+- Windows sometimes kept COM6 busy for a moment after the previous command ("Accès refusé"):
+  the tool now retries for 3 s before giving up.
+
+## 6. Bench checklist
 
 Close CX-Programmer, DIP 4 ON. In this order:
 
