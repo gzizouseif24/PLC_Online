@@ -82,8 +82,21 @@ class FakeTsx:
                 mem[addr * words + i] = struct.unpack("<H", raw[2 * i:2 * i + 2])[0]
             self.writes = getattr(self, "writes", []) + [(addr, n)]
             return [0xFE]
+        if code == tsx.OPEN_DOWNLOAD:
+            assert u[1:] == [7, 0, 0, 0, 0, 0, 0, 0, 1] and self.mode == "STOP" and self.reserved
+            self.incoming, self.next_seg = bytearray(), 1
+            return [0x6A, 0x00]
+        if code == tsx.WRITE_DOWNLOAD:
+            seg, length = u[2] | u[3] << 8, u[4] | u[5] << 8
+            assert seg == self.next_seg and len(u[6:]) == length <= 122
+            self.incoming += bytes(u[6:])
+            self.next_seg += 1
+            return [0x6B, 0x00, seg & 0xFF, seg >> 8]
+        if code == tsx.CLOSE_DOWNLOAD:
+            self.app = bytes(self.incoming)
+            return [0x6C, 0x00]
         if code == tsx.RESERVE:
-            assert u[1:] == [7, 0xFF, 0xFE, 0x90, 0x36]
+            assert u[1:] in ([7, 0xFF, 0xFE, 0x90, 0x36], [7, 0xFF, 0xFE, 0x80, 0x0F])
             self.reserved = True
             return [0xFE]
         if code == tsx.RELEASE:
@@ -258,6 +271,46 @@ class TsxTests(unittest.TestCase):
         self.tsx.write_words("MW", 10, list(range(130)))
         self.assertEqual(self.plc.writes, [(10, 60), (70, 60), (130, 10)])
         self.assertEqual(self.plc.mw[10:140], list(range(130)))
+
+    def test_restaurer_puts_program_back_and_keeps_a_backup(self):
+        import os, tempfile
+        wanted = bytes((i * 13) % 256 for i in range(4576))   # 37 x 122 + 62, like the capture
+        with tempfile.TemporaryDirectory() as d:
+            f = os.path.join(d, "prog.tsxbak")
+            Path(f).write_bytes(b"STATION\0" + wanted[8:])
+            old_program = self.plc.app
+            cwd = os.getcwd()
+            os.chdir(d)
+            try:
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out), unittest.mock.patch("builtins.input", return_value="OUI"):
+                    tsx.cmd_restaurer(self.tsx, f)
+                backups = [x for x in os.listdir(d) if x.startswith("avant_restauration_") and x.endswith(".tsxbak")]
+                self.assertEqual(len(backups), 1)
+                self.assertEqual(Path(d, backups[0]).read_bytes(), old_program)
+            finally:
+                os.chdir(cwd)
+        self.assertEqual(self.plc.app, b"STATION\0" + wanted[8:])
+        self.assertEqual(self.plc.next_seg - 1, 38)
+        self.assertIn("Restauration OK", out.getvalue())
+        self.assertFalse(self.plc.reserved)
+
+    def test_restaurer_cancel_writes_nothing(self):
+        import os, tempfile
+        before = self.plc.app
+        self.plc.mode = "RUN"
+        with tempfile.TemporaryDirectory() as d:
+            f = os.path.join(d, "prog.tsxbak")
+            Path(f).write_bytes(b"STATION\0" + bytes(500))
+            cwd = os.getcwd()
+            os.chdir(d)
+            try:
+                with contextlib.redirect_stdout(io.StringIO()), unittest.mock.patch("builtins.input", return_value="non"):
+                    tsx.cmd_restaurer(self.tsx, f)
+            finally:
+                os.chdir(cwd)
+        self.assertEqual(self.plc.app, before)
+        self.assertEqual(self.plc.mode, "RUN")      # no STOP sent when cancelled
 
     def test_refused_request(self):
         with self.assertRaisesRegex(tsx.UniteError, "FD"):

@@ -8,6 +8,7 @@
     python tsx.py run | stop                    passer l'automate en RUN / STOP, avec confirmation
     python tsx.py sauvegarder [FICHIER]         copier le programme de l'automate dans un fichier
     python tsx.py comparer FICHIER              le programme a-t-il change depuis cette sauvegarde ?
+    python tsx.py restaurer FICHIER             remettre un programme sauvegarde dans l'automate (experimental)
     python tsx.py sauvegarder-donnees [FICHIER] copier tous les %MW et %KW dans un fichier CSV
     python tsx.py restaurer-donnees FICHIER     remettre les %MW du fichier CSV dans l'automate
 
@@ -15,7 +16,7 @@ Options : --port COM6, --trace (octets), --adresses 1-3 (plus rapide, a l'essai 
 Fermer PL7 avant. Cable TSX PCX 1031 : meme position qu'avec PL7.
 
 Confirme sur TSX 3721 : etat, lecture %S, %SW. Probable : %MW, %MD, %KW, %KD, %M.
-Experimental (format suppose, a valider sur un automate d'essai) : ecrire, run, stop.
+Experimental (a valider sur un automate d'essai) : restaurer.
 
 pip install pyserial
 """
@@ -204,6 +205,10 @@ WORD, DWORD = 0x07, 0x08
 PL7_CATEGORY = 0x07
 RESERVE, RELEASE, APP_INFO = 0x1D, 0x1E, 0x92
 OPEN_UPLOAD, READ_UPLOAD, CLOSE_UPLOAD = 0x3D, 0x3E, 0x3F
+OPEN_DOWNLOAD, WRITE_DOWNLOAD, CLOSE_DOWNLOAD = 0x3A, 0x3B, 0x3C
+DOWNLOAD_SEGMENT = 0x7A  # 122 octets par segment, comme PL7
+RESERVE_UPLOAD = [0xFF, 0xFE, 0x90, 0x36]    # parametres de RESERVE vus avant un upload PL7
+RESERVE_DOWNLOAD = [0xFF, 0xFE, 0x80, 0x0F]  # ... et avant un download PL7
 SEGMENT_SIZE = 0x77      # 119 octets par segment, comme PL7
 UPLOAD_LAST = 0x0F       # compte rendu du dernier segment
 MAX_SEGMENTS = 4000
@@ -293,8 +298,8 @@ class Tsx:
 
     # ----- sauvegarde du programme (sequence relevee sur PL7) -----
 
-    def reserve(self) -> None:
-        self._ask([RESERVE, PL7_CATEGORY, 0xFF, 0xFE, 0x90, 0x36], OK_ANSWER)
+    def reserve(self, params=RESERVE_UPLOAD) -> None:
+        self._ask([RESERVE, PL7_CATEGORY, *params], OK_ANSWER)
 
     def release(self) -> None:
         self._ask([RELEASE, PL7_CATEGORY], OK_ANSWER)
@@ -335,6 +340,33 @@ class Tsx:
                 self._ask([CLOSE_UPLOAD, PL7_CATEGORY], CLOSE_UPLOAD + 0x30)
             except UniteError:
                 pass
+
+    def download(self, blob: bytes, progress=None) -> None:
+        """Ecrit toute l'application : OPEN_DOWNLOAD, WRITE_DOWNLOAD par segment, CLOSE_DOWNLOAD.
+        L'automate doit etre en STOP et reserve."""
+        self._ask([OPEN_DOWNLOAD, PL7_CATEGORY, 0, 0, 0, 0, 0, 0, 0, 1], OPEN_DOWNLOAD + 0x30)
+        closed = False
+        try:
+            seg = 1
+            for i in range(0, len(blob), DOWNLOAD_SEGMENT):
+                chunk = blob[i:i + DOWNLOAD_SEGMENT]
+                data = self._ask([WRITE_DOWNLOAD, PL7_CATEGORY, seg & 0xFF, seg >> 8,
+                                  len(chunk) & 0xFF, len(chunk) >> 8, *chunk], WRITE_DOWNLOAD + 0x30)
+                if len(data) < 3 or data[0] != 0 or (data[1] | data[2] << 8) != seg:
+                    raise UniteError(f"segment {seg} refuse ou mal acquitte : {hexs(data)}")
+                if progress:
+                    progress(seg, i + len(chunk))
+                seg += 1
+            data = self._ask([CLOSE_DOWNLOAD, PL7_CATEGORY], CLOSE_DOWNLOAD + 0x30)
+            closed = True
+            if data[:1] != [0]:
+                raise UniteError(f"fermeture du chargement refusee : {hexs(data)}")
+        finally:
+            if not closed:
+                try:
+                    self._ask([CLOSE_DOWNLOAD, PL7_CATEGORY], CLOSE_DOWNLOAD + 0x30)
+                except UniteError:
+                    pass
 
     def run(self) -> None:
         self._ask([RUN, self.slave.category], OK_ANSWER)
@@ -495,6 +527,39 @@ def cmd_sauvegarder(tsx, filename=None):
     print(f"Sauvegarde : {filename}  (+ {filename}.txt)")
 
 
+def cmd_restaurer(tsx, filename):
+    """Remet un .tsxbak dans l'automate, comme le transfert PC -> automate de PL7."""
+    with open(filename, "rb") as f:
+        blob = f.read()
+    if len(blob) < 16 or not blob[:16].rstrip(b"\0 ").strip():
+        raise UniteError(f"{filename} ne ressemble pas a une sauvegarde de programme")
+    name = blob[:14].split(b"\0")[0].decode("ascii", "replace").strip()
+    print(f"Fichier {filename} : {len(blob)} octets, application '{name}'")
+    print("Avant de remplacer le programme, sauvegarde automatique du programme actuel :")
+    cmd_sauvegarder(tsx, f"avant_restauration_{time.strftime('%Y%m%d_%H%M%S')}.tsxbak")
+    if not confirm("Remplacer le programme de l'automate ? Il passera en STOP. Machine en securite ?"):
+        print("Annule, rien n'a ete ecrit.")
+        return
+    tsx.stop()
+    tsx.reserve(RESERVE_DOWNLOAD)
+    try:
+        t0 = time.time()
+        tsx.download(blob, lambda seg, n: print(f"\r   segment {seg:4d}   {n:7d} / {len(blob)} octets", end="", flush=True))
+        print(f"\r   {len(blob)} octets ecrits en {time.time() - t0:.0f} s" + " " * 20)
+    finally:
+        try:
+            tsx.release()
+        except UniteError:
+            pass
+    print("Verification : relecture du programme...")
+    _, _, back = do_upload(tsx)
+    if back == blob:
+        print("Restauration OK : le programme relu est identique au fichier. L'automate est en STOP (python tsx.py run).")
+    else:
+        print(f"!! Le programme relu ({len(back)} octets) differe du fichier ({len(blob)} octets).")
+        print("   Le programme d'avant est dans le fichier avant_restauration_*.tsxbak.")
+
+
 def cmd_comparer(tsx, filename):
     with open(filename, "rb") as f:
         saved = f.read()
@@ -625,7 +690,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("commande", choices=["etat", "lire", "surveiller", "ecrire", "run", "stop",
                                         "sauvegarder", "comparer", "sauvegarder-donnees",
-                                        "restaurer-donnees"])
+                                        "restaurer-donnees", "restaurer"])
     p.add_argument("args", nargs="*", help="zone, adresse, nombre ou valeur")
     p.add_argument("--port", default="COM6")
     p.add_argument("--baud", type=int, default=9600)
@@ -643,6 +708,8 @@ def main():
         zone, n1, n2 = a.args[0].upper(), int(a.args[1]), int(a.args[2])
     if a.commande == "comparer" and len(a.args) != 1:
         p.error("usage : comparer FICHIER.tsxbak")
+    if a.commande == "restaurer" and len(a.args) != 1:
+        p.error("usage : restaurer FICHIER.tsxbak")
     if a.commande == "restaurer-donnees" and len(a.args) != 1:
         p.error("usage : restaurer-donnees FICHIER.csv")
 
@@ -664,6 +731,8 @@ def main():
             cmd_comparer(tsx, a.args[0])
         elif a.commande == "sauvegarder-donnees":
             cmd_sauvegarder_donnees(tsx, a.args[0] if a.args else None)
+        elif a.commande == "restaurer":
+            cmd_restaurer(tsx, a.args[0])
         elif a.commande == "restaurer-donnees":
             cmd_restaurer_donnees(tsx, a.args[0])
         else:

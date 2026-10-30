@@ -343,6 +343,29 @@ PL7 → PLC sequence (category 07 everywhere), run twice to the end in the captu
 - `92` is not in the help's request list.
 - Implemented: `tsx.py sauvegarder` / `tsx.py comparer`.
 
+## 5t. Program download and animation table (Portmon capture, 2026-10-30)
+
+PC → PLC transfer, as PL7 does it (category 07):
+
+| Step | Request | Answer |
+|---|---|---|
+| STOP | `25 07` | `FE` |
+| reserve | `1D 07 FF FE 80 0F` (upload uses `90 36`) | `FE` |
+| open download | `3A 07 00 00 00 00 00 00 00 01` | `6A 00` |
+| segment n | `3B 07 <n lo hi> 7A 00 <122 bytes>` | `6B 00 <n lo hi>` |
+| close | `3C 07` | `6C 00` |
+| release | `1E 07` | `FE` |
+
+- Same byte stream as the upload (segment 1 starts with "STATION"), cut in 122-byte pieces.
+  38 segments, last one 62 bytes → 4576 bytes for the program with an extra empty SR.
+- READ_CPU (`4F`) answer bytes 2-3 change with the state (`02 0B`, `04 08` during download,
+  `01 0A` after): probably the RUN/STOP/transfer state. To decode.
+- Animation table: `91 07 01` → `C1 ...`; `93 07 0B` → `C3 0B 00`; `92 07 02 70 ...` (define),
+  then a loop of `93 07 04 70 00 00 00 04` → `C3 04 00` and `92 07 01 70 00 FA 03 06` →
+  `C2 01 00 ...`: a monitoring buffer. Not needed for our watch tables (direct reads).
+- Portmon lines were cut at ~21 bytes; full content needs a larger "Max Output Bytes".
+- Implemented: `tsx.py restaurer` (backs up first, verifies by reading back).
+
 ## 6. How to fill the "to verify" gaps
 
 1. **Schneider manuals:** Uni-Telway reference 35000789 and the UNI-TE / communication
