@@ -25,6 +25,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from plc_online.protocols.s7 import (  # noqa: E402
     AREAS, DEFAULT_DLL, PROGRAM_KINDS, S7300, S7Error, compare_blocks, parse_block, parse_sdb1_modules, word_be)
+from plc_online.protocols.s7_catalogue import catalog_name  # noqa: E402
 from plc_online.protocols.s7_modules import MODULES  # noqa: E402
 
 BLINK = {0: "", 1: " (clignote)", 2: " (clignote lentement)"}
@@ -42,7 +43,8 @@ LED_TEXT = {
 def cmd_etat(plc):
     try:
         info = plc.identity()
-        print(f"CPU        : {info.get('reference', '?')}   {info.get('nom_module', '')}")
+        name = info.get("nom_module") or catalog_name(info.get("reference"))
+        print(f"CPU        : {info.get('reference', '?')}   {name}")
         versions = [f"{k} {info[v]}" for k, v in (("materiel", "materiel"), ("firmware", "firmware")) if info.get(v)]
         if versions:
             print(f"Versions   : {', '.join(versions)}")
