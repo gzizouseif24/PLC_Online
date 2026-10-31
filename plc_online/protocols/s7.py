@@ -401,7 +401,10 @@ class S7300:
         n = self.nd.daveListBlocksOfType(self.dc, BLOCK_TYPES[kind], entries)
         self.log(f"   liste {kind} -> {n}")
         if n < 0:
-            raise S7Error(f"liste des blocs {kind} : {self._err(-n)}")
+            text = self._err(-n)
+            if "no block" in text.lower():      # bench 31/10: CPU without FB answers "no block present"
+                return []
+            raise S7Error(f"liste des blocs {kind} : {text}")
         return sorted(entries[i].number for i in range(min(n, len(entries))))
 
     def upload_block(self, kind: str, number: int) -> bytes:

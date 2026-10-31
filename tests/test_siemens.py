@@ -213,6 +213,11 @@ class SzlTests(unittest.TestCase):
         with self.assertRaises(S7Error):
             self.plc.upload_block("SDB", 7)
 
+    def test_no_block_of_a_type_is_an_empty_list(self):
+        self.fake.daveListBlocksOfType = lambda dc, kind, entries: -0xD20E
+        self.fake.daveStrerror = lambda code: b"no block present"
+        self.assertEqual(self.plc.list_blocks("FB"), [])
+
     def test_unsupported_list_raises(self):
         with self.assertRaisesRegex(S7Error, "SZL 0424"):
             self.plc.read_szl(0x0424, 0)
