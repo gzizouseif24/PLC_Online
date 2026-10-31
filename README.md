@@ -104,9 +104,12 @@ Windows only. What the PC needs:
 4. **SIMATIC Manager closed**: only one program can own the interface.
 
 ```
-py -3.14-32 tools/siemens.py                                  # MB0..MB3
-py -3.14-32 tools/siemens.py --zone DB --db 10 --debut 20 --nombre 2
+py -3.14-32 tools/siemens.py etat                             # CPU, versions, LEDs (mode, faults, forces), key switch, protection
+py -3.14-32 tools/siemens.py lire                             # MB0..MB3
+py -3.14-32 tools/siemens.py lire --zone DB --db 10 --debut 20 --nombre 2
 ```
+
+`--trace` shows the connection steps and the raw answers. Plan for the next steps: [docs/s7-300.md](docs/s7-300.md).
 
 `libnodave.dll` is taken from `vendor/libnodave/` by default; use `--dll` for another copy.
 
