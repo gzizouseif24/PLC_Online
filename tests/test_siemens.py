@@ -148,6 +148,17 @@ class SzlTests(unittest.TestCase):
         self.assertEqual(d[1]["texte"], "STOP caused by stop switch being activated")
         self.assertEqual(d[1]["classe"], "changement de mode")
 
+    def test_diagnostic_buffer_of_bench_cpu(self):
+        """First two entries read from the bench CPU 315-2DP on 31/10/2026 (CPU clock set to 2005)."""
+        raw = bytes.fromhex("00a0 0000 0014 0002"
+                            "4302 ff68 c700 0000 0b13 7713 0504 2104 0145 0095"
+                            "1381 fe64 c772 4303 0b13 7713 0504 2104 0145 0095")
+        from plc_online.protocols.s7 import parse_diag_entry
+        entries = [parse_diag_entry(r) for r in parse_szl(raw, 0x00A0)[1]]
+        self.assertEqual(entries[0]["texte"], "Mode transition from STARTUP to RUN")
+        self.assertEqual(entries[0]["date"], "21/04/2005 04:01:45.009")
+        self.assertEqual(entries[1]["texte"], "Request for manual warm restart")
+
     def test_unknown_event_and_old_dates(self):
         from plc_online.protocols.s7 import parse_date_and_time, parse_diag_entry
         self.assertEqual(parse_date_and_time(bytes.fromhex("98 01 02 03 04 05 99 90")), "02/01/1998 03:04:05.999")
