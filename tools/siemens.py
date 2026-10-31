@@ -61,10 +61,11 @@ def cmd_etat(plc):
         print(f"Protection : niveau {p['protection_effective']} "
               f"(cle {p['protection_cle']}, parametre {p['protection_parametree']}"
               f"{', sans mot de passe' if p['protection_parametree'] == 0 else ''})")
-        if p["sommes_valides"]:
-            hw, prog = p["somme_config_materielle"], p["somme_programme"]
+        hw, prog = p["somme_config_materielle"], p["somme_programme"]
+        if any(hw + prog):
             print(f"Sommes     : programme {prog[0]:04X}-{prog[1]:04X}, config materielle {hw[0]:04X}-{hw[1]:04X}"
-                  "   (a noter : changent si le programme ou la config change)")
+                  + ("" if p["sommes_valides"] else "   (marquees non garanties par la CPU)"))
+            print("             a noter : elles doivent changer si le programme ou la config change")
     except S7Error as e:
         print(f"\nCle et protection non lues ({e})")
 

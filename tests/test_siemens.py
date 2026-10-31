@@ -8,7 +8,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 
 from plc_online.protocols.s7 import (
-    DEFAULT_DLL, S7300, S7Error, load_dll, parse_identity, parse_szl, word_be)
+    DEFAULT_DLL, S7300, S7Error, load_dll, parse_identity, parse_protection, parse_szl, word_be)
 
 
 def szl(szl_id, index, records):
@@ -100,6 +100,24 @@ class SzlTests(unittest.TestCase):
         self.assertEqual(info["nom_module"], "CPU 314C-2 DP")
         self.assertEqual(info["numero_serie"], "S C-X4U421302009")
         self.assertNotIn("nom_automate", info)        # index 1 not answered: skipped
+
+    def test_identity_of_old_cpu_315_2af03(self):
+        """Raw answers from the bench CPU 315-2DP (6ES7 315-2AF03-0AB0), 31/10/2026."""
+        idx1 = bytes.fromhex("0111 0001 001c 0001 0000 3645 5337 2033 3135 2d32 4146 3033 2d30 4142 3020 00c0 0001 0000")
+        idx7 = bytes.fromhex("0111 0001 001c 0001 0007 2020 2020 2020 2020 2020 2020 2020 2020 2020 2020 00c0 5601 0200")
+        info = parse_identity(parse_szl(idx1, 0x0111)[1], 1)
+        info6 = parse_identity(parse_szl(idx1, 0x0111)[1], 6)          # index 6 answered like index 1
+        info.update(parse_identity(parse_szl(idx7, 0x0111)[1], 7))
+        self.assertEqual(info["reference"], "6ES7 315-2AF03-0AB0")
+        self.assertEqual(info["firmware"], "V1.2.0")
+        self.assertNotIn("materiel", info6)
+
+    def test_protection_of_old_cpu(self):
+        raw = bytes.fromhex("0232 0004 0028 0001 0004 0001 0000 0001 0002 0000 0000 5656 2a00 6647 0600 16d8"
+                            + "00" * 16)
+        p = parse_protection(parse_szl(raw, 0x0232)[1])
+        self.assertEqual((p["cle"], p["protection_effective"], p["sommes_valides"]), ("RUN-P", 1, False))
+        self.assertEqual(p["somme_programme"], (0x6647, 0x0600))
 
     def test_short_record_is_skipped(self):
         self.assertEqual(parse_identity([b"\x00\x01"]), {})

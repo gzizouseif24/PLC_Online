@@ -57,21 +57,25 @@ def _text(b: bytes) -> str:
     return b.split(b"\x00")[0].decode("latin-1").strip()
 
 
-def parse_identity(records: list) -> dict:
-    """SZL 0x0111 records (§34.5): index, order number (20 bytes), BGTyp, Ausbg1, Ausbg2."""
+def parse_identity(records: list, requested: int = 0) -> dict:
+    """SZL 0x0111 records (§34.5): index, order number (20 bytes), BGTyp, Ausbg1, Ausbg2.
+
+    Bench, CPU 315-2AF03: the record index is 0000 for index 1, and index 6 returns the
+    same record as index 1 (no "V"). So the requested index is used when the record has none,
+    and a version is only shown when it starts with "V".
+    """
     out = {}
     for r in records:
         if len(r) < 28:
             continue
-        index, a1, a2 = word_be(r, 0), word_be(r, 24), word_be(r, 26)
-        if index == 1:
-            out["reference"] = _text(r[2:22])
+        index, a1, a2 = word_be(r, 0) or requested, word_be(r, 24), word_be(r, 26)
+        order = _text(r[2:22])
+        if order:
+            out.setdefault("reference", order)
+        if a1 >> 8 == ord("V") and index in (6, 7):
+            out["materiel" if index == 6 else "firmware"] = f"V{a1 & 0xFF}.{a2 >> 8}.{a2 & 0xFF}"
+        elif index == 1:
             out["version_module"] = a1
-        elif index in (6, 7):
-            key = "materiel" if index == 6 else "firmware"
-            out[key] = f"{chr(a1 >> 8)}{a1 & 0xFF}.{a2 >> 8}.{a2 & 0xFF}"   # 'V' + major, then two numbers
-            if index == 6:
-                out.setdefault("reference", _text(r[2:22]))
     return out
 
 
@@ -139,13 +143,17 @@ def word_be(data: bytes, offset: int) -> int:
     return (data[offset] << 8) | data[offset + 1]
 
 
+def _quiet(msg):
+    pass
+
+
 class S7300:
     """Connection to one S7-300 CPU. Use as a context manager."""
 
     def __init__(self, mpi: int = 2, rack: int = 0, slot: int = 2, dll=DEFAULT_DLL, log=None):
         self.mpi, self.rack, self.slot = mpi, rack, slot
         self.dll_path = dll
-        self.log = log or (lambda msg: None)
+        self.log = log or _quiet
         self.nd = None
         self.handle = -1
         self.dc = None
@@ -155,6 +163,8 @@ class S7300:
 
     def open(self):
         self.nd = nd = load_dll(self.dll_path)
+        if self.log is _quiet:
+            nd.daveSetDebug(0)          # libnodave prints its own debug lines otherwise
 
         h = nd.openS7online(b"S7ONLINE", None)
         self.log(f"1. openS7online  -> {h}")
@@ -204,7 +214,7 @@ class S7300:
         info = {}
         for index in (1, 6, 7):
             try:
-                info.update(parse_identity(self.read_szl(0x0111, index)[1]))
+                info.update(parse_identity(self.read_szl(0x0111, index)[1], index))
             except S7Error:
                 pass
         for index in COMPONENTS:
