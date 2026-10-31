@@ -29,6 +29,8 @@ AREAS = {
     "Q": 0x82,   # outputs (A)
     "M": 0x83,   # flags / merkers
     "DB": 0x84,  # data blocks
+    "C": 0x1C,   # counters (Z): start / count are counter numbers, 2 bytes each
+    "T": 0x1D,   # timers: start / count are timer numbers, 2 bytes each
 }
 
 
@@ -387,12 +389,46 @@ class S7300:
         return self
 
     def read_bytes(self, area: str, start: int, count: int, db: int = 0) -> bytes:
-        """Read `count` bytes from an area ("I", "Q", "M" or "DB" with db=number)."""
-        buf = ctypes.create_string_buffer(count)
+        """Read `count` bytes from an area ("I", "Q", "M" or "DB" with db=number).
+        For "T" / "C", `count` timers or counters: 2 bytes each."""
+        size = 2 * count if area in ("T", "C") else count
+        buf = ctypes.create_string_buffer(size)
         r = self.nd.daveReadBytes(self.dc, AREAS[area], db, start, count, buf)
         if r != 0:
-            raise S7Error(f"lecture {area}{db or ''} octets {start}..{start + count - 1} : {self._err(r)}")
-        return buf.raw
+            raise S7Error(f"lecture {area}{db or ''} {start}..{start + count - 1} : {self._err(r)}")
+        return buf.raw[:size]
+
+    def write_bytes(self, area: str, start: int, data: bytes, db: int = 0):
+        buf = ctypes.create_string_buffer(bytes(data), len(data))
+        r = self.nd.daveWriteBytes(self.dc, AREAS[area], db, start, len(data), buf)
+        if r != 0:
+            raise S7Error(f"ecriture {area}{db or ''} octet {start} : {self._err(r)}")
+
+    def write_bit(self, area: str, byte: int, bit: int, value: int, db: int = 0):
+        buf = ctypes.create_string_buffer(bytes([1 if value else 0]), 1)
+        r = self.nd.daveWriteBits(self.dc, AREAS[area], db, byte * 8 + bit, 1, buf)
+        if r != 0:
+            raise S7Error(f"ecriture {area}{db or ''} {byte}.{bit} : {self._err(r)}")
+
+    def read_vars(self, variables) -> dict:
+        """{Var: bytes} for watch table variables (plc_online.protocols.s7_vars), grouped
+        into as few reads as possible. A refused read gives None for its variables."""
+        from plc_online.protocols.s7_vars import plan_reads, split_values
+        out = {}
+        for read in plan_reads(variables):
+            area, db, start, count, vs = read
+            try:
+                out.update(split_values(read, self.read_bytes(area, start, count, db)))
+            except S7Error as e:
+                self.log(f"   {e}")
+                out.update({v: None for v in vs})
+        return out
+
+    def write_var(self, var, data: bytes):
+        if var.bit is not None:
+            self.write_bit(var.area, var.start, var.bit, data[0], var.db)
+        else:
+            self.write_bytes(var.area, var.start, data, var.db)
 
     def read_szl(self, szl_id: int, index: int = 0):
         """Read one system status list. Returns (index, list of data records)."""

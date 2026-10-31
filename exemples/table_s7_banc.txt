@@ -1,0 +1,8 @@
+# Table de surveillance du banc S7-300 (SM 321 en EB0..EB3, SM 322 en AB4..AB5)
+# une adresse par ligne, puis un libelle ; format optionnel apres ':' (hex, bin, real, ud, char)
+EB0:bin     entrees 0.0 a 0.7
+EB1:bin     entrees 1.0 a 1.7
+AB4:bin     sorties 4.0 a 4.7
+AB5:bin     sorties 5.0 a 5.7
+MB100:bin   memento de cadence
+MW10        mot de test

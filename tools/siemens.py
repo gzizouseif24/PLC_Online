@@ -10,15 +10,21 @@
     py -3.14-32 tools/siemens.py sauvegarder-programme        copie de tous les blocs (OB FB FC DB SDB)
     py -3.14-32 tools/siemens.py comparer DOSSIER             le programme de la CPU a-t-il change ?
     python tools/siemens.py comparer DOSSIER --depuis AUTRE   compare deux copies (sans CPU)
+    py -3.14-32 tools/siemens.py surveiller E0.0 AW4 MW10:hex DB10.DBD4:real T1 Z2
+                                                              table de surveillance (valeurs en direct)
+    py -3.14-32 tools/siemens.py surveiller --table machine.txt [--journal]
+    py -3.14-32 tools/siemens.py ecrire MW10 123              forcer une valeur une fois (avec confirmation)
     py -3.14-32 tools/siemens.py lire                         MB0..MB3
     py -3.14-32 tools/siemens.py lire --zone DB --db 10 --debut 20 --nombre 2
 
 Options : --mpi 2, --rack 0, --slot 2, --trace (etapes de connexion).
 Python 32 bits obligatoire, SIMATIC Manager ferme, interface PG/PC = USB.S7USB.1.
-Lecture seule.
+Lecture seule, sauf ecrire (confirmation demandee).
 """
 import argparse
+import os
 import re
+import time
 import sys
 from pathlib import Path
 
@@ -28,6 +34,7 @@ from plc_online.protocols.s7 import (  # noqa: E402
     parse_sdb1_modules, word_be)
 from plc_online.protocols.s7_catalogue import catalog_name  # noqa: E402
 from plc_online.protocols.s7_modules import MODULES  # noqa: E402
+from plc_online.protocols.s7_vars import AddressError, Var, load_table  # noqa: E402
 
 BLINK = {0: "", 1: " (clignote)", 2: " (clignote lentement)"}
 LED_TEXT = {
@@ -326,6 +333,78 @@ def cmd_comparer(ref, now, ref_name, now_name):
               + ", ".join(f"DB{n}" for _, n, _, _ in values))
 
 
+def value_texts(variables, values):
+    return {v: (v.decode(values[v]) if values.get(v) is not None else "?? (refuse)") for v in variables}
+
+
+def render_table(variables, texts, changed_at, now):
+    width = max(len(v.name) for v in variables)
+    lines = []
+    for v in variables:
+        age = now - changed_at[v] if changed_at.get(v) else None
+        mark = "*" if age is not None and age < 2 else " "
+        since = f"change il y a {age:5.1f} s" if age is not None else ""
+        lines.append(f" {mark} {v.name:<{width}}  {texts[v]:>22}  {v.label:<30} {since}")
+    return lines
+
+
+def cmd_surveiller(plc, variables, period=0.5, journal=False, loops=None):
+    """Watch table: values refreshed every `period` s; '*' marks a value that just changed.
+    journal=True prints only changes, with time stamps (for intermittent faults)."""
+    os.system("")                        # turns on screen control codes in the Windows console
+    previous, changed_at, t0, n = None, {}, time.time(), 0
+    if journal:
+        print(f"Journal des changements, {len(variables)} variable(s) (Ctrl+C pour arreter)\n")
+    try:
+        while loops is None or n < loops:
+            n += 1
+            texts = value_texts(variables, plc.read_vars(variables))
+            now = time.time()
+            if previous is not None:
+                for v in variables:
+                    if texts[v] != previous[v]:
+                        changed_at[v] = now
+                        if journal:
+                            print(f"   {time.strftime('%H:%M:%S')} +{now - t0:8.2f} s   {v.name:<14} "
+                                  f"{previous[v]} -> {texts[v]}   {v.label}")
+            elif journal:
+                for v in variables:
+                    print(f"   depart                    {v.name:<14} {texts[v]}   {v.label}")
+            if not journal:
+                print("\x1b[H\x1b[J" + f"Table de surveillance   {time.strftime('%H:%M:%S')}   "
+                      f"rafraichie toutes les {period} s   (Ctrl+C pour arreter)\n")
+                print("\n".join(render_table(variables, texts, changed_at, now)))
+            previous = texts
+            time.sleep(period)
+    except KeyboardInterrupt:
+        print("\nArret.")
+
+
+def confirm(question):
+    return input(f"{question} (tapez OUI) > ").strip() == "OUI"
+
+
+def cmd_ecrire(plc, var, value_text):
+    data = var.encode(value_text)
+    old = plc.read_vars([var])[var]
+    print(f"{var.name} actuel : {var.decode(old) if old is not None else '?'}")
+    leds = plc.leds()
+    running = bool(leds.get("RUN", (0, 0))[0])
+    if running and var.area in ("I", "Q"):
+        print("   La CPU est en RUN : une entree est reecrite par la peripherie et une sortie par le\n"
+              "   programme au cycle suivant. Pour tenir la valeur, il faut un forcage.")
+    elif running:
+        print("   La CPU est en RUN : le programme peut reecrire cette valeur au cycle suivant.")
+    if not confirm(f"Ecrire {var.name} = {var.decode(data) if var.bit is None else data[0]} ? Machine en securite ?"):
+        print("Annule, rien n'a ete ecrit.")
+        return
+    plc.write_var(var, data)
+    back = plc.read_vars([var])[var]
+    print(f"Relu : {var.name} = {var.decode(back) if back is not None else '?'}")
+    if old is not None:
+        print(f"Pour revenir en arriere : py -3.14-32 tools/siemens.py ecrire {var.text} {var.decode(old)}")
+
+
 def cmd_lire(plc, a):
     data = plc.read_bytes(a.zone, a.debut, a.nombre, a.db)
     print("   octets :", " ".join(f"{x:02X}" for x in data))
@@ -337,7 +416,7 @@ def cmd_lire(plc, a):
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("commande", nargs="?", default="lire", choices=["etat", "diagnostic", "modules", "config", "sauvegarder-config",
-                                                         "sauvegarder-programme", "comparer", "lire"])
+                                                         "sauvegarder-programme", "comparer", "surveiller", "ecrire", "lire"])
     p.add_argument("--mpi", type=int, default=2, help="adresse MPI de la CPU")
     p.add_argument("--rack", type=int, default=0)
     p.add_argument("--slot", type=int, default=2)
@@ -349,8 +428,27 @@ def main():
     p.add_argument("--trace", action="store_true", help="afficher les etapes de connexion")
     p.add_argument("--dossier", default=None, help="sauvegarder-config : dossier de destination")
     p.add_argument("--depuis", default=None, help="config / comparer : lire ce dossier au lieu de la CPU")
-    p.add_argument("reference", nargs="?", default=None, help="comparer : dossier de reference")
+    p.add_argument("--table", default=None, help="surveiller : fichier table (une adresse par ligne)")
+    p.add_argument("--periode", type=float, default=0.5, help="surveiller : secondes entre deux lectures")
+    p.add_argument("--journal", action="store_true", help="surveiller : n'afficher que les changements")
+    p.add_argument("arguments", nargs="*", help="dossier (comparer), adresses (surveiller), adresse valeur (ecrire)")
     a = p.parse_args()
+    a.reference = a.arguments[0] if a.arguments else None
+
+    variables = []
+    try:
+        if a.commande == "surveiller":
+            variables = load_table(a.table) if a.table else []
+            variables += [Var(t) for t in a.arguments]
+            if not variables:
+                p.error("surveiller : donner des adresses (E0.0 MW10 ...) ou --table fichier")
+        elif a.commande == "ecrire":
+            if len(a.arguments) != 2:
+                p.error("ecrire : adresse et valeur (ex. ecrire MW10 123)")
+            variables = [Var(a.arguments[0])]
+            variables[0].encode(a.arguments[1])          # refuse a bad value before connecting
+    except (AddressError, ValueError, OSError) as e:
+        raise SystemExit(f"ECHEC : {e}")
 
     if a.commande == "comparer" and not a.reference:
         p.error("comparer : donner le dossier de reference (copie faite avec sauvegarder-programme)")
@@ -392,9 +490,13 @@ def main():
                 cmd_comparer(ref, upload_program(plc), a.reference, "CPU")
             elif a.commande == "sauvegarder-config":
                 cmd_sauvegarder_config(plc, a.dossier)
+            elif a.commande == "surveiller":
+                cmd_surveiller(plc, variables, a.periode, a.journal)
+            elif a.commande == "ecrire":
+                cmd_ecrire(plc, variables[0], a.arguments[1])
             else:
                 cmd_lire(plc, a)
-    except S7Error as e:
+    except (S7Error, AddressError, ValueError) as e:
         raise SystemExit(f"ECHEC : {e}")
 
 
