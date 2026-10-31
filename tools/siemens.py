@@ -100,7 +100,7 @@ def module_text(code):
     if len(names) > 1 and "x" in common:
         common = common[:common.rindex("x") + 1] + "..."
     orders = [o for o, _ in entries]
-    return f"{common.strip()} : " + ", ".join(o if i == 0 else o[4:] for i, o in enumerate(orders))
+    return f"{common.strip()} : " + ", ".join(o if i == 0 else o[5:] for i, o in enumerate(orders))
 
 
 def cmd_modules(plc, rack=0):
