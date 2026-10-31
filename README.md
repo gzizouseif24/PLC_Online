@@ -1,60 +1,99 @@
 # PLC Online
 
-Multi-brand PLC diagnostic tool: read live data from PLCs of several brands from a PC,
-without the vendor software.
+Multi-brand PLC diagnostic tool for maintenance: status, faults, live values, program backup
+and restore, from a PC, without the vendor software.
 
-One protocol module per brand, one command-line tool per brand, a shared engine on top (table of expected values → polling → comparison).
-Architecture and plan: [docs/architecture.md](docs/architecture.md).
-Background and field notes: [docs/rapport-technique-2026-10-23.md](docs/rapport-technique-2026-10-23.md).
-Next: S7-300 diagnostics and logic, plan in [docs/s7-300.md](docs/s7-300.md); logic understanding in general: [docs/logique.md](docs/logique.md).
-Work log: [docs/journal-2026-10-29.md](docs/journal-2026-10-29.md), [docs/journal-2026-10-30.md](docs/journal-2026-10-30.md).
+One protocol module per brand, one command-line tool per brand (French prompts); a web
+interface comes later on top of the same library.
 
-| Brand | Protocol | Status |
+| Brand | Link | What works (tested on the bench) |
 |---|---|---|
-| Panasonic FP0R | MEWTOCOL-COM, serial tool port | `tools/panasonic.py`: fast counters, DT change scan, write one DT, program dump |
-| Siemens S7-300 | S7 via S7ONLINE (libnodave, 32-bit Python) | `tools/siemens.py` (Windows only): CPU status, diagnostic buffer, modules configured vs plugged in with names, HW config and CPU parameters, program backup and compare, watch table, modify (tested on a 315-2DP) |
-| Omron CJ1M | Host Link (C-mode + FINS), peripheral port | `tools/omron.py`: status with I/O cards, read, monitor, error log, PLC Setup, write, mode, data and program backup (tested on a CJ1M-CPU11); data restore to confirm |
-| Schneider Modicon | Modbus RTU (serial) / Modbus TCP | `tools/modicon.py`: read, not yet tested on a PLC |
-| Schneider TSX Micro / Premium | Uni-Telway, TER port (PCX 1031) | `tools/tsx.py`: status, read, monitor, write, RUN/STOP, program and data backup/restore (tested on TSX 3721) |
+| Siemens S7-300 | MPI, USB adapter + STEP 7's S7ONLINE driver (Windows) | status, diagnostic buffer, modules configured vs plugged in, HW config and CPU parameters, program backup / compare / restore, watch table, modify (315-2DP) |
+| Omron CJ1M | Host Link (C-mode + FINS), peripheral port | status with I/O cards, error log, PLC Setup, read, monitor, write, mode, data and program backup (CJ1M-CPU11); data restore to confirm |
+| Schneider TSX Micro / Premium | Uni-Telway, TER port (PCX 1031) | status, read, monitor, write, RUN/STOP, program and data backup / restore (TSX 3721) |
+| Panasonic FP0R | MEWTOCOL-COM, tool port | fast counters, DT change scan, write one DT, program dump |
+| Schneider Modicon | Modbus RTU / TCP | read; not yet tested on a PLC |
+
+Docs:
+- [architecture](docs/architecture.md)
+- [technical report and field notes](docs/rapport-technique-2026-10-23.md)
+- [S7-300 plan and bench results](docs/s7-300.md)
+- [Omron notes](docs/omron.md)
+- [Uni-Telway notes](docs/unitelway.md)
+- [understanding the PLC logic](docs/logique.md)
+- work logs: [29/10](docs/journal-2026-10-29.md), [30/10](docs/journal-2026-10-30.md)
 
 ## Layout
 
 ```
-tools/                 WHAT YOU RUN: one command-line tool per brand (French prompts)
-  omron.py             Omron CJ1M
-  panasonic.py         Panasonic FP0R
+tools/                 WHAT YOU RUN: one command-line tool per brand
   siemens.py           Siemens S7-300
-  modicon.py           Schneider Modicon
+  omron.py             Omron CJ1M
   tsx.py               Schneider TSX (single file, protocol included)
-plc_online/            library used by the tools (and later by the engine and web page)
+  panasonic.py         Panasonic FP0R
+  modicon.py           Schneider Modicon
+plc_online/            library used by the tools (and later by the web interface)
   checksum.py          XOR checksum (Panasonic BCC, Omron FCS)
   protocols/           one module per protocol, never run directly
-    hostlink.py        Omron Host Link + FINS: checks FCS, header, end code and length
-    mewtocol.py        Panasonic MEWTOCOL: checks BCC, header and length
-    s7.py              Siemens S7 (libnodave + S7ONLINE)
-    modbus.py          Modbus RTU / TCP: checks CRC or MBAP, function, byte count
-research/              discovery scripts kept for reference, not needed day to day
-  tsx/                 Uni-Telway probes (ut_*.py), PL7 capture proxies, test programs (.FEF)
-  omron/               first Host Link scripts (echo test, D read)
-  hlp2txt.py           extracts text from old Windows Help (.hlp) files, e.g. PL7's help
+    s7.py              S7: connection (libnodave + S7ONLINE), status lists, blocks, SDB decoding
+    s7_vars.py         S7 watch table: addresses, formats, grouped reads
+    s7_download.py     S7 block download (restore), straight on S7ONLINE
+    s7_events.py       S7 diagnostic event texts (Siemens manual, chapter 35)
+    s7_modules.py      S7 module type codes -> names   (generated from STEP 7)
+    s7_catalogue.py    S7 order numbers -> names        (generated from STEP 7)
+    s7_forces.py       S7 force reading (parked: refused by the bench CPU)
+    hostlink.py        Omron Host Link + FINS
+    mewtocol.py        Panasonic MEWTOCOL
+    modbus.py          Modbus RTU / TCP
+research/              discovery scripts and bench samples, not needed day to day
+  siemens/             STEP 7 catalog extraction, SDB samples from the bench, force probe
+  tsx/                 Uni-Telway probes, PL7 capture proxies, test programs (.FEF)
+  omron/               first Host Link scripts
+  hlp2txt.py           text out of old Windows Help (.hlp) files
+exemples/              sample watch table
 vendor/libnodave/      libnodave.dll (32-bit)
 tests/                 tests against simulated PLCs, no hardware needed
-docs/                  technical report, architecture, protocol notes, work log
+docs/                  report, architecture, protocol notes, work logs
 ```
 
 Every tool runs from the repo folder: `python tools/<brand>.py --help`.
 
-## Panasonic tool
+## Siemens tool
+
+Windows only. The PC needs:
+
+1. **STEP 7 installed**, for `S7onlinx.dll` (the S7ONLINE driver, Siemens' file, not in this repo).
+2. **"Set PG/PC Interface" = `USB.S7USB.1`** (PC Adapter USB).
+3. **32-bit Python** (`py -3.14-32`): both DLLs are 32-bit.
+4. **SIMATIC Manager closed**: only one program can own the interface.
 
 ```
-pip install -r requirements.txt
-python tools/panasonic.py compteurs                  # fast counters CH0..CH3, live
-python tools/panasonic.py scan --debut 0 --fin 200   # print the DT values that change
-python tools/panasonic.py ecrire 914 1234            # write ONE DT, confirmation + read-back
-python tools/panasonic.py programme                  # dump the program to .bin / _hex.txt (115200 baud)
+py -3.14-32 tools/siemens.py etat                    # CPU name, firmware, mode, fault LEDs (FRCE = forces), key, protection, checksums
+py -3.14-32 tools/siemens.py diagnostic              # diagnostic buffer: dated events in plain text
+py -3.14-32 tools/siemens.py modules                 # rack 0: module configured vs plugged in, with names
+py -3.14-32 tools/siemens.py config                  # HW config: CPU parameters, configured modules and addresses, vs rack
+py -3.14-32 tools/siemens.py sauvegarder-config      # copy the HW config (SDB blocks) to a folder
+py -3.14-32 tools/siemens.py sauvegarder-programme   # copy every block (OB FB FC DB SDB) to a folder
+py -3.14-32 tools/siemens.py comparer DOSSIER        # which blocks changed in the CPU since that copy
+py -3.14-32 tools/siemens.py restaurer DOSSIER       # load the copy back (STOP, load, check, restart)
+py -3.14-32 tools/siemens.py surveiller EB0:bin AB4 MW10 DB10.DBD4:real T1 Z2   # watch table, live
+py -3.14-32 tools/siemens.py surveiller --table exemples/table_s7_banc.txt --journal
+py -3.14-32 tools/siemens.py ecrire MW10 123 M0.1 1  # modify values (confirmation, read back, undo command)
+py -3.14-32 tools/siemens.py ecrire M0.1 1 --maintenir   # keep writing until Ctrl+C
 ```
 
-Options: `--port`, `--baud`, `--parite`, `--station`.
+Good to know:
+- `config --depuis DOSSIER` and `comparer A --depuis B` work on copies, without a CPU (normal Python).
+- `restaurer` loads OB, FB and FC. DB only with `--avec-db` (they hold the machine's current values),
+  the HW config never. Blocks in the CPU but not in the copy are kept unless `--supprimer-en-trop`.
+- Addresses: `E0.0`/`I0.0`, `EB0` `EW0` `ED0`, `A4.1`/`Q4.1`, `M10.3` `MB10` `MW10` `MD10`,
+  `DB10.DBX2.1` `DB10.DBB2` `DB10.DBW2` `DB10.DBD2`, `T5`, `Z2`/`C2`. Formats after `:`: `hex`, `bin`,
+  `real`, `ud` (unsigned), `char`.
+- Modify writes once, like "Modify" in a STEP 7 watch table: in RUN the program can overwrite it,
+  and inputs / outputs are rewritten every cycle. Forces are not supported (only the FRCE LED).
+- Module and CPU names come from tables generated from a STEP 7 installation
+  (`research/siemens/extraire_modules.py`, `research/siemens/extraire_noms.py`).
+- `--trace` shows the connection steps and raw answers; `--mpi` (default 2) for another CPU.
 
 ## Omron tool
 
@@ -93,59 +132,6 @@ Good to know:
 Protocol notes, what is confirmed, bench results and checklist: [docs/omron.md](docs/omron.md).
 Formats checked against Omron manuals W342 (communication commands) and W393 (CJ1M operation).
 
-## Siemens tool
-
-Windows only. What the PC needs:
-
-1. **STEP 7 installed.** It installs `S7onlinx.dll` (the S7ONLINE driver), which
-   `libnodave.dll` loads at run time. That file belongs to Siemens and is not in this repo.
-2. **"Set PG/PC Interface" set to `USB.S7USB.1`** (PC Adapter USB).
-3. **32-bit Python**: both DLLs are 32-bit. The driver stops with a clear message on 64-bit Python.
-4. **SIMATIC Manager closed**: only one program can own the interface.
-
-```
-py -3.14-32 tools/siemens.py etat                             # CPU name, firmware, mode, fault LEDs (FRCE = forces), key switch, protection, checksums
-py -3.14-32 tools/siemens.py diagnostic                       # diagnostic buffer: dated events with their text
-py -3.14-32 tools/siemens.py modules                          # rack 0: module configured vs plugged in, with names, state
-py -3.14-32 tools/siemens.py config                           # HW config: CPU parameters + configured modules and addresses, vs rack
-python tools/siemens.py config --depuis config_s7_...          # same, from a backup folder, no CPU needed
-py -3.14-32 tools/siemens.py sauvegarder-config               # copy the HW config (all SDB blocks) to a folder
-py -3.14-32 tools/siemens.py sauvegarder-programme            # copy every block (OB FB FC DB SDB) to a folder
-py -3.14-32 tools/siemens.py comparer programme_s7_...        # which blocks changed in the CPU since that copy
-py -3.14-32 tools/siemens.py restaurer programme_s7_... [--avec-db] [--supprimer-en-trop]   # load a program copy back into the CPU (STOP, verify, restart)
-py -3.14-32 tools/siemens.py surveiller EB0:bin AB4 MW10 DB10.DBD4:real T1 Z2   # watch table, live
-py -3.14-32 tools/siemens.py surveiller --table exemples/table_s7_banc.txt [--journal]
-py -3.14-32 tools/siemens.py ecrire MW10 123 M0.1 1           # modify one or more values (confirmation, read back, undo command)
-py -3.14-32 tools/siemens.py ecrire M0.1 1 --maintenir        # keep writing until Ctrl+C, then offer the old values back
-py -3.14-32 tools/siemens.py lire --zone DB --db 10 --debut 20 --nombre 2   # raw bytes
-```
-
-Watch table and modify:
-- Addresses: `E0.0` / `I0.0`, `EB0` `EW0` `ED0`, `A4.1` / `Q4.1`, `AB4`..., `M10.3` `MB10` `MW10` `MD10`,
-  `DB10.DBX2.1` `DB10.DBB2` `DB10.DBW2` `DB10.DBD2`, `T5`, `Z2` / `C2`.
-- Formats after `:`: `hex`, `bin`, `real`, `ud` (unsigned), `char`; timers show S5TIME, counters BCD.
-- Table file: one address per line, then a label (`exemples/table_s7_banc.txt`). `--journal` prints only
-  the changes with their time (intermittent faults).
-- Modify writes once (like "Modify" in a STEP 7 watch table). In RUN the program can overwrite it, and
-  inputs / outputs are rewritten every cycle. Forces are not supported (only shown by the FRCE LED).
-
-Module and CPU names come from tables generated from a STEP 7 installation
-(`research/siemens/extraire_modules.py`, `research/siemens/extraire_noms.py`).
-
-`--trace` shows the connection steps and the raw answers. Plan for the next steps: [docs/s7-300.md](docs/s7-300.md).
-
-`libnodave.dll` is taken from `vendor/libnodave/` by default; use `--dll` for another copy.
-
-## Modicon tool
-
-Close SoMachine / EcoStruxure first if it uses the same port.
-Serial settings (speed, parity, slave number) must match the PLC's serial line configuration.
-
-```
-python tools/modicon.py --port COM6 --baud 19200 --parite E --esclave 1   # %MW0..%MW9
-python tools/modicon.py --ip 192.168.0.10 --zone M --nombre 16           # %M0..%M15
-```
-
 ## TSX tool (Uni-Telway)
 
 Single file, `pip install pyserial`. Close PL7 first.
@@ -165,13 +151,34 @@ python tools/tsx.py restaurer-donnees F   # write back the %MW from that CSV (ch
 
 Protocol notes and what is confirmed: [docs/unitelway.md](docs/unitelway.md).
 All commands tested on a TSX 3721 (9600 baud, 8 bits, odd parity; PC = slave 1).
-Discovery scripts used to work it out (in `research/tsx/`): `ut_listen.py`, `ut_test.py`, `ut_probe.py`, `ut_sysbits.py`,
-`ut_words.py`, `ut_rack.py`, `ut_modules.py`, `ut_io_probe.py`.
-Capturing PL7 traffic: `tsx_serial_proxy.py` (low-latency proxy, Python 2.7 on XP) or Portmon
-with "Show Hex" on and "Max Output Bytes" ≥ 512.
+Discovery scripts and PL7 capture proxies: `research/tsx/`.
+
+## Panasonic tool
+
+```
+pip install -r requirements.txt
+python tools/panasonic.py compteurs                  # fast counters CH0..CH3, live
+python tools/panasonic.py scan --debut 0 --fin 200   # print the DT values that change
+python tools/panasonic.py ecrire 914 1234            # write ONE DT, confirmation + read-back
+python tools/panasonic.py programme                  # dump the program to .bin / _hex.txt (115200 baud)
+```
+
+Options: `--port`, `--baud`, `--parite`, `--station`.
+
+## Modicon tool
+
+Close SoMachine / EcoStruxure first if it uses the same port.
+Serial settings (speed, parity, slave number) must match the PLC's serial line configuration.
+
+```
+python tools/modicon.py --port COM6 --baud 19200 --parite E --esclave 1   # %MW0..%MW9
+python tools/modicon.py --ip 192.168.0.10 --zone M --nombre 16           # %M0..%M15
+```
 
 ## Tests
 
 ```
 python -m unittest discover tests
 ```
+
+No hardware needed: every protocol is tested against simulated PLCs and real answers recorded on the bench.
