@@ -18,7 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from plc_online.protocols.s7 import AREAS, DEFAULT_DLL, S7300, S7Error, word_be  # noqa: E402
-from plc_online.protocols.s7_modules import module_name  # noqa: E402
+from plc_online.protocols.s7_modules import MODULES  # noqa: E402
 
 BLINK = {0: "", 1: " (clignote)", 2: " (clignote lentement)"}
 LED_TEXT = {
@@ -86,6 +86,23 @@ def cmd_diagnostic(plc):
         print(f"     {'':23}       {e['classe']}, info {e['info']}")
 
 
+def module_text(code):
+    """'SM 322 DO16x... : 6ES7 322-1BH01, -1BH10' : one code covers a family of modules
+    (same channel count and direction), so give the common name and every order number."""
+    entries = MODULES.get(code)
+    if not entries:
+        return ""
+    names = [n for _, n in entries]
+    common = names[0]
+    for n in names[1:]:
+        while not n.startswith(common):
+            common = common[:-1]
+    if len(names) > 1 and "x" in common:
+        common = common[:common.rindex("x") + 1] + "..."
+    orders = [o for o, _ in entries]
+    return f"{common.strip()} : " + ", ".join(o if i == 0 else o[4:] for i, o in enumerate(orders))
+
+
 def cmd_modules(plc, rack=0):
     mods = plc.modules(rack)
     if not mods:
@@ -98,7 +115,7 @@ def cmd_modules(plc, rack=0):
         codes = f"{m['type_config']:04X} / {m['type_reel']:04X}"
         print(f"   {alarm} emplacement {m['emplacement']:<2}  {m['type']:<8} {addr:<13} type {codes}   {m['etat']}")
         if m["type"] != "CPU":
-            conf, real = module_name(m["type_config"]), module_name(m["type_reel"])
+            conf, real = module_text(m["type_config"]), module_text(m["type_reel"])
             if real:
                 print(f"         en place  : {real}")
             if conf and m["different"]:
