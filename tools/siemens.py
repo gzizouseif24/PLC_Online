@@ -3,6 +3,7 @@
 
     py -3.14-32 tools/siemens.py etat                         identification, voyants, cle, protection
     py -3.14-32 tools/siemens.py diagnostic                   tampon de diagnostic (evenements dates)
+    py -3.14-32 tools/siemens.py modules                      modules du rack 0 : emplacement, adresse, etat
     py -3.14-32 tools/siemens.py lire                         MB0..MB3
     py -3.14-32 tools/siemens.py lire --zone DB --db 10 --debut 20 --nombre 2
 
@@ -83,6 +84,18 @@ def cmd_diagnostic(plc):
         print(f"     {'':23}       {e['classe']}, info {e['info']}")
 
 
+def cmd_modules(plc, rack=0):
+    mods = plc.modules(rack)
+    if not mods:
+        print(f"Aucun module dans le rack {rack}.")
+        return
+    print(f"Rack {rack} :")
+    for m in mods:
+        addr = "" if m["type"] == "CPU" else f"adresse {m['adresse']}"
+        alarm = "  " if m["etat"] == "ok" else "!!"
+        print(f"   {alarm} emplacement {m['emplacement']:<2}  {m['type']:<8} {addr:<13} {m['etat']}")
+
+
 def cmd_lire(plc, a):
     data = plc.read_bytes(a.zone, a.debut, a.nombre, a.db)
     print("   octets :", " ".join(f"{x:02X}" for x in data))
@@ -93,7 +106,7 @@ def cmd_lire(plc, a):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("commande", nargs="?", default="lire", choices=["etat", "diagnostic", "lire"])
+    p.add_argument("commande", nargs="?", default="lire", choices=["etat", "diagnostic", "modules", "lire"])
     p.add_argument("--mpi", type=int, default=2, help="adresse MPI de la CPU")
     p.add_argument("--rack", type=int, default=0)
     p.add_argument("--slot", type=int, default=2)
@@ -111,6 +124,8 @@ def main():
                 cmd_etat(plc)
             elif a.commande == "diagnostic":
                 cmd_diagnostic(plc)
+            elif a.commande == "modules":
+                cmd_modules(plc, a.rack)
             else:
                 cmd_lire(plc, a)
     except S7Error as e:

@@ -41,6 +41,10 @@ class FakeNodave:
             bytes.fromhex("39C4 C4 01 0001 0000 0003 0000") + bytes.fromhex("26 10 31 09 15 42 12 35"),
             bytes.fromhex("4303 FF 84 4304 0000 0000 0000") + bytes.fromhex("26 10 31 08 59 07 00 05"),
         ])
+        # rack 0 as on the bench: CPU slot 2, SM 321 slot 4 (inputs at 0), SM 322 slot 5 (outputs at 4)
+        rec = lambda slot, addr, eastat, ber=0x0011: struct.pack(">8H", 0, slot << 8, addr, 0xC0, 0, 0, eastat, ber)
+        self.lists[(0x0D91, 0)] = szl(0x0D91, 0, [rec(2, 0x7FFF, 0x0002), rec(4, 0, 0xB402, 0x0012),
+                                                  rec(5, 4, 0xB503, 0x0012)])
         self.led_state = {1: (0, 0), 4: (1, 0), 5: (0, 0), 6: (0, 0), 8: (0, 0), 11: (0, 0)}  # no BUS2F
         self.answer_len = 0
         self.calls = []
@@ -165,6 +169,13 @@ class SzlTests(unittest.TestCase):
         e = parse_diag_entry(bytes.fromhex("A123" + "00" * 10) + bytes.fromhex("26 10 31 00 00 00 00 00"))
         self.assertEqual((e["texte"], e["classe"]), ("", "evenement utilisateur libre"))
 
+    def test_modules(self):
+        mods = self.plc.modules()
+        self.assertEqual([(m["emplacement"], m["type"], m["adresse"]) for m in mods],
+                         [(2, "CPU", 0x7FFF), (4, "entrees", 0), (5, "sorties", 4)])
+        self.assertEqual(mods[1]["etat"], "ok")
+        self.assertEqual(mods[2]["etat"], "ERREUR (alarme de diagnostic)")
+
     def test_unsupported_list_raises(self):
         with self.assertRaisesRegex(S7Error, "SZL 0424"):
             self.plc.read_szl(0x0424, 0)
@@ -201,6 +212,14 @@ class SiemensCliTests(unittest.TestCase):
         out = out.getvalue()
         self.assertIn("2 evenement(s)", out)
         self.assertIn("31/10/2026 09:15:42.123  39C4  Distributed I/Os: station failure, entering state", out)
+
+    def test_modules_command(self):
+        out = io.StringIO()
+        with redirect_stdout(out):
+            self.cli.cmd_modules(connected(self.fake))
+        out = out.getvalue()
+        self.assertIn("emplacement 4   entrees  adresse 0     ok", out)
+        self.assertIn("!! emplacement 5   sorties  adresse 4     ERREUR", out)
 
     def test_etat_shows_faults_and_forces(self):
         self.fake.led_state.update({1: (1, 0), 6: (1, 0), 11: (0, 1)})

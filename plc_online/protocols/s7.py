@@ -127,6 +127,32 @@ def parse_diag_entry(r: bytes) -> dict:
     }
 
 
+IO_KIND = {0xB4: "entrees", 0xB5: "sorties", 0xFF: "interface DP externe"}
+
+
+def parse_module(r: bytes) -> dict:
+    """Module status record, SZL 0x0D91 (§34.23): adr1, adr2, logadr, solltyp, isttyp,
+    reserved, eastat, ber_bgbr (8 words)."""
+    adr1, adr2, logadr, eastat, ber = word_be(r, 0), word_be(r, 2), word_be(r, 4), word_be(r, 12), word_be(r, 14)
+    status = []
+    if eastat & 0x01:
+        status.append("ERREUR (alarme de diagnostic)")
+    if eastat & 0x04:
+        status.append("ABSENT")
+    if eastat & 0x08:
+        status.append("desactive")
+    if eastat & 0x10:
+        status.append("ERREUR STATION")
+    if not status:
+        status.append("ok" if eastat & 0x02 else "?")
+    return {
+        "rack": adr1, "emplacement": adr2 >> 8, "adresse": logadr,
+        "type": "CPU" if logadr == 0x7FFF else IO_KIND.get(eastat >> 8, f"code {eastat >> 8:02X}"),
+        "etat": ", ".join(status), "present": bool(eastat & 0x02), "brut": r.hex(" ").upper(),
+        "largeur": ber & 0x07,
+    }
+
+
 KEY_SWITCH = {1: "RUN", 2: "RUN-P", 3: "STOP", 4: "MRES", 0: "inconnue"}
 
 
@@ -264,6 +290,10 @@ class S7300:
 
     def protection(self) -> dict:
         return parse_protection(self.read_szl(0x0232, 4)[1])
+
+    def modules(self, rack: int = 0) -> list:
+        """Modules of a rack with their slot, first address and state (SZL 0x0D91)."""
+        return [parse_module(r) for r in self.read_szl(0x0D91, rack)[1] if len(r) >= 16]
 
     def diagnostic_buffer(self) -> list:
         """Diagnostic buffer entries, most recent first (S7-300: as many as set in HW Config)."""
