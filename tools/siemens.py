@@ -4,6 +4,7 @@
     py -3.14-32 tools/siemens.py etat                         identification, voyants, cle, protection
     py -3.14-32 tools/siemens.py diagnostic                   tampon de diagnostic (evenements dates)
     py -3.14-32 tools/siemens.py modules                      modules du rack 0 : emplacement, adresse, etat
+    py -3.14-32 tools/siemens.py sauvegarder-config [DOSSIER] copie de la config materielle (SDB) de la CPU
     py -3.14-32 tools/siemens.py lire                         MB0..MB3
     py -3.14-32 tools/siemens.py lire --zone DB --db 10 --debut 20 --nombre 2
 
@@ -100,6 +101,42 @@ def cmd_modules(plc, rack=0):
         print("   corriger HW Config (ou les modules) puis recharger la configuration.")
 
 
+def cmd_sauvegarder_config(plc, folder=None):
+    """Raw copy of the hardware configuration: every system data block (SDB) of the CPU.
+    The SDB format is not published by Siemens: decoding comes later, by comparison."""
+    import hashlib
+    import time
+    numbers = plc.list_blocks("SDB")
+    if not numbers:
+        print("Aucun SDB dans la CPU (pas de configuration materielle chargee ?).")
+        return
+    folder = Path(folder or f"config_s7_{time.strftime('%Y%m%d_%H%M%S')}")
+    folder.mkdir(parents=True, exist_ok=True)
+    print(f"{len(numbers)} SDB dans la CPU : {', '.join(str(n) for n in numbers)}")
+    lines, total = [], 0
+    for n in numbers:
+        data = plc.upload_block("SDB", n)
+        (folder / f"SDB{n}.bin").write_bytes(data)
+        total += len(data)
+        lines.append(f"SDB {n:<6} {len(data):6d} octets  sha256 {hashlib.sha256(data).hexdigest()[:16]}")
+        print(f"   SDB {n:<6} {len(data):6d} octets")
+    with open(folder / "resume.txt", "w", encoding="utf-8") as f:
+        f.write(f"date : {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+        try:
+            info = plc.identity()
+            f.write(f"CPU  : {info.get('reference', '?')} firmware {info.get('firmware', '?')}\n")
+        except S7Error:
+            pass
+        f.write("\n".join(lines) + "\n\nModules (SZL 0D91, type configure / reel) :\n")
+        try:
+            for m in plc.modules():
+                f.write(f"   emplacement {m['emplacement']}: {m['type']} adresse {m['adresse']} "
+                        f"type {m['type_config']:04X}/{m['type_reel']:04X} {m['etat']}\n")
+        except S7Error as e:
+            f.write(f"   non lus ({e})\n")
+    print(f"\nConfiguration copiee : {folder}/  ({len(numbers)} SDB, {total} octets, + resume.txt)")
+
+
 def cmd_lire(plc, a):
     data = plc.read_bytes(a.zone, a.debut, a.nombre, a.db)
     print("   octets :", " ".join(f"{x:02X}" for x in data))
@@ -110,7 +147,7 @@ def cmd_lire(plc, a):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("commande", nargs="?", default="lire", choices=["etat", "diagnostic", "modules", "lire"])
+    p.add_argument("commande", nargs="?", default="lire", choices=["etat", "diagnostic", "modules", "sauvegarder-config", "lire"])
     p.add_argument("--mpi", type=int, default=2, help="adresse MPI de la CPU")
     p.add_argument("--rack", type=int, default=0)
     p.add_argument("--slot", type=int, default=2)
@@ -120,6 +157,7 @@ def main():
     p.add_argument("--nombre", type=int, default=4, help="nombre d'octets")
     p.add_argument("--dll", default=str(DEFAULT_DLL), help="chemin de libnodave.dll")
     p.add_argument("--trace", action="store_true", help="afficher les etapes de connexion")
+    p.add_argument("--dossier", default=None, help="sauvegarder-config : dossier de destination")
     a = p.parse_args()
 
     try:
@@ -130,6 +168,8 @@ def main():
                 cmd_diagnostic(plc)
             elif a.commande == "modules":
                 cmd_modules(plc, a.rack)
+            elif a.commande == "sauvegarder-config":
+                cmd_sauvegarder_config(plc, a.dossier)
             else:
                 cmd_lire(plc, a)
     except S7Error as e:

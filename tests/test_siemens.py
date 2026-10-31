@@ -61,6 +61,23 @@ class FakeNodave:
         self.answer_len = len(data)
         return 0
 
+    blocks = {0x42: {0: b"\x70\x70" + bytes(60), 1: bytes(range(200)), 1000: b"SDB1000" * 10}}
+
+    def daveListBlocksOfType(self, dc, kind, entries):
+        numbers = sorted(self.blocks.get(kind, {}))
+        for i, n in enumerate(numbers):
+            entries[i].number = n
+            entries[i].type[0], entries[i].type[1] = 0x30, kind
+        return len(numbers)
+
+    def daveGetProgramBlock(self, dc, kind, number, buf, length_ref):
+        data = self.blocks.get(kind, {}).get(number)
+        if data is None:
+            return 0x8104
+        ctypes.memmove(buf, data, len(data))
+        length_ref._obj.value = len(data)
+        return 0
+
     def daveGetAnswLen(self, dc):
         return self.answer_len
 
@@ -189,6 +206,12 @@ class SzlTests(unittest.TestCase):
         self.assertEqual(mods[1]["etat"], "ok")
         self.assertEqual(mods[2]["etat"], "ERREUR (alarme de diagnostic)")
 
+    def test_list_and_upload_sdb(self):
+        self.assertEqual(self.plc.list_blocks("SDB"), [0, 1, 1000])
+        self.assertEqual(self.plc.upload_block("SDB", 1), bytes(range(200)))
+        with self.assertRaises(S7Error):
+            self.plc.upload_block("SDB", 7)
+
     def test_unsupported_list_raises(self):
         with self.assertRaisesRegex(S7Error, "SZL 0424"):
             self.plc.read_szl(0x0424, 0)
@@ -234,6 +257,20 @@ class SiemensCliTests(unittest.TestCase):
         self.assertIn("emplacement 4   entrees  adresse 0     type 9FC3 / 9FC3   ok", out)
         self.assertIn("!! emplacement 5   sorties  adresse 4     type AFC8 / AFC8   ERREUR", out)
         self.assertNotIn("ne correspond pas", out)
+
+    def test_sauvegarder_config(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            out = io.StringIO()
+            with redirect_stdout(out):
+                self.cli.cmd_sauvegarder_config(connected(self.fake), Path(d) / "cfg")
+            files = sorted(p.name for p in (Path(d) / "cfg").iterdir())
+            summary = (Path(d) / "cfg" / "resume.txt").read_text(encoding="utf-8")
+            sdb1 = (Path(d) / "cfg" / "SDB1.bin").read_bytes()
+        self.assertEqual(files, ["SDB0.bin", "SDB1.bin", "SDB1000.bin", "resume.txt"])
+        self.assertEqual(sdb1, bytes(range(200)))
+        self.assertIn("3 SDB dans la CPU : 0, 1, 1000", out.getvalue())
+        self.assertIn("emplacement 4: entrees adresse 0 type 9FC3/9FC3", summary)
 
     def test_etat_shows_faults_and_forces(self):
         self.fake.led_state.update({1: (1, 0), 6: (1, 0), 11: (0, 1)})

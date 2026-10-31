@@ -180,6 +180,16 @@ def parse_protection(records: list) -> dict:
     }
 
 
+# libnodave block types (nodave.h)
+BLOCK_TYPES = {"OB": 0x38, "DB": 0x41, "SDB": 0x42, "FC": 0x43, "SFC": 0x44, "FB": 0x45, "SFB": 0x46}
+UPLOAD_BUFFER = 256 * 1024    # daveGetProgramBlock does not check the buffer size
+
+
+class _BlockEntry(ctypes.Structure):
+    """daveBlockEntry (nodave.h): number already swapped to PC byte order by libnodave."""
+    _fields_ = [("number", ctypes.c_ushort), ("type", ctypes.c_ubyte * 2)]
+
+
 class _OSserial(ctypes.Structure):
     _fields_ = [("rfd", ctypes.c_int), ("wfd", ctypes.c_int)]
 
@@ -299,6 +309,27 @@ class S7300:
 
     def protection(self) -> dict:
         return parse_protection(self.read_szl(0x0232, 4)[1])
+
+    def list_blocks(self, kind: str) -> list:
+        """Numbers of the blocks of one type in the CPU ("SDB", "OB", "FC"...)."""
+        entries = (_BlockEntry * 2048)()
+        n = self.nd.daveListBlocksOfType(self.dc, BLOCK_TYPES[kind], entries)
+        self.log(f"   liste {kind} -> {n}")
+        if n < 0:
+            raise S7Error(f"liste des blocs {kind} : {self._err(-n)}")
+        return sorted(entries[i].number for i in range(min(n, len(entries))))
+
+    def upload_block(self, kind: str, number: int) -> bytes:
+        """Upload one block as the CPU stores it (what STEP 7 gets with 'upload to PG')."""
+        buf = ctypes.create_string_buffer(UPLOAD_BUFFER)
+        length = ctypes.c_int(0)
+        r = self.nd.daveGetProgramBlock(self.dc, BLOCK_TYPES[kind], number, buf, ctypes.byref(length))
+        self.log(f"   upload {kind}{number} -> {r}, {length.value} octets")
+        if r != 0:
+            raise S7Error(f"chargement {kind} {number} : {self._err(r)}")
+        if not 0 <= length.value <= UPLOAD_BUFFER:
+            raise S7Error(f"chargement {kind} {number} : longueur invalide {length.value}")
+        return buf.raw[:length.value]
 
     def modules(self, rack: int = 0) -> list:
         """Modules of a rack with their slot, first address and state (SZL 0x0D91)."""

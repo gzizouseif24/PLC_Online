@@ -107,6 +107,7 @@ Windows only. What the PC needs:
 py -3.14-32 tools/siemens.py etat                             # CPU, versions, LEDs (mode, faults, forces), key switch, protection
 py -3.14-32 tools/siemens.py diagnostic                       # diagnostic buffer: dated events with their text
 py -3.14-32 tools/siemens.py modules                          # modules of rack 0: slot, address, state
+py -3.14-32 tools/siemens.py sauvegarder-config               # copy the HW config (all SDB blocks) to a folder
 py -3.14-32 tools/siemens.py lire                             # MB0..MB3
 py -3.14-32 tools/siemens.py lire --zone DB --db 10 --debut 20 --nombre 2
 ```
