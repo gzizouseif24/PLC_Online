@@ -8,7 +8,8 @@ from contextlib import redirect_stdout
 from pathlib import Path
 
 from plc_online.protocols.s7 import (
-    DEFAULT_DLL, S7300, S7Error, load_dll, parse_identity, parse_protection, parse_szl, word_be)
+    DEFAULT_DLL, S7300, S7Error, load_dll, parse_block, parse_identity, parse_protection, parse_sdb1_modules,
+    parse_szl, word_be)
 
 
 def szl(szl_id, index, records):
@@ -217,6 +218,39 @@ class SzlTests(unittest.TestCase):
             self.plc.read_szl(0x0424, 0)
 
 
+SDB_DIR = Path(__file__).resolve().parents[1] / "research" / "siemens" / "sdb"
+
+
+class SdbTests(unittest.TestCase):
+    """Real SDBs from the bench 315-2AF03: before / after fixing HW Config (31/10/2026)."""
+
+    def sdb(self, folder, n):
+        return (SDB_DIR / folder / f"SDB{n}.bin").read_bytes()
+
+    def test_block_header_and_footer(self):
+        b = parse_block(self.sdb("2_config_correcte", 1))
+        self.assertEqual((b["type"], b["numero"], b["longueur"]), (0x0B, 1, 202))
+        self.assertEqual(b["date"], "2026-10-31 10:48:29")
+        self.assertEqual(len(b["corps"]), 130)
+        self.assertEqual((b["nom"], b["somme"]), ("STEP 7", 0xA83C))
+
+    def test_padded_sdb0(self):
+        b = parse_block(self.sdb("2_config_correcte", 0))
+        self.assertEqual((b["numero"], len(b["corps"]), b["nom"]), (0, 158, "STEP 7"))
+
+    def test_sdb1_modules(self):
+        old = parse_sdb1_modules(self.sdb("1_config_fausse", 1))
+        new = parse_sdb1_modules(self.sdb("2_config_correcte", 1))
+        self.assertEqual([(m["emplacement"], m["type"], m["adresse"], m["octets"], m["code"]) for m in old],
+                         [(2, "CPU", 0x7FFF, 0, 0x00C0), (4, "sorties", 0, 4, 0xAFD8), (5, "sorties", 4, 1, 0xAFC8)])
+        self.assertEqual([(m["emplacement"], m["type"], m["adresse"], m["octets"], m["code"]) for m in new],
+                         [(2, "CPU", 0x7FFF, 0, 0x00C0), (4, "entrees", 0, 4, 0x9FC3), (5, "sorties", 4, 2, 0xAFD0)])
+
+    def test_not_a_block(self):
+        with self.assertRaises(S7Error):
+            parse_block(b"\x00" * 100)
+
+
 class SiemensCliTests(unittest.TestCase):
     def setUp(self):
         path = Path(__file__).resolve().parents[1] / "tools" / "siemens.py"
@@ -257,6 +291,25 @@ class SiemensCliTests(unittest.TestCase):
         self.assertIn("emplacement 4   entrees  adresse 0     type 9FC3 / 9FC3   ok", out)
         self.assertIn("!! emplacement 5   sorties  adresse 4     type AFC8 / AFC8   ERREUR", out)
         self.assertNotIn("ne correspond pas", out)
+
+    def test_config_compares_with_rack(self):
+        sdb1 = (SDB_DIR / "1_config_fausse" / "SDB1.bin").read_bytes()
+        actual = [{"emplacement": 4, "type_reel": 0x9FC3}, {"emplacement": 5, "type_reel": 0xAFD0}]
+        out = io.StringIO()
+        with redirect_stdout(out):
+            self.cli.cmd_config(sdb1, actual)
+        out = out.getvalue()
+        self.assertIn("emplacement 4   sorties  AB0..AB3     type AFD8", out)
+        self.assertIn("!! en place : 9FC3", out)
+        self.assertIn("2 emplacement(s) different(s)", out)
+
+    def test_config_from_backup_matches(self):
+        sdb1 = (SDB_DIR / "2_config_correcte" / "SDB1.bin").read_bytes()
+        actual = [{"emplacement": 4, "type_reel": 0x9FC3}, {"emplacement": 5, "type_reel": 0xAFD0}]
+        out = io.StringIO()
+        with redirect_stdout(out):
+            self.cli.cmd_config(sdb1, actual)
+        self.assertIn("conformes a la configuration", out.getvalue())
 
     def test_sauvegarder_config(self):
         import tempfile

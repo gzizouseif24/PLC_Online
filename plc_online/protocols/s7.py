@@ -181,6 +181,57 @@ def parse_protection(records: list) -> dict:
 
 
 # libnodave block types (nodave.h)
+def _block_date(b: bytes) -> str:
+    """S7 block timestamp: 4 bytes ms since midnight + 2 bytes days since 1984-01-01."""
+    import datetime
+    ms, days = int.from_bytes(b[0:4], "big"), int.from_bytes(b[4:6], "big")
+    t = datetime.datetime(1984, 1, 1) + datetime.timedelta(days=days, milliseconds=ms)
+    return t.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def parse_block(data: bytes) -> dict:
+    """Uploaded S7 block: 36-byte header, body, 36-byte footer (bench SDBs, 31/10/2026).
+    Header: 70 70, block type at 5 (0B = SDB), number at 6, total length at 8, timestamp at 16,
+    body length = word at 30 + dword at 32. Footer: 24-byte name ("STEP 7"), checksum at 26."""
+    if len(data) < 72 or data[0:2] != b"\x70\x70":
+        raise S7Error("bloc S7 non reconnu (en-tete 70 70 absent)")
+    body_len = word_be(data, 30) + int.from_bytes(data[32:36], "big")
+    footer = data[36 + body_len:36 + body_len + 36]
+    if len(footer) < 28:
+        raise S7Error("bloc S7 tronque")
+    return {
+        "type": data[5], "numero": word_be(data, 6), "longueur": int.from_bytes(data[8:12], "big"),
+        "date": _block_date(data[16:22]), "corps": data[36:36 + body_len],
+        "nom": footer[:24].decode("latin-1").strip(" \x00"), "somme": word_be(footer, 26),
+    }
+
+
+SDB1_DIRECTION = {0x01: "entrees", 0x81: "sorties"}
+
+
+def parse_sdb1_modules(data: bytes) -> list:
+    """Module list of the central rack, from SDB 1 (decoded by comparing two bench configs).
+    Body: 24 bytes, module count (word), then 10 bytes per module: logical address (2),
+    28, 20 (?), 20 + slot, 00, bytes used, 01 input / 81 output, type code (2)."""
+    body = parse_block(data)["corps"]
+    if len(body) < 26:
+        raise S7Error("SDB 1 trop court")
+    count = word_be(body, 24)
+    mods = []
+    for i in range(count):
+        e = body[26 + 10 * i:36 + 10 * i]
+        if len(e) < 10 or e[2] != 0x28:
+            raise S7Error(f"SDB 1 : format inconnu a l'entree {i + 1} ({e.hex(' ')})")
+        logadr = word_be(e, 0)
+        cpu = logadr == 0x7FFF
+        mods.append({
+            "emplacement": e[4] & 0x1F, "adresse": logadr, "octets": e[6],
+            "type": "CPU" if cpu else SDB1_DIRECTION.get(e[7], f"code {e[7]:02X}"),
+            "code": word_be(e, 8), "brut": e.hex(" ").upper(),
+        })
+    return mods
+
+
 BLOCK_TYPES = {"OB": 0x38, "DB": 0x41, "SDB": 0x42, "FC": 0x43, "SFC": 0x44, "FB": 0x45, "SFB": 0x46}
 UPLOAD_BUFFER = 256 * 1024    # daveGetProgramBlock does not check the buffer size
 

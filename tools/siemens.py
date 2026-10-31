@@ -5,6 +5,8 @@
     py -3.14-32 tools/siemens.py diagnostic                   tampon de diagnostic (evenements dates)
     py -3.14-32 tools/siemens.py modules                      modules du rack 0 : emplacement, adresse, etat
     py -3.14-32 tools/siemens.py sauvegarder-config [DOSSIER] copie de la config materielle (SDB) de la CPU
+    py -3.14-32 tools/siemens.py config                       modules configures dans la CPU (HW Config)
+    python tools/siemens.py config --depuis DOSSIER           meme chose depuis une copie (sans CPU)
     py -3.14-32 tools/siemens.py lire                         MB0..MB3
     py -3.14-32 tools/siemens.py lire --zone DB --db 10 --debut 20 --nombre 2
 
@@ -17,7 +19,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from plc_online.protocols.s7 import AREAS, DEFAULT_DLL, S7300, S7Error, word_be  # noqa: E402
+from plc_online.protocols.s7 import (  # noqa: E402
+    AREAS, DEFAULT_DLL, S7300, S7Error, parse_block, parse_sdb1_modules, word_be)
 from plc_online.protocols.s7_modules import MODULES  # noqa: E402
 
 BLINK = {0: "", 1: " (clignote)", 2: " (clignote lentement)"}
@@ -99,8 +102,11 @@ def module_text(code):
             common = common[:-1]
     if len(names) > 1 and "x" in common:
         common = common[:common.rindex("x") + 1] + "..."
+    if len(common.strip()) < 4:
+        return f"code partage par {len(entries)} modules differents (ex. {names[0]})"
     orders = [o for o, _ in entries]
-    return f"{common.strip()} : " + ", ".join(o if i == 0 else o[5:] for i, o in enumerate(orders))
+    shown = ", ".join(o if i == 0 else o[5:] for i, o in enumerate(orders[:4]))
+    return f"{common.strip()} : {shown}" + (", ..." if len(orders) > 4 else "")
 
 
 def cmd_modules(plc, rack=0):
@@ -161,6 +167,35 @@ def cmd_sauvegarder_config(plc, folder=None):
     print(f"\nConfiguration copiee : {folder}/  ({len(numbers)} SDB, {total} octets, + resume.txt)")
 
 
+def cmd_config(sdb1: bytes, actual=None):
+    """Configured modules (SDB 1); with `actual` (SZL 0D91 list) also what is plugged in."""
+    info = parse_block(sdb1)
+    mods = parse_sdb1_modules(sdb1)
+    print(f"Configuration materielle (SDB 1, compilee le {info['date']}) :")
+    real = {m["emplacement"]: m["type_reel"] for m in actual or []}
+    differences = 0
+    for m in mods:
+        if m["type"] == "CPU":
+            print(f"   emplacement {m['emplacement']:<2}  CPU   type {m['code']:04X}")
+            continue
+        prefix = {"entrees": "EB", "sorties": "AB"}.get(m["type"], "B")
+        end = m["adresse"] + max(m["octets"], 1) - 1
+        addr = f"{prefix}{m['adresse']}" + (f"..{prefix}{end}" if end > m["adresse"] else "")
+        name = module_text(m["code"]) or "module inconnu"
+        print(f"   emplacement {m['emplacement']:<2}  {m['type']:<8} {addr:<12} type {m['code']:04X}  {name}")
+        if actual is not None:
+            got = real.get(m["emplacement"])
+            if got is None or got == 0:
+                print("      !! aucun module en place a cet emplacement")
+                differences += 1
+            elif got != m["code"]:
+                print(f"      !! en place : {got:04X}  {module_text(got) or 'module inconnu'}")
+                differences += 1
+    if actual is not None:
+        print("\n   Modules en place conformes a la configuration." if not differences else
+              f"\n   {differences} emplacement(s) different(s) de la configuration.")
+
+
 def cmd_lire(plc, a):
     data = plc.read_bytes(a.zone, a.debut, a.nombre, a.db)
     print("   octets :", " ".join(f"{x:02X}" for x in data))
@@ -171,7 +206,7 @@ def cmd_lire(plc, a):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("commande", nargs="?", default="lire", choices=["etat", "diagnostic", "modules", "sauvegarder-config", "lire"])
+    p.add_argument("commande", nargs="?", default="lire", choices=["etat", "diagnostic", "modules", "config", "sauvegarder-config", "lire"])
     p.add_argument("--mpi", type=int, default=2, help="adresse MPI de la CPU")
     p.add_argument("--rack", type=int, default=0)
     p.add_argument("--slot", type=int, default=2)
@@ -182,7 +217,15 @@ def main():
     p.add_argument("--dll", default=str(DEFAULT_DLL), help="chemin de libnodave.dll")
     p.add_argument("--trace", action="store_true", help="afficher les etapes de connexion")
     p.add_argument("--dossier", default=None, help="sauvegarder-config : dossier de destination")
+    p.add_argument("--depuis", default=None, help="config : lire SDB1.bin dans ce dossier (sans CPU)")
     a = p.parse_args()
+
+    if a.commande == "config" and a.depuis:
+        try:
+            cmd_config((Path(a.depuis) / "SDB1.bin").read_bytes())
+        except (OSError, S7Error) as e:
+            raise SystemExit(f"ECHEC : {e}")
+        return
 
     try:
         with S7300(a.mpi, a.rack, a.slot, dll=a.dll, log=print if a.trace else None) as plc:
@@ -192,6 +235,13 @@ def main():
                 cmd_diagnostic(plc)
             elif a.commande == "modules":
                 cmd_modules(plc, a.rack)
+            elif a.commande == "config":
+                actual = None
+                try:
+                    actual = plc.modules(a.rack)
+                except S7Error:
+                    pass
+                cmd_config(plc.upload_block("SDB", 1), actual)
             elif a.commande == "sauvegarder-config":
                 cmd_sauvegarder_config(plc, a.dossier)
             else:
