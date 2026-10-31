@@ -14,7 +14,6 @@
                                                               table de surveillance (valeurs en direct)
     py -3.14-32 tools/siemens.py surveiller --table machine.txt [--journal]
     py -3.14-32 tools/siemens.py ecrire MW10 123              forcer une valeur une fois (avec confirmation)
-    py -3.14-32 tools/siemens.py forcages                     forcages actifs (adresses et valeurs)
     py -3.14-32 tools/siemens.py lire                         MB0..MB3
     py -3.14-32 tools/siemens.py lire --zone DB --db 10 --debut 20 --nombre 2
 
@@ -439,7 +438,7 @@ def cmd_lire(plc, a):
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("commande", nargs="?", default="lire", choices=["etat", "diagnostic", "modules", "config", "sauvegarder-config",
-                                                         "sauvegarder-programme", "comparer", "surveiller", "ecrire", "forcages", "lire"])
+                                                         "sauvegarder-programme", "comparer", "surveiller", "ecrire", "lire"])
     p.add_argument("--mpi", type=int, default=2, help="adresse MPI de la CPU")
     p.add_argument("--rack", type=int, default=0)
     p.add_argument("--slot", type=int, default=2)
@@ -517,8 +516,6 @@ def main():
                 cmd_surveiller(plc, variables, a.periode, a.journal)
             elif a.commande == "ecrire":
                 cmd_ecrire(plc, variables[0], a.arguments[1])
-            elif a.commande == "forcages":
-                cmd_forcages(plc)
             else:
                 cmd_lire(plc, a)
     except (S7Error, AddressError, ValueError) as e:
