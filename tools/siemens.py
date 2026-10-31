@@ -2,6 +2,7 @@
 """S7-300 via le pilote S7ONLINE de STEP 7 (adaptateur USB MPI), sans SIMATIC Manager.
 
     py -3.14-32 tools/siemens.py etat                         identification, voyants, cle, protection
+    py -3.14-32 tools/siemens.py diagnostic                   tampon de diagnostic (evenements dates)
     py -3.14-32 tools/siemens.py lire                         MB0..MB3
     py -3.14-32 tools/siemens.py lire --zone DB --db 10 --debut 20 --nombre 2
 
@@ -70,6 +71,18 @@ def cmd_etat(plc):
         print(f"\nCle et protection non lues ({e})")
 
 
+def cmd_diagnostic(plc):
+    entries = plc.diagnostic_buffer()
+    if not entries:
+        print("Tampon de diagnostic vide.")
+        return
+    print(f"Tampon de diagnostic : {len(entries)} evenement(s), le plus recent en premier\n")
+    for i, e in enumerate(entries, 1):
+        text = e["texte"] or f"evenement non repertorie ({e['classe']})"
+        print(f"{i:3d}  {e['date']}  {e['id']:04X}  {text}")
+        print(f"     {'':23}       {e['classe']}, info {e['info']}")
+
+
 def cmd_lire(plc, a):
     data = plc.read_bytes(a.zone, a.debut, a.nombre, a.db)
     print("   octets :", " ".join(f"{x:02X}" for x in data))
@@ -80,7 +93,7 @@ def cmd_lire(plc, a):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("commande", nargs="?", default="lire", choices=["etat", "lire"])
+    p.add_argument("commande", nargs="?", default="lire", choices=["etat", "diagnostic", "lire"])
     p.add_argument("--mpi", type=int, default=2, help="adresse MPI de la CPU")
     p.add_argument("--rack", type=int, default=0)
     p.add_argument("--slot", type=int, default=2)
@@ -96,6 +109,8 @@ def main():
         with S7300(a.mpi, a.rack, a.slot, dll=a.dll, log=print if a.trace else None) as plc:
             if a.commande == "etat":
                 cmd_etat(plc)
+            elif a.commande == "diagnostic":
+                cmd_diagnostic(plc)
             else:
                 cmd_lire(plc, a)
     except S7Error as e:

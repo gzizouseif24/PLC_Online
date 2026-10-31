@@ -36,6 +36,11 @@ class FakeNodave:
             (0x0232, 4): szl(0x0232, 4, [struct.pack(">11H", 4, 1, 0, 1, 2, 0, 1, 0x1234, 0x5678, 0x9ABC, 0xDEF0)
                                           + bytes(16)]),
         }
+        # two diagnostic buffer entries, most recent first: DP station failure, then STOP by switch
+        self.lists[(0x00A0, 0)] = szl(0x00A0, 0, [
+            bytes.fromhex("39C4 C4 01 0001 0000 0003 0000") + bytes.fromhex("26 10 31 09 15 42 12 35"),
+            bytes.fromhex("4303 FF 84 4304 0000 0000 0000") + bytes.fromhex("26 10 31 08 59 07 00 05"),
+        ])
         self.led_state = {1: (0, 0), 4: (1, 0), 5: (0, 0), 6: (0, 0), 8: (0, 0), 11: (0, 0)}  # no BUS2F
         self.answer_len = 0
         self.calls = []
@@ -134,6 +139,21 @@ class SzlTests(unittest.TestCase):
         self.assertEqual(p["somme_programme"], (0x9ABC, 0xDEF0))
         self.assertEqual(p["somme_config_materielle"], (0x1234, 0x5678))
 
+    def test_diagnostic_buffer(self):
+        d = self.plc.diagnostic_buffer()
+        self.assertEqual(len(d), 2)
+        self.assertEqual(d[0]["texte"], "Distributed I/Os: station failure, entering state")
+        self.assertEqual(d[0]["date"], "31/10/2026 09:15:42.123")
+        self.assertTrue(d[0]["entrant"])
+        self.assertEqual(d[1]["texte"], "STOP caused by stop switch being activated")
+        self.assertEqual(d[1]["classe"], "changement de mode")
+
+    def test_unknown_event_and_old_dates(self):
+        from plc_online.protocols.s7 import parse_date_and_time, parse_diag_entry
+        self.assertEqual(parse_date_and_time(bytes.fromhex("98 01 02 03 04 05 99 90")), "02/01/1998 03:04:05.999")
+        e = parse_diag_entry(bytes.fromhex("A123" + "00" * 10) + bytes.fromhex("26 10 31 00 00 00 00 00"))
+        self.assertEqual((e["texte"], e["classe"]), ("", "evenement utilisateur libre"))
+
     def test_unsupported_list_raises(self):
         with self.assertRaisesRegex(S7Error, "SZL 0424"):
             self.plc.read_szl(0x0424, 0)
@@ -162,6 +182,14 @@ class SiemensCliTests(unittest.TestCase):
         self.assertIn("Cle        : RUN-P", out)
         self.assertIn("sans mot de passe", out)
         self.assertIn("programme 9ABC-DEF0", out)
+
+    def test_diagnostic_command(self):
+        out = io.StringIO()
+        with redirect_stdout(out):
+            self.cli.cmd_diagnostic(connected(self.fake))
+        out = out.getvalue()
+        self.assertIn("2 evenement(s)", out)
+        self.assertIn("31/10/2026 09:15:42.123  39C4  Distributed I/Os: station failure, entering state", out)
 
     def test_etat_shows_faults_and_forces(self):
         self.fake.led_state.update({1: (1, 0), 6: (1, 0), 11: (0, 1)})

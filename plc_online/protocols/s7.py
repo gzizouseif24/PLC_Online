@@ -101,6 +101,32 @@ def parse_led(records: list) -> tuple:
     return records[0][2], records[0][3]
 
 
+def _bcd(b: int) -> int:
+    return (b >> 4) * 10 + (b & 0x0F)
+
+
+def parse_date_and_time(b: bytes) -> str:
+    """S7 DATE_AND_TIME, 8 bytes BCD: year, month, day, hour, minute, second, ms (3 digits), weekday."""
+    y = _bcd(b[0])
+    year = 1900 + y if y >= 90 else 2000 + y
+    ms = _bcd(b[6]) * 10 + (b[7] >> 4)
+    return f"{_bcd(b[2]):02d}/{_bcd(b[1]):02d}/{year} {_bcd(b[3]):02d}:{_bcd(b[4]):02d}:{_bcd(b[5]):02d}.{ms:03d}"
+
+
+def parse_diag_entry(r: bytes) -> dict:
+    """Diagnostic buffer entry, SZL 0x00A0 (§34.29): event ID, 5 words of info, DATE_AND_TIME."""
+    from .s7_events import EVENT_CLASSES, event_text
+    event = word_be(r, 0)
+    return {
+        "id": event,
+        "classe": EVENT_CLASSES.get(event >> 12, f"classe {event >> 12:X}"),
+        "texte": event_text(event),
+        "entrant": bool(event >> 8 & 1),      # bit 8: event entering (1) / leaving (0) state
+        "info": r[2:12].hex(" ").upper(),
+        "date": parse_date_and_time(r[12:20]),
+    }
+
+
 KEY_SWITCH = {1: "RUN", 2: "RUN-P", 3: "STOP", 4: "MRES", 0: "inconnue"}
 
 
@@ -238,6 +264,10 @@ class S7300:
 
     def protection(self) -> dict:
         return parse_protection(self.read_szl(0x0232, 4)[1])
+
+    def diagnostic_buffer(self) -> list:
+        """Diagnostic buffer entries, most recent first (S7-300: as many as set in HW Config)."""
+        return [parse_diag_entry(r) for r in self.read_szl(0x00A0, 0)[1] if len(r) >= 20]
 
     def close(self):
         if self.nd is None:
