@@ -389,6 +389,11 @@ def show(var, raw):
     return var.decode(raw) if raw is not None else "?"
 
 
+def show_new(var, data):
+    """Value to write as text (a bit is encoded as 0 / 1, not inside its byte)."""
+    return str(data[0]) if var.bit is not None else var.decode(data)
+
+
 def cmd_ecrire(plc, pairs, hold=False, period=0.2, loops=None):
     """Modify one or more variables, like "Modify" in a STEP 7 watch table.
     pairs: [(Var, value text)]. hold=True writes again every `period` s until Ctrl+C
@@ -398,7 +403,7 @@ def cmd_ecrire(plc, pairs, hold=False, period=0.2, loops=None):
     old = plc.read_vars(variables)
     running = bool(plc.leds().get("RUN", (0, 0))[0])
     for v in variables:
-        print(f"   {v.name:<14} actuel {show(v, old[v]):>14}   ->  {show(v, new[v])}")
+        print(f"   {v.name:<14} actuel {show(v, old[v]):>14}   ->  {show_new(v, new[v])}")
     if running:
         if any(v.area in ("I", "Q") for v in variables):
             print("   CPU en RUN : les entrees sont relues sur le terrain et les sorties recalculees par le\n"
@@ -415,7 +420,7 @@ def cmd_ecrire(plc, pairs, hold=False, period=0.2, loops=None):
             plc.write_var(v, new[v])
         back = plc.read_vars(variables)
         for v in variables:
-            ok = back[v] is not None and v.decode(back[v]) == v.decode(new[v])
+            ok = back[v] is not None and v.decode(back[v]) == show_new(v, new[v])
             print(f"   Relu : {v.name:<14} = {show(v, back[v]):>14}   {'OK' if ok else '!! DIFFERENT (reecrit par le programme ?)'}")
         if undo:
             print(f"Pour revenir en arriere : py -3.14-32 tools/siemens.py ecrire {undo}")
@@ -425,7 +430,7 @@ def cmd_ecrire(plc, pairs, hold=False, period=0.2, loops=None):
     try:
         while loops is None or n < loops:
             back = plc.read_vars(variables)
-            changed = [v for v in variables if back[v] is not None and v.decode(back[v]) != v.decode(new[v])]
+            changed = [v for v in variables if back[v] is not None and v.decode(back[v]) != show_new(v, new[v])]
             if changed and n:
                 overwritten += 1
             for v in variables:

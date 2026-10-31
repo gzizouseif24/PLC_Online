@@ -160,6 +160,8 @@ class PlcTests(unittest.TestCase):
         self.assertEqual(self.fake.zone(0x83, 0)[12], 0x09)
         self.assertIn("MW10           =            100   OK", out.getvalue())
         self.assertIn("ecrire MW10 42 M12.3 0", out.getvalue())
+        self.assertIn("M12.3          actuel              0   ->  1", out.getvalue())
+        self.assertNotIn("DIFFERENT", out.getvalue())
         self.assertIn("RUN", out.getvalue())
 
     def test_ecrire_cancelled(self):
