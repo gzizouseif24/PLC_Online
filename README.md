@@ -110,6 +110,8 @@ py -3.14-32 tools/siemens.py modules                          # modules of rack 
 py -3.14-32 tools/siemens.py sauvegarder-config               # copy the HW config (all SDB blocks) to a folder
 py -3.14-32 tools/siemens.py config                           # configured modules (HW Config) vs modules in the rack
 python tools/siemens.py config --depuis config_s7_...          # same, from a backup folder, no CPU needed
+py -3.14-32 tools/siemens.py sauvegarder-programme            # copy every block (OB FB FC DB SDB) to a folder
+py -3.14-32 tools/siemens.py comparer programme_s7_...        # has the program in the CPU changed since that copy?
 py -3.14-32 tools/siemens.py lire                             # MB0..MB3
 py -3.14-32 tools/siemens.py lire --zone DB --db 10 --debut 20 --nombre 2
 ```

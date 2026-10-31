@@ -8,7 +8,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 
 from plc_online.protocols.s7 import (
-    DEFAULT_DLL, S7300, S7Error, load_dll, parse_block, parse_identity, parse_protection, parse_sdb1_modules,
+    DEFAULT_DLL, S7300, S7Error, compare_blocks, load_dll, parse_block, parse_identity, parse_protection, parse_sdb1_modules,
     parse_szl, word_be)
 
 
@@ -251,6 +251,40 @@ class SdbTests(unittest.TestCase):
             parse_block(b"\x00" * 100)
 
 
+def make_block(btype, number, body, day=0x3D1C, ms=0x0251B448):
+    """S7 block laid out like the bench uploads: header, body, footer with "STEP 7"."""
+    total = 72 + len(body)
+    head = (b"\x70\x70\x03\x02\x07" + bytes([btype]) + struct.pack(">HI", number, total) + b"\x80\x00\x00\x00"
+            + struct.pack(">IH", ms, day) + bytes(6) + struct.pack(">HHI", 0, 0, len(body)))
+    foot = b"STEP 7".ljust(24) + b"\x00\x00\x12\x34" + bytes(8)
+    return head + body + foot
+
+
+class ProgramTests(unittest.TestCase):
+    def setUp(self):
+        self.ref = {("OB", 1): make_block(0x08, 1, b"\x01" * 20), ("FC", 5): make_block(0x0C, 5, b"\x02" * 10),
+                    ("DB", 10): make_block(0x0A, 10, b"\x00" * 8), ("SDB", 0): make_block(0x0B, 0, b"\x03" * 4)}
+
+    def test_block_dates_and_padding(self):
+        data = self.ref[("OB", 1)] + bytes(50)          # uploads can carry zero padding
+        b = parse_block(data)
+        self.assertEqual((b["numero"], b["longueur"], len(b["corps"]), b["somme"]), (1, 92, 20, 0x1234))
+        self.assertEqual(b["date"], "2026-10-31 10:48:29")
+
+    def test_identical(self):
+        self.assertEqual(compare_blocks(self.ref, dict(self.ref)), [])
+
+    def test_changes(self):
+        now = dict(self.ref)
+        now[("FC", 5)] = make_block(0x0C, 5, b"\x02" * 12, day=0x3D1D)
+        now[("DB", 10)] = make_block(0x0A, 10, b"\x07" * 8)    # same header, other values
+        del now[("SDB", 0)]
+        now[("FB", 2)] = make_block(0x0E, 2, b"\x05")
+        got = [(k, n, v) for k, n, v, _ in compare_blocks(self.ref, now)]
+        self.assertEqual(got, [("FB", 2, "ajoute"), ("FC", 5, "modifie"), ("DB", 10, "valeurs"),
+                               ("SDB", 0, "supprime")])
+
+
 class SiemensCliTests(unittest.TestCase):
     def setUp(self):
         path = Path(__file__).resolve().parents[1] / "tools" / "siemens.py"
@@ -310,6 +344,25 @@ class SiemensCliTests(unittest.TestCase):
         with redirect_stdout(out):
             self.cli.cmd_config(sdb1, actual)
         self.assertIn("conformes a la configuration", out.getvalue())
+
+    def test_sauvegarder_programme_then_comparer(self):
+        import tempfile
+        self.fake.blocks = {0x38: {1: make_block(0x08, 1, b"\x01" * 20)}, 0x41: {10: make_block(0x0A, 10, bytes(8))},
+                            0x42: {0: make_block(0x0B, 0, b"\x03" * 4)}}
+        with tempfile.TemporaryDirectory() as d:
+            out = io.StringIO()
+            with redirect_stdout(out):
+                self.cli.cmd_sauvegarder_programme(connected(self.fake), Path(d) / "p")
+            files = sorted(f.name for f in (Path(d) / "p").iterdir())
+            ref = self.cli.load_program(Path(d) / "p")
+        self.assertEqual(files, ["DB10.bin", "OB1.bin", "SDB0.bin", "programme.txt"])
+        self.assertIn("1 OB, 1 DB, 1 SDB", out.getvalue())
+        self.fake.blocks[0x41][10] = make_block(0x0A, 10, b"\x09" * 8)
+        out = io.StringIO()
+        with redirect_stdout(out):
+            self.cli.cmd_comparer(ref, self.cli.upload_program(connected(self.fake), progress=False), "p", "CPU")
+        self.assertIn("PROGRAMME IDENTIQUE", out.getvalue())
+        self.assertIn("1 DB avec d'autres valeurs actuelles", out.getvalue())
 
     def test_sauvegarder_config(self):
         import tempfile

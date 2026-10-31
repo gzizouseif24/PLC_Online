@@ -7,6 +7,9 @@
     py -3.14-32 tools/siemens.py sauvegarder-config [DOSSIER] copie de la config materielle (SDB) de la CPU
     py -3.14-32 tools/siemens.py config                       modules configures dans la CPU (HW Config)
     python tools/siemens.py config --depuis DOSSIER           meme chose depuis une copie (sans CPU)
+    py -3.14-32 tools/siemens.py sauvegarder-programme        copie de tous les blocs (OB FB FC DB SDB)
+    py -3.14-32 tools/siemens.py comparer DOSSIER             le programme de la CPU a-t-il change ?
+    python tools/siemens.py comparer DOSSIER --depuis AUTRE   compare deux copies (sans CPU)
     py -3.14-32 tools/siemens.py lire                         MB0..MB3
     py -3.14-32 tools/siemens.py lire --zone DB --db 10 --debut 20 --nombre 2
 
@@ -15,12 +18,13 @@ Python 32 bits obligatoire, SIMATIC Manager ferme, interface PG/PC = USB.S7USB.1
 Lecture seule.
 """
 import argparse
+import re
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from plc_online.protocols.s7 import (  # noqa: E402
-    AREAS, DEFAULT_DLL, S7300, S7Error, parse_block, parse_sdb1_modules, word_be)
+    AREAS, DEFAULT_DLL, PROGRAM_KINDS, S7300, S7Error, compare_blocks, parse_block, parse_sdb1_modules, word_be)
 from plc_online.protocols.s7_modules import MODULES  # noqa: E402
 
 BLINK = {0: "", 1: " (clignote)", 2: " (clignote lentement)"}
@@ -196,6 +200,84 @@ def cmd_config(sdb1: bytes, actual=None):
               f"\n   {differences} emplacement(s) different(s) de la configuration.")
 
 
+BLOCK_FILE = re.compile(r"^(OB|FB|FC|DB|SDB)(\d+)\.bin$", re.IGNORECASE)
+
+
+def upload_program(plc, progress=True):
+    """{("OB", 1): bytes, ...} for every block of PROGRAM_KINDS in the CPU."""
+    blocks = {}
+    for kind in PROGRAM_KINDS:
+        numbers = plc.list_blocks(kind)
+        for i, n in enumerate(numbers, 1):
+            if progress:
+                print(f"\r   {kind:<3} {i}/{len(numbers)}   ", end="", flush=True)
+            blocks[(kind, n)] = plc.upload_block(kind, n)
+    if progress:
+        print("\r" + " " * 30 + "\r", end="")
+    return blocks
+
+
+def load_program(folder):
+    blocks = {}
+    for f in Path(folder).iterdir():
+        m = BLOCK_FILE.match(f.name)
+        if m:
+            blocks[(m.group(1).upper(), int(m.group(2)))] = f.read_bytes()
+    if not blocks:
+        raise S7Error(f"aucun bloc (OB1.bin, DB10.bin...) dans {folder}")
+    return blocks
+
+
+def block_line(kind, n, data):
+    try:
+        b = parse_block(data)
+        return f"{kind:<3} {n:<5} {b['longueur']:6d} octets  {b['date']}  somme {b['somme']:04X}"
+    except S7Error:
+        return f"{kind:<3} {n:<5} {len(data):6d} octets  (format non reconnu)"
+
+
+def cmd_sauvegarder_programme(plc, folder=None):
+    """Full copy of the CPU: every OB, FB, FC, DB and SDB, as uploaded ("upload to PG")."""
+    import time
+    blocks = upload_program(plc)
+    if not blocks:
+        print("Aucun bloc dans la CPU.")
+        return
+    folder = Path(folder or f"programme_s7_{time.strftime('%Y%m%d_%H%M%S')}")
+    folder.mkdir(parents=True, exist_ok=True)
+    lines = []
+    for (kind, n), data in sorted(blocks.items(), key=lambda kv: (PROGRAM_KINDS.index(kv[0][0]), kv[0][1])):
+        (folder / f"{kind}{n}.bin").write_bytes(data)
+        lines.append(block_line(kind, n, data))
+    with open(folder / "programme.txt", "w", encoding="utf-8") as f:
+        f.write(f"date : {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+        try:
+            info = plc.identity()
+            f.write(f"CPU  : {info.get('reference', '?')} firmware {info.get('firmware', '?')}\n")
+        except S7Error:
+            pass
+        f.write("\n".join(lines) + "\n")
+    counts = ", ".join(f"{sum(1 for k in blocks if k[0] == kind)} {kind}" for kind in PROGRAM_KINDS
+                       if any(k[0] == kind for k in blocks))
+    print(f"Programme copie : {folder}/  ({counts}, {sum(map(len, blocks.values()))} octets, + programme.txt)")
+
+
+def cmd_comparer(ref, now, ref_name, now_name):
+    diffs = compare_blocks(ref, now)
+    print(f"Reference : {ref_name} ({len(ref)} blocs)\nCompare   : {now_name} ({len(now)} blocs)\n")
+    changes = [d for d in diffs if d[2] != "valeurs"]
+    if not changes:
+        print("   PROGRAMME IDENTIQUE a la reference.")
+    else:
+        print(f"   !! {len(changes)} bloc(s) different(s) :")
+        for kind, n, verdict, detail in changes:
+            print(f"      {kind:<3} {n:<5} {verdict:<9} {detail}")
+    values = [d for d in diffs if d[2] == "valeurs"]
+    if values:
+        print(f"\n   {len(values)} DB avec d'autres valeurs actuelles (normal en marche) : "
+              + ", ".join(f"DB{n}" for _, n, _, _ in values))
+
+
 def cmd_lire(plc, a):
     data = plc.read_bytes(a.zone, a.debut, a.nombre, a.db)
     print("   octets :", " ".join(f"{x:02X}" for x in data))
@@ -206,7 +288,8 @@ def cmd_lire(plc, a):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("commande", nargs="?", default="lire", choices=["etat", "diagnostic", "modules", "config", "sauvegarder-config", "lire"])
+    p.add_argument("commande", nargs="?", default="lire", choices=["etat", "diagnostic", "modules", "config", "sauvegarder-config",
+                                                         "sauvegarder-programme", "comparer", "lire"])
     p.add_argument("--mpi", type=int, default=2, help="adresse MPI de la CPU")
     p.add_argument("--rack", type=int, default=0)
     p.add_argument("--slot", type=int, default=2)
@@ -217,8 +300,18 @@ def main():
     p.add_argument("--dll", default=str(DEFAULT_DLL), help="chemin de libnodave.dll")
     p.add_argument("--trace", action="store_true", help="afficher les etapes de connexion")
     p.add_argument("--dossier", default=None, help="sauvegarder-config : dossier de destination")
-    p.add_argument("--depuis", default=None, help="config : lire SDB1.bin dans ce dossier (sans CPU)")
+    p.add_argument("--depuis", default=None, help="config / comparer : lire ce dossier au lieu de la CPU")
+    p.add_argument("reference", nargs="?", default=None, help="comparer : dossier de reference")
     a = p.parse_args()
+
+    if a.commande == "comparer" and not a.reference:
+        p.error("comparer : donner le dossier de reference (copie faite avec sauvegarder-programme)")
+    if a.commande == "comparer" and a.depuis:
+        try:
+            cmd_comparer(load_program(a.reference), load_program(a.depuis), a.reference, a.depuis)
+        except (OSError, S7Error) as e:
+            raise SystemExit(f"ECHEC : {e}")
+        return
 
     if a.commande == "config" and a.depuis:
         try:
@@ -242,6 +335,11 @@ def main():
                 except S7Error:
                     pass
                 cmd_config(plc.upload_block("SDB", 1), actual)
+            elif a.commande == "sauvegarder-programme":
+                cmd_sauvegarder_programme(plc, a.dossier or a.reference)
+            elif a.commande == "comparer":
+                ref = load_program(a.reference)
+                cmd_comparer(ref, upload_program(plc), a.reference, "CPU")
             elif a.commande == "sauvegarder-config":
                 cmd_sauvegarder_config(plc, a.dossier)
             else:

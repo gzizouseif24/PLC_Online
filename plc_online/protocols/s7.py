@@ -191,17 +191,19 @@ def _block_date(b: bytes) -> str:
 
 def parse_block(data: bytes) -> dict:
     """Uploaded S7 block: 36-byte header, body, 36-byte footer (bench SDBs, 31/10/2026).
-    Header: 70 70, block type at 5 (0B = SDB), number at 6, total length at 8, timestamp at 16,
-    body length = word at 30 + dword at 32. Footer: 24-byte name ("STEP 7"), checksum at 26."""
+    Header: 70 70, block type at 5 (08 OB, 0A DB, 0B SDB, 0C FC, 0E FB), number at 6, total
+    length at 8 (the upload can be longer: zero padding), code timestamp at 16, interface
+    timestamp at 22. Footer: 24-byte name ("STEP 7" or author / family / name), checksum at 26."""
     if len(data) < 72 or data[0:2] != b"\x70\x70":
         raise S7Error("bloc S7 non reconnu (en-tete 70 70 absent)")
-    body_len = word_be(data, 30) + int.from_bytes(data[32:36], "big")
-    footer = data[36 + body_len:36 + body_len + 36]
-    if len(footer) < 28:
-        raise S7Error("bloc S7 tronque")
+    total = int.from_bytes(data[8:12], "big")
+    if not 72 <= total <= len(data):
+        raise S7Error(f"bloc S7 tronque ({len(data)} octets, {total} annonces)")
+    footer = data[total - 36:total]
     return {
-        "type": data[5], "numero": word_be(data, 6), "longueur": int.from_bytes(data[8:12], "big"),
-        "date": _block_date(data[16:22]), "corps": data[36:36 + body_len],
+        "type": data[5], "numero": word_be(data, 6), "longueur": total,
+        "date": _block_date(data[16:22]), "date_interface": _block_date(data[22:28]),
+        "corps": data[36:total - 36],
         "nom": footer[:24].decode("latin-1").strip(" \x00"), "somme": word_be(footer, 26),
     }
 
@@ -230,6 +232,38 @@ def parse_sdb1_modules(data: bytes) -> list:
             "code": word_be(e, 8), "brut": e.hex(" ").upper(),
         })
     return mods
+
+
+def compare_blocks(ref: dict, now: dict) -> list:
+    """Compare two block sets {("OB", 1): bytes}. Returns (kind, number, verdict, detail) for
+    every block that is not identical. A DB with the same header but other bytes only holds
+    other current values: reported apart, it is not a program change."""
+    out = []
+    for key in sorted(set(ref) | set(now), key=lambda k: (PROGRAM_KINDS.index(k[0]) if k[0] in PROGRAM_KINDS else 9, k[1])):
+        a, b = ref.get(key), now.get(key)
+        if a == b:
+            continue
+        if a is None:
+            out.append((*key, "ajoute", ""))
+            continue
+        if b is None:
+            out.append((*key, "supprime", ""))
+            continue
+        try:
+            ia, ib = parse_block(a), parse_block(b)
+        except S7Error:
+            out.append((*key, "modifie", "format non reconnu"))
+            continue
+        same_header = (ia["longueur"], ia["date"], ia["date_interface"]) == \
+                      (ib["longueur"], ib["date"], ib["date_interface"])
+        if key[0] == "DB" and same_header:
+            out.append((*key, "valeurs", "valeurs actuelles differentes, structure identique"))
+        else:
+            out.append((*key, "modifie", f"{ia['date']} -> {ib['date']}, {ia['longueur']} -> {ib['longueur']} octets"))
+    return out
+
+
+PROGRAM_KINDS = ["OB", "FB", "FC", "DB", "SDB"]     # what a full program backup holds
 
 
 BLOCK_TYPES = {"OB": 0x38, "DB": 0x41, "SDB": 0x42, "FC": 0x43, "SFC": 0x44, "FB": 0x45, "SFB": 0x46}
