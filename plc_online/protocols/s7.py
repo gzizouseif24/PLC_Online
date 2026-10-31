@@ -132,13 +132,21 @@ IO_KIND = {0xB4: "entrees", 0xB5: "sorties", 0xFF: "interface DP externe"}
 
 def parse_module(r: bytes) -> dict:
     """Module status record, SZL 0x0D91 (§34.23): adr1, adr2, logadr, solltyp, isttyp,
-    reserved, eastat, ber_bgbr (8 words)."""
+    reserved, eastat, ber_bgbr (8 words).
+
+    The manual says solltyp / isttyp are for PROFINET only, but the bench CPU 315-2AF03 fills
+    them for its central rack: configured type vs type of the module actually plugged in.
+    """
     adr1, adr2, logadr, eastat, ber = word_be(r, 0), word_be(r, 2), word_be(r, 4), word_be(r, 12), word_be(r, 14)
+    expected, actual = word_be(r, 6), word_be(r, 8)
+    mismatch = logadr != 0x7FFF and expected and actual and expected != actual
     status = []
+    if mismatch:
+        status.append("TYPE DIFFERENT DE LA CONFIG")
     if eastat & 0x01:
         status.append("ERREUR (alarme de diagnostic)")
     if eastat & 0x04:
-        status.append("ABSENT")
+        status.append("non disponible" if eastat & 0x02 else "ABSENT")
     if eastat & 0x08:
         status.append("desactive")
     if eastat & 0x10:
@@ -149,6 +157,7 @@ def parse_module(r: bytes) -> dict:
         "rack": adr1, "emplacement": adr2 >> 8, "adresse": logadr,
         "type": "CPU" if logadr == 0x7FFF else IO_KIND.get(eastat >> 8, f"code {eastat >> 8:02X}"),
         "etat": ", ".join(status), "present": bool(eastat & 0x02), "brut": r.hex(" ").upper(),
+        "type_config": expected, "type_reel": actual, "different": bool(mismatch),
         "largeur": ber & 0x07,
     }
 

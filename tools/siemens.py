@@ -89,11 +89,15 @@ def cmd_modules(plc, rack=0):
     if not mods:
         print(f"Aucun module dans le rack {rack}.")
         return
-    print(f"Rack {rack} :")
+    print(f"Rack {rack} :   (type = code du module : configure dans la CPU / reellement present)")
     for m in mods:
         addr = "" if m["type"] == "CPU" else f"adresse {m['adresse']}"
         alarm = "  " if m["etat"] == "ok" else "!!"
-        print(f"   {alarm} emplacement {m['emplacement']:<2}  {m['type']:<8} {addr:<13} {m['etat']}")
+        codes = f"{m['type_config']:04X} / {m['type_reel']:04X}"
+        print(f"   {alarm} emplacement {m['emplacement']:<2}  {m['type']:<8} {addr:<13} type {codes}   {m['etat']}")
+    if any(m["different"] for m in mods):
+        print("\n   La configuration materielle chargee dans la CPU ne correspond pas aux modules en place :")
+        print("   corriger HW Config (ou les modules) puis recharger la configuration.")
 
 
 def cmd_lire(plc, a):
