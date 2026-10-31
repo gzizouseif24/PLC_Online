@@ -18,6 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from plc_online.protocols.s7 import AREAS, DEFAULT_DLL, S7300, S7Error, word_be  # noqa: E402
+from plc_online.protocols.s7_modules import module_name  # noqa: E402
 
 BLINK = {0: "", 1: " (clignote)", 2: " (clignote lentement)"}
 LED_TEXT = {
@@ -96,6 +97,12 @@ def cmd_modules(plc, rack=0):
         alarm = "  " if m["etat"] == "ok" else "!!"
         codes = f"{m['type_config']:04X} / {m['type_reel']:04X}"
         print(f"   {alarm} emplacement {m['emplacement']:<2}  {m['type']:<8} {addr:<13} type {codes}   {m['etat']}")
+        if m["type"] != "CPU":
+            conf, real = module_name(m["type_config"]), module_name(m["type_reel"])
+            if real:
+                print(f"         en place  : {real}")
+            if conf and m["different"]:
+                print(f"         configure : {conf}")
     if any(m["different"] for m in mods):
         print("\n   La configuration materielle chargee dans la CPU ne correspond pas aux modules en place :")
         print("   corriger HW Config (ou les modules) puis recharger la configuration.")
