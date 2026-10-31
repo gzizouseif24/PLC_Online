@@ -12,7 +12,7 @@ Work log: [docs/journal-2026-10-29.md](docs/journal-2026-10-29.md), [docs/journa
 | Brand | Protocol | Status |
 |---|---|---|
 | Panasonic FP0R | MEWTOCOL-COM, serial tool port | `tools/panasonic.py`: fast counters, DT change scan, write one DT, program dump |
-| Siemens S7-300 | S7 via S7ONLINE (libnodave, 32-bit Python) | `tools/siemens.py`: read (Windows only) |
+| Siemens S7-300 | S7 via S7ONLINE (libnodave, 32-bit Python) | `tools/siemens.py` (Windows only): CPU status, diagnostic buffer, modules configured vs plugged in with names, HW config and CPU parameters, program backup and compare, watch table, modify (tested on a 315-2DP) |
 | Omron CJ1M | Host Link (C-mode + FINS), peripheral port | `tools/omron.py`: status with I/O cards, read, monitor, error log, PLC Setup, write, mode, data and program backup (tested on a CJ1M-CPU11); data restore to confirm |
 | Schneider Modicon | Modbus RTU (serial) / Modbus TCP | `tools/modicon.py`: read, not yet tested on a PLC |
 | Schneider TSX Micro / Premium | Uni-Telway, TER port (PCX 1031) | `tools/tsx.py`: status, read, monitor, write, RUN/STOP, program and data backup/restore (tested on TSX 3721) |
@@ -104,20 +104,32 @@ Windows only. What the PC needs:
 4. **SIMATIC Manager closed**: only one program can own the interface.
 
 ```
-py -3.14-32 tools/siemens.py etat                             # CPU, versions, LEDs (mode, faults, forces), key switch, protection
+py -3.14-32 tools/siemens.py etat                             # CPU name, firmware, mode, fault LEDs (FRCE = forces), key switch, protection, checksums
 py -3.14-32 tools/siemens.py diagnostic                       # diagnostic buffer: dated events with their text
-py -3.14-32 tools/siemens.py modules                          # modules of rack 0: slot, address, state
-py -3.14-32 tools/siemens.py sauvegarder-config               # copy the HW config (all SDB blocks) to a folder
-py -3.14-32 tools/siemens.py config                           # configured modules (HW Config) vs modules in the rack
+py -3.14-32 tools/siemens.py modules                          # rack 0: module configured vs plugged in, with names, state
+py -3.14-32 tools/siemens.py config                           # HW config: CPU parameters + configured modules and addresses, vs rack
 python tools/siemens.py config --depuis config_s7_...          # same, from a backup folder, no CPU needed
+py -3.14-32 tools/siemens.py sauvegarder-config               # copy the HW config (all SDB blocks) to a folder
 py -3.14-32 tools/siemens.py sauvegarder-programme            # copy every block (OB FB FC DB SDB) to a folder
-py -3.14-32 tools/siemens.py comparer programme_s7_...        # has the program in the CPU changed since that copy?
-py -3.14-32 tools/siemens.py surveiller E0.0 AW4 MW10:hex DB10.DBD4:real T1 Z2   # watch table, live
+py -3.14-32 tools/siemens.py comparer programme_s7_...        # which blocks changed in the CPU since that copy
+py -3.14-32 tools/siemens.py surveiller EB0:bin AB4 MW10 DB10.DBD4:real T1 Z2   # watch table, live
 py -3.14-32 tools/siemens.py surveiller --table exemples/table_s7_banc.txt [--journal]
-py -3.14-32 tools/siemens.py ecrire MW10 123 M0.1 1 [--maintenir]   # modify one or more values (--maintenir: keep writing until Ctrl+C)
-py -3.14-32 tools/siemens.py lire                             # MB0..MB3
-py -3.14-32 tools/siemens.py lire --zone DB --db 10 --debut 20 --nombre 2
+py -3.14-32 tools/siemens.py ecrire MW10 123 M0.1 1           # modify one or more values (confirmation, read back, undo command)
+py -3.14-32 tools/siemens.py ecrire M0.1 1 --maintenir        # keep writing until Ctrl+C, then offer the old values back
+py -3.14-32 tools/siemens.py lire --zone DB --db 10 --debut 20 --nombre 2   # raw bytes
 ```
+
+Watch table and modify:
+- Addresses: `E0.0` / `I0.0`, `EB0` `EW0` `ED0`, `A4.1` / `Q4.1`, `AB4`..., `M10.3` `MB10` `MW10` `MD10`,
+  `DB10.DBX2.1` `DB10.DBB2` `DB10.DBW2` `DB10.DBD2`, `T5`, `Z2` / `C2`.
+- Formats after `:`: `hex`, `bin`, `real`, `ud` (unsigned), `char`; timers show S5TIME, counters BCD.
+- Table file: one address per line, then a label (`exemples/table_s7_banc.txt`). `--journal` prints only
+  the changes with their time (intermittent faults).
+- Modify writes once (like "Modify" in a STEP 7 watch table). In RUN the program can overwrite it, and
+  inputs / outputs are rewritten every cycle. Forces are not supported (only shown by the FRCE LED).
+
+Module and CPU names come from tables generated from a STEP 7 installation
+(`research/siemens/extraire_modules.py`, `research/siemens/extraire_noms.py`).
 
 `--trace` shows the connection steps and the raw answers. Plan for the next steps: [docs/s7-300.md](docs/s7-300.md).
 
