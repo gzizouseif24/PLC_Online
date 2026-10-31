@@ -263,6 +263,45 @@ def compare_blocks(ref: dict, now: dict) -> list:
     return out
 
 
+def parse_sdb0_records(data: bytes) -> dict:
+    """SDB 0 = CPU parameters. The body starts with dword-at-32 bytes of records
+    [length][id][data...] (length counts both header bytes); then a table not decoded yet.
+    A record is only present when its tab differs from the CPU defaults (bench 31/10/2026)."""
+    block = parse_block(data)
+    body, n = block["corps"], int.from_bytes(data[32:36], "big")
+    records, i = {}, 0
+    while i + 2 <= min(n, len(body)):
+        size = body[i]
+        if size < 2:
+            break
+        records[body[i + 1]] = body[i + 2:i + size]
+        i += size
+    return records
+
+
+def parse_cpu_parameters(data: bytes) -> dict:
+    """Known SDB 0 records, decoded by changing one HW Config setting at a time (bench 31/10):
+    02 cycle (comm load %, scan cycle monitoring ms), 06 retentive memory (MB, T, C),
+    07 clock memory (on, MB), 0D cyclic interrupts (OB30..OB38: interval ms, phase ms)."""
+    rec = parse_sdb0_records(data)
+    p = {"inconnus": sorted(k for k in rec if k not in (0x02, 0x06, 0x07, 0x0D))}
+    r = rec.get(0x02)
+    if r and len(r) >= 4:
+        p["charge_communication"] = r[0]
+        p["surveillance_cycle_ms"] = word_be(r, 2)
+    r = rec.get(0x06)
+    if r and len(r) >= 6:
+        p["remanence"] = {"MB": word_be(r, 0), "T": word_be(r, 2), "Z": word_be(r, 4)}
+    r = rec.get(0x07)
+    if r and len(r) >= 4:
+        p["mem_cadence"] = word_be(r, 2) if word_be(r, 0) else None
+    r = rec.get(0x0D)
+    if r:
+        p["alarmes_cycliques"] = {30 + r[k] - 7: (word_be(r, k + 2), word_be(r, k + 4))
+                                  for k in range(0, len(r) - 5, 6)}
+    return p
+
+
 PROGRAM_KINDS = ["OB", "FB", "FC", "DB", "SDB"]     # what a full program backup holds
 
 

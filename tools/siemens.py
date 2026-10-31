@@ -24,7 +24,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from plc_online.protocols.s7 import (  # noqa: E402
-    AREAS, DEFAULT_DLL, PROGRAM_KINDS, S7300, S7Error, compare_blocks, parse_block, parse_sdb1_modules, word_be)
+    AREAS, DEFAULT_DLL, PROGRAM_KINDS, S7300, S7Error, compare_blocks, parse_block, parse_cpu_parameters,
+    parse_sdb1_modules, word_be)
 from plc_online.protocols.s7_catalogue import catalog_name  # noqa: E402
 from plc_online.protocols.s7_modules import MODULES  # noqa: E402
 
@@ -175,8 +176,51 @@ def cmd_sauvegarder_config(plc, folder=None):
     print(f"\nConfiguration copiee : {folder}/  ({len(numbers)} SDB, {total} octets, + resume.txt)")
 
 
-def cmd_config(sdb1: bytes, actual=None):
-    """Configured modules (SDB 1); with `actual` (SZL 0D91 list) also what is plugged in."""
+OB3X_DEFAULT = {30: 5000, 31: 2000, 32: 1000, 33: 500, 34: 200, 35: 100, 36: 50, 37: 20, 38: 10}
+
+
+def print_cpu_parameters(sdb0: bytes):
+    p = parse_cpu_parameters(sdb0)
+    default = "valeur par defaut de la CPU (non modifiee dans HW Config)"
+    print("Parametres CPU (SDB 0) :")
+    if "surveillance_cycle_ms" in p:
+        print(f"   Surveillance du cycle  : {p['surveillance_cycle_ms']} ms   "
+              f"(charge communication {p['charge_communication']} %)")
+    else:
+        print(f"   Surveillance du cycle  : {default}")
+    mb = p.get("mem_cadence")
+    print(f"   Memento de cadence     : {f'MB{mb}' if mb is not None else 'non utilise'}")
+    r = p.get("remanence")
+    if r:
+        parts = [f"MB0..MB{r['MB'] - 1}" if r["MB"] else "aucun MB",
+                 f"T0..T{r['T'] - 1}" if r["T"] else "aucune temporisation",
+                 f"Z0..Z{r['Z'] - 1}" if r["Z"] else "aucun compteur"]
+        print(f"   Remanence              : {', '.join(parts)}")
+    else:
+        print(f"   Remanence              : {default}")
+    ob = p.get("alarmes_cycliques")
+    if ob:
+        interval, phase = ob.get(35, (0, 0))
+        print(f"   Alarme cyclique OB35   : toutes les {interval} ms" + (f", decalage {phase} ms" if phase else ""))
+        changed = [f"OB{n} {v[0]} ms" for n, v in sorted(ob.items())
+                   if n != 35 and (v[0] != OB3X_DEFAULT.get(n) or v[1])]
+        if changed:
+            print(f"      autres alarmes cycliques modifiees : {', '.join(changed)}")
+    else:
+        print(f"   Alarme cyclique OB35   : {default} (100 ms)")
+    if p["inconnus"]:
+        print(f"   Autres enregistrements non decodes : {', '.join(f'{k:02X}' for k in p['inconnus'])}")
+    print()
+
+
+def cmd_config(sdb1: bytes, actual=None, sdb0=None):
+    """Configured modules (SDB 1); with `actual` (SZL 0D91 list) also what is plugged in;
+    with `sdb0` the CPU parameters first."""
+    if sdb0:
+        try:
+            print_cpu_parameters(sdb0)
+        except S7Error as e:
+            print(f"Parametres CPU non lus ({e})\n")
     info = parse_block(sdb1)
     mods = parse_sdb1_modules(sdb1)
     print(f"Configuration materielle (SDB 1, compilee le {info['date']}) :")
@@ -319,7 +363,9 @@ def main():
 
     if a.commande == "config" and a.depuis:
         try:
-            cmd_config((Path(a.depuis) / "SDB1.bin").read_bytes())
+            sdb0 = Path(a.depuis) / "SDB0.bin"
+            cmd_config((Path(a.depuis) / "SDB1.bin").read_bytes(),
+                       sdb0=sdb0.read_bytes() if sdb0.exists() else None)
         except (OSError, S7Error) as e:
             raise SystemExit(f"ECHEC : {e}")
         return
@@ -338,7 +384,7 @@ def main():
                     actual = plc.modules(a.rack)
                 except S7Error:
                     pass
-                cmd_config(plc.upload_block("SDB", 1), actual)
+                cmd_config(plc.upload_block("SDB", 1), actual, plc.upload_block("SDB", 0))
             elif a.commande == "sauvegarder-programme":
                 cmd_sauvegarder_programme(plc, a.dossier or a.reference)
             elif a.commande == "comparer":

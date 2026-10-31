@@ -8,7 +8,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 
 from plc_online.protocols.s7 import (
-    DEFAULT_DLL, S7300, S7Error, compare_blocks, load_dll, parse_block, parse_identity, parse_protection, parse_sdb1_modules,
+    DEFAULT_DLL, S7300, S7Error, compare_blocks, load_dll, parse_block, parse_cpu_parameters, parse_identity, parse_protection, parse_sdb1_modules,
     parse_szl, word_be)
 
 
@@ -251,6 +251,16 @@ class SdbTests(unittest.TestCase):
         self.assertEqual([(m["emplacement"], m["type"], m["adresse"], m["octets"], m["code"]) for m in new],
                          [(2, "CPU", 0x7FFF, 0, 0x00C0), (4, "entrees", 0, 4, 0x9FC3), (5, "sorties", 4, 2, 0xAFD0)])
 
+    def test_cpu_parameters_one_change_at_a_time(self):
+        base = parse_cpu_parameters(self.sdb("2_config_correcte", 0))
+        self.assertEqual((base["surveillance_cycle_ms"], base["charge_communication"]), (150, 20))
+        self.assertNotIn("mem_cadence", base)
+        self.assertEqual(parse_cpu_parameters(self.sdb("3_cpu_cycle200", 0))["surveillance_cycle_ms"], 200)
+        self.assertEqual(parse_cpu_parameters(self.sdb("4_cpu_horloge_mb100", 0))["mem_cadence"], 100)
+        self.assertEqual(parse_cpu_parameters(self.sdb("5_cpu_remanent", 0))["remanence"], {"MB": 32, "T": 0, "Z": 8})
+        ob = parse_cpu_parameters(self.sdb("6_cpu_ob35_200", 0))["alarmes_cycliques"]
+        self.assertEqual((ob[35], ob[30], ob[38]), ((200, 0), (5000, 0), (10, 0)))
+
     def test_not_a_block(self):
         with self.assertRaises(S7Error):
             parse_block(b"\x00" * 100)
@@ -341,6 +351,18 @@ class SiemensCliTests(unittest.TestCase):
         self.assertIn("emplacement 4   sorties  AB0..AB3     type AFD8", out)
         self.assertIn("!! en place : 9FC3", out)
         self.assertIn("2 emplacement(s) different(s)", out)
+
+    def test_config_shows_cpu_parameters(self):
+        folder = SDB_DIR / "6_cpu_ob35_200"
+        out = io.StringIO()
+        with redirect_stdout(out):
+            self.cli.cmd_config((folder / "SDB1.bin").read_bytes(), sdb0=(folder / "SDB0.bin").read_bytes())
+        out = out.getvalue()
+        self.assertIn("Surveillance du cycle  : 200 ms", out)
+        self.assertIn("Memento de cadence     : MB100", out)
+        self.assertIn("Remanence              : MB0..MB31, aucune temporisation, Z0..Z7", out)
+        self.assertIn("Alarme cyclique OB35   : toutes les 200 ms", out)
+        self.assertNotIn("autres alarmes", out)
 
     def test_config_from_backup_matches(self):
         sdb1 = (SDB_DIR / "2_config_correcte" / "SDB1.bin").read_bytes()
