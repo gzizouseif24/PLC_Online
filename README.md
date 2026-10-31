@@ -114,7 +114,7 @@ py -3.14-32 tools/siemens.py sauvegarder-programme            # copy every block
 py -3.14-32 tools/siemens.py comparer programme_s7_...        # has the program in the CPU changed since that copy?
 py -3.14-32 tools/siemens.py surveiller E0.0 AW4 MW10:hex DB10.DBD4:real T1 Z2   # watch table, live
 py -3.14-32 tools/siemens.py surveiller --table exemples/table_s7_banc.txt [--journal]
-py -3.14-32 tools/siemens.py ecrire MW10 123                 # write once, asks for confirmation
+py -3.14-32 tools/siemens.py ecrire MW10 123 M0.1 1 [--maintenir]   # modify one or more values (--maintenir: keep writing until Ctrl+C)
 py -3.14-32 tools/siemens.py lire                             # MB0..MB3
 py -3.14-32 tools/siemens.py lire --zone DB --db 10 --debut 20 --nombre 2
 ```

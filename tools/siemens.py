@@ -13,7 +13,8 @@
     py -3.14-32 tools/siemens.py surveiller E0.0 AW4 MW10:hex DB10.DBD4:real T1 Z2
                                                               table de surveillance (valeurs en direct)
     py -3.14-32 tools/siemens.py surveiller --table machine.txt [--journal]
-    py -3.14-32 tools/siemens.py ecrire MW10 123              forcer une valeur une fois (avec confirmation)
+    py -3.14-32 tools/siemens.py ecrire MW10 123 M0.1 1       modifier une ou plusieurs valeurs (confirmation)
+    py -3.14-32 tools/siemens.py ecrire M0.1 1 --maintenir    reecrire en continu jusqu'a Ctrl+C
     py -3.14-32 tools/siemens.py lire                         MB0..MB3
     py -3.14-32 tools/siemens.py lire --zone DB --db 10 --debut 20 --nombre 2
 
@@ -384,25 +385,66 @@ def confirm(question):
     return input(f"{question} (tapez OUI) > ").strip() == "OUI"
 
 
-def cmd_ecrire(plc, var, value_text):
-    data = var.encode(value_text)
-    old = plc.read_vars([var])[var]
-    print(f"{var.name} actuel : {var.decode(old) if old is not None else '?'}")
-    leds = plc.leds()
-    running = bool(leds.get("RUN", (0, 0))[0])
-    if running and var.area in ("I", "Q"):
-        print("   La CPU est en RUN : une entree est reecrite par la peripherie et une sortie par le\n"
-              "   programme au cycle suivant. Pour tenir la valeur, il faut un forcage.")
-    elif running:
-        print("   La CPU est en RUN : le programme peut reecrire cette valeur au cycle suivant.")
-    if not confirm(f"Ecrire {var.name} = {var.decode(data) if var.bit is None else data[0]} ? Machine en securite ?"):
+def show(var, raw):
+    return var.decode(raw) if raw is not None else "?"
+
+
+def cmd_ecrire(plc, pairs, hold=False, period=0.2, loops=None):
+    """Modify one or more variables, like "Modify" in a STEP 7 watch table.
+    pairs: [(Var, value text)]. hold=True writes again every `period` s until Ctrl+C
+    (like "modify permanently"), then offers to put the old values back."""
+    variables = [v for v, _ in pairs]
+    new = {v: v.encode(t) for v, t in pairs}
+    old = plc.read_vars(variables)
+    running = bool(plc.leds().get("RUN", (0, 0))[0])
+    for v in variables:
+        print(f"   {v.name:<14} actuel {show(v, old[v]):>14}   ->  {show(v, new[v])}")
+    if running:
+        if any(v.area in ("I", "Q") for v in variables):
+            print("   CPU en RUN : les entrees sont relues sur le terrain et les sorties recalculees par le\n"
+                  "   programme a chaque cycle : la valeur ecrite ne tient pas sur E / A.")
+        print("   CPU en RUN : le programme peut reecrire ces valeurs" +
+              (" ; elles sont reecrites toutes les " f"{period} s jusqu'a Ctrl+C." if hold else " au cycle suivant."))
+    what = "Maintenir" if hold else "Ecrire"
+    if not confirm(f"{what} {len(variables)} valeur(s) ? Machine en securite ?"):
         print("Annule, rien n'a ete ecrit.")
         return
-    plc.write_var(var, data)
-    back = plc.read_vars([var])[var]
-    print(f"Relu : {var.name} = {var.decode(back) if back is not None else '?'}")
-    if old is not None:
-        print(f"Pour revenir en arriere : py -3.14-32 tools/siemens.py ecrire {var.text} {var.decode(old)}")
+    undo = " ".join(f"{v.text} {show(v, old[v])}" for v in variables if old[v] is not None)
+    if not hold:
+        for v in variables:
+            plc.write_var(v, new[v])
+        back = plc.read_vars(variables)
+        for v in variables:
+            ok = back[v] is not None and v.decode(back[v]) == v.decode(new[v])
+            print(f"   Relu : {v.name:<14} = {show(v, back[v]):>14}   {'OK' if ok else '!! DIFFERENT (reecrit par le programme ?)'}")
+        if undo:
+            print(f"Pour revenir en arriere : py -3.14-32 tools/siemens.py ecrire {undo}")
+        return
+    os.system("")
+    n, overwritten, t0 = 0, 0, time.time()
+    try:
+        while loops is None or n < loops:
+            back = plc.read_vars(variables)
+            changed = [v for v in variables if back[v] is not None and v.decode(back[v]) != v.decode(new[v])]
+            if changed and n:
+                overwritten += 1
+            for v in variables:
+                plc.write_var(v, new[v])
+            n += 1
+            state = "  ".join(f"{v.name}={show(v, back[v])}" for v in variables)
+            print(f"\r   maintenu {time.time() - t0:6.1f} s, {n} ecritures, reecrit par la CPU {overwritten} fois   "
+                  f"{state[:60]:<60}", end="", flush=True)
+            time.sleep(period)
+    except KeyboardInterrupt:
+        pass
+    print("\nArret du maintien.")
+    if undo and confirm("Remettre les anciennes valeurs ?"):
+        for v in variables:
+            if old[v] is not None:
+                plc.write_var(v, old[v] if v.bit is None else bytes([old[v][0] >> v.bit & 1]))
+        print("Anciennes valeurs remises.")
+    elif undo:
+        print(f"Pour revenir en arriere : py -3.14-32 tools/siemens.py ecrire {undo}")
 
 
 def cmd_forcages(plc):
@@ -453,6 +495,7 @@ def main():
     p.add_argument("--table", default=None, help="surveiller : fichier table (une adresse par ligne)")
     p.add_argument("--periode", type=float, default=0.5, help="surveiller : secondes entre deux lectures")
     p.add_argument("--journal", action="store_true", help="surveiller : n'afficher que les changements")
+    p.add_argument("--maintenir", action="store_true", help="ecrire : reecrire en continu jusqu'a Ctrl+C")
     p.add_argument("arguments", nargs="*", help="dossier (comparer), adresses (surveiller), adresse valeur (ecrire)")
     a = p.parse_args()
     a.reference = a.arguments[0] if a.arguments else None
@@ -465,10 +508,11 @@ def main():
             if not variables:
                 p.error("surveiller : donner des adresses (E0.0 MW10 ...) ou --table fichier")
         elif a.commande == "ecrire":
-            if len(a.arguments) != 2:
-                p.error("ecrire : adresse et valeur (ex. ecrire MW10 123)")
-            variables = [Var(a.arguments[0])]
-            variables[0].encode(a.arguments[1])          # refuse a bad value before connecting
+            if len(a.arguments) < 2 or len(a.arguments) % 2:
+                p.error("ecrire : adresse valeur [adresse valeur ...] (ex. ecrire MW10 123 M0.1 1)")
+            pairs = [(Var(a.arguments[i]), a.arguments[i + 1]) for i in range(0, len(a.arguments), 2)]
+            for v, t in pairs:
+                v.encode(t)                              # refuse a bad value before connecting
     except (AddressError, ValueError, OSError) as e:
         raise SystemExit(f"ECHEC : {e}")
 
@@ -515,7 +559,7 @@ def main():
             elif a.commande == "surveiller":
                 cmd_surveiller(plc, variables, a.periode, a.journal)
             elif a.commande == "ecrire":
-                cmd_ecrire(plc, variables[0], a.arguments[1])
+                cmd_ecrire(plc, pairs, a.maintenir, a.periode if a.periode != 0.5 else 0.2)
             else:
                 cmd_lire(plc, a)
     except (S7Error, AddressError, ValueError) as e:

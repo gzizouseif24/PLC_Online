@@ -155,16 +155,26 @@ class PlcTests(unittest.TestCase):
     def test_ecrire_asks_and_reads_back(self):
         out = io.StringIO()
         with redirect_stdout(out), mock.patch("builtins.input", return_value="OUI"):
-            self.cli.cmd_ecrire(self.plc, Var("MW10"), "100")
+            self.cli.cmd_ecrire(self.plc, [(Var("MW10"), "100"), (Var("M12.3"), "1")])
         self.assertEqual(bytes(self.fake.zone(0x83, 0)[10:12]), b"\x00\x64")
-        self.assertIn("Relu : MW10 = 100", out.getvalue())
-        self.assertIn("ecrire MW10 42", out.getvalue())
+        self.assertEqual(self.fake.zone(0x83, 0)[12], 0x09)
+        self.assertIn("MW10           =            100   OK", out.getvalue())
+        self.assertIn("ecrire MW10 42 M12.3 0", out.getvalue())
         self.assertIn("RUN", out.getvalue())
 
     def test_ecrire_cancelled(self):
         with redirect_stdout(io.StringIO()), mock.patch("builtins.input", return_value="non"):
-            self.cli.cmd_ecrire(self.plc, Var("MW10"), "100")
+            self.cli.cmd_ecrire(self.plc, [(Var("MW10"), "100")])
         self.assertEqual(bytes(self.fake.zone(0x83, 0)[10:12]), b"\x00\x2a")
+
+    def test_maintenir_writes_until_stopped_then_restores(self):
+        out = io.StringIO()
+        with redirect_stdout(out), mock.patch("builtins.input", return_value="OUI"), \
+                mock.patch.object(self.cli.time, "sleep"), mock.patch.object(self.cli.os, "system"):
+            self.cli.cmd_ecrire(self.plc, [(Var("MW10"), "7"), (Var("M12.0"), "0")], hold=True, loops=3)
+        self.assertIn("3 ecritures", out.getvalue())
+        self.assertEqual(bytes(self.fake.zone(0x83, 0)[10:12]), b"\x00\x2a")     # old values back
+        self.assertEqual(self.fake.zone(0x83, 0)[12] & 1, 1)
 
 
 if __name__ == "__main__":
