@@ -10,6 +10,8 @@
     py -3.14-32 tools/siemens.py sauvegarder-programme        copie de tous les blocs (OB FB FC DB SDB)
     py -3.14-32 tools/siemens.py comparer DOSSIER             le programme de la CPU a-t-il change ?
     python tools/siemens.py comparer DOSSIER --depuis AUTRE   compare deux copies (sans CPU)
+    py -3.14-32 tools/siemens.py restaurer DOSSIER [--avec-db] [--supprimer-en-trop]
+                                                              recharger dans la CPU une copie du programme
     py -3.14-32 tools/siemens.py surveiller E0.0 AW4 MW10:hex DB10.DBD4:real T1 Z2
                                                               table de surveillance (valeurs en direct)
     py -3.14-32 tools/siemens.py surveiller --table machine.txt [--journal]
@@ -318,6 +320,72 @@ def cmd_sauvegarder_programme(plc, folder=None):
     print(f"Programme copie : {folder}/  ({counts}, {sum(map(len, blocks.values()))} octets, + programme.txt)")
 
 
+RESTORE_ORDER = ["DB", "FC", "FB", "OB"]          # called blocks before the blocks that call them
+
+
+def cmd_restaurer(plc, folder, with_db=False, delete_extra=False, max_pdu=240):
+    """Load a program copy (sauvegarder-programme) back into the CPU: OB, FB, FC (and DB with
+    with_db). CPU in STOP during the load. SDB (hardware configuration) are not touched."""
+    from plc_online.protocols.s7 import BLOCK_TYPES
+    from plc_online.protocols.s7_download import DELETE, DownloadError
+    backup = load_program(folder)
+    kinds = RESTORE_ORDER if with_db else [k for k in RESTORE_ORDER if k != "DB"]
+    todo = sorted((k for k in backup if k[0] in kinds), key=lambda k: (RESTORE_ORDER.index(k[0]), k[1]))
+    current = {kind: set(plc.list_blocks(kind)) for kind in kinds}
+    extra = sorted(((kind, n) for kind in kinds for n in current[kind] if (kind, n) not in backup),
+                   key=lambda k: (RESTORE_ORDER.index(k[0]), k[1]))
+    print(f"Copie : {folder}")
+    print(f"   a charger ({len(todo)}) : {' '.join(f'{k}{n}' for k, n in todo)}")
+    if not with_db and any(k[0] == "DB" for k in backup):
+        print("   DB non chargees (valeurs actuelles de la machine gardees) : ajouter --avec-db pour les charger")
+    if extra:
+        print(f"   dans la CPU mais pas dans la copie : {' '.join(f'{k}{n}' for k, n in extra)}"
+              + ("  -> seront SUPPRIMES" if delete_extra else "  -> gardes (--supprimer-en-trop pour les supprimer)"))
+    print("   La configuration materielle (SDB) n'est pas modifiee.")
+    if not todo:
+        print("Rien a charger.")
+        return
+    running = plc.is_running()
+    if not confirm(f"Charger {len(todo)} bloc(s) dans la CPU{' (passage en STOP)' if running else ''} ? Machine en securite ?"):
+        print("Annule, rien n'a ete modifie.")
+        return
+    if running:
+        plc.stop()
+        print("CPU en STOP.")
+    seq = plc.download_sequence()
+    done = []
+    try:
+        for kind, n in todo:
+            print(f"   {kind}{n} ...", end="", flush=True)
+            seq.download(BLOCK_TYPES[kind], n, backup[(kind, n)], max_pdu)
+            done.append((kind, n))
+            print(" ok")
+        if delete_extra:
+            for kind, n in extra:
+                seq.control(BLOCK_TYPES[kind], n, DELETE)
+                print(f"   {kind}{n} supprime")
+    except DownloadError as e:
+        print(f"\n!! ARRET : {e}")
+        print(f"   Blocs charges avant l'erreur : {' '.join(f'{k}{n}' for k, n in done) or 'aucun'}")
+        print("   La CPU reste en STOP. Recharger la copie complete avant de redemarrer.")
+        return
+    now = upload_program(plc, progress=False)
+    diffs = [d for d in compare_blocks({k: v for k, v in backup.items() if k[0] in kinds},
+                                       {k: v for k, v in now.items() if k[0] in kinds}) if d[2] != "valeurs"]
+    if delete_extra or not extra:
+        print("\nVerification : programme identique a la copie." if not diffs else
+              "\n!! Verification : " + ", ".join(f"{k}{n} {v}" for k, n, v, _ in diffs))
+    else:
+        left = [d for d in diffs if (d[0], d[1]) not in extra]
+        print("\nVerification : blocs de la copie identiques." if not left else
+              "\n!! Verification : " + ", ".join(f"{k}{n} {v}" for k, n, v, _ in left))
+    if confirm("Redemarrer la CPU (RUN) ?"):
+        plc.start()
+        print("Demarrage demande. Verifier le voyant RUN (cle sur RUN ou RUN-P).")
+    else:
+        print("CPU laissee en STOP.")
+
+
 def cmd_comparer(ref, now, ref_name, now_name):
     diffs = compare_blocks(ref, now)
     print(f"Reference : {ref_name} ({len(ref)} blocs)\nCompare   : {now_name} ({len(now)} blocs)\n")
@@ -485,7 +553,7 @@ def cmd_lire(plc, a):
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("commande", nargs="?", default="lire", choices=["etat", "diagnostic", "modules", "config", "sauvegarder-config",
-                                                         "sauvegarder-programme", "comparer", "surveiller", "ecrire", "lire"])
+                                                         "sauvegarder-programme", "comparer", "restaurer", "surveiller", "ecrire", "lire"])
     p.add_argument("--mpi", type=int, default=2, help="adresse MPI de la CPU")
     p.add_argument("--rack", type=int, default=0)
     p.add_argument("--slot", type=int, default=2)
@@ -501,6 +569,9 @@ def main():
     p.add_argument("--periode", type=float, default=0.5, help="surveiller : secondes entre deux lectures")
     p.add_argument("--journal", action="store_true", help="surveiller : n'afficher que les changements")
     p.add_argument("--maintenir", action="store_true", help="ecrire : reecrire en continu jusqu'a Ctrl+C")
+    p.add_argument("--avec-db", action="store_true", help="restaurer : charger aussi les DB (valeurs de la copie)")
+    p.add_argument("--supprimer-en-trop", action="store_true",
+                   help="restaurer : supprimer les blocs de la CPU absents de la copie")
     p.add_argument("arguments", nargs="*", help="dossier (comparer), adresses (surveiller), adresse valeur (ecrire)")
     a = p.parse_args()
     a.reference = a.arguments[0] if a.arguments else None
@@ -561,13 +632,17 @@ def main():
                 cmd_comparer(ref, upload_program(plc), a.reference, "CPU")
             elif a.commande == "sauvegarder-config":
                 cmd_sauvegarder_config(plc, a.dossier)
+            elif a.commande == "restaurer":
+                if not a.reference:
+                    raise SystemExit("restaurer : donner le dossier de la copie (sauvegarder-programme)")
+                cmd_restaurer(plc, a.reference, a.avec_db, a.supprimer_en_trop)
             elif a.commande == "surveiller":
                 cmd_surveiller(plc, variables, a.periode, a.journal)
             elif a.commande == "ecrire":
                 cmd_ecrire(plc, pairs, a.maintenir, a.periode if a.periode != 0.5 else 0.2)
             else:
                 cmd_lire(plc, a)
-    except (S7Error, AddressError, ValueError) as e:
+    except (S7Error, AddressError, ValueError, OSError) as e:
         raise SystemExit(f"ECHEC : {e}")
 
 

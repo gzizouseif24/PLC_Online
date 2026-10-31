@@ -445,6 +445,25 @@ class S7300:
             out.append((seq, f.parse_force_job(answer)))
         return out
 
+    def stop(self):
+        r = self.nd.daveStop(self.dc)
+        if r != 0:
+            raise S7Error(f"passage en STOP refuse : {self._err(r)}")
+
+    def start(self):
+        """Warm restart (as the RUN-P switch / STEP 7 'Start')."""
+        r = self.nd.daveStart(self.dc)
+        if r != 0:
+            raise S7Error(f"demarrage refuse : {self._err(r)}")
+
+    def is_running(self) -> bool:
+        return bool(self.leds().get("RUN", (0, 0))[0])
+
+    def download_sequence(self):
+        """Raw PDU exchange for block download / delete (plc_online.protocols.s7_download)."""
+        from plc_online.protocols.s7_download import S7OnlineChannel, Sequence
+        return Sequence(S7OnlineChannel(self.handle, log=self.log), log=self.log)
+
     def read_vars(self, variables) -> dict:
         """{Var: bytes} for watch table variables (plc_online.protocols.s7_vars), grouped
         into as few reads as possible. A refused read gives None for its variables."""

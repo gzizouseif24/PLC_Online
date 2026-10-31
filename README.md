@@ -112,6 +112,7 @@ python tools/siemens.py config --depuis config_s7_...          # same, from a ba
 py -3.14-32 tools/siemens.py sauvegarder-config               # copy the HW config (all SDB blocks) to a folder
 py -3.14-32 tools/siemens.py sauvegarder-programme            # copy every block (OB FB FC DB SDB) to a folder
 py -3.14-32 tools/siemens.py comparer programme_s7_...        # which blocks changed in the CPU since that copy
+py -3.14-32 tools/siemens.py restaurer programme_s7_... [--avec-db] [--supprimer-en-trop]   # load a program copy back into the CPU (STOP, verify, restart)
 py -3.14-32 tools/siemens.py surveiller EB0:bin AB4 MW10 DB10.DBD4:real T1 Z2   # watch table, live
 py -3.14-32 tools/siemens.py surveiller --table exemples/table_s7_banc.txt [--journal]
 py -3.14-32 tools/siemens.py ecrire MW10 123 M0.1 1           # modify one or more values (confirmation, read back, undo command)
