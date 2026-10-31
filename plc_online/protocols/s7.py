@@ -316,6 +316,13 @@ class _BlockEntry(ctypes.Structure):
     _fields_ = [("number", ctypes.c_ushort), ("type", ctypes.c_ubyte * 2)]
 
 
+class _PDU(ctypes.Structure):
+    """PDU helper of nodave.h: pointers into the received PDU."""
+    _fields_ = [("header", ctypes.c_void_p), ("param", ctypes.c_void_p), ("data", ctypes.c_void_p),
+                ("udata", ctypes.c_void_p), ("hlen", ctypes.c_int), ("plen", ctypes.c_int),
+                ("dlen", ctypes.c_int), ("udlen", ctypes.c_int)]
+
+
 class _OSserial(ctypes.Structure):
     _fields_ = [("rfd", ctypes.c_int), ("wfd", ctypes.c_int)]
 
@@ -409,6 +416,34 @@ class S7300:
         r = self.nd.daveWriteBits(self.dc, AREAS[area], db, byte * 8 + bit, 1, buf)
         if r != 0:
             raise S7Error(f"ecriture {area}{db or ''} {byte}.{bit} : {self._err(r)}")
+
+    def userdata(self, group: int, subfunction: int, data: bytes) -> bytes:
+        """User data request (as daveReadSZL does), returns the user data of the answer."""
+        pa = (ctypes.c_ubyte * 8)(0x00, 0x01, 0x12, 0x04, 0x11, 0x40 | group, subfunction, 0x00)
+        ud = (ctypes.c_ubyte * max(len(data), 1))(*data)
+        pdu = _PDU()
+        self.log(f"   userdata groupe {group} fonction {subfunction:02X} -> {bytes(data).hex(' ')}")
+        r = self.nd.daveBuildAndSendPDU(self.dc, ctypes.byref(pdu), pa, 8, ud, len(data))
+        if r != 0:
+            raise S7Error(f"fonction {group}/{subfunction:02X} refusee : {self._err(r)} ({r:04X})")
+        answer = ctypes.string_at(pdu.udata, pdu.udlen) if pdu.udata and pdu.udlen > 0 else b""
+        self.log(f"   reponse {len(answer)} octets : {answer.hex(' ')}")
+        return answer
+
+    def forces(self) -> list:
+        """Active force jobs: [(sequence number, [(address, value bytes)])]. Read only."""
+        from plc_online.protocols import s7_forces as f
+        _, data = f.split_tis_answer(self.userdata(f.TIS_GROUP, f.SUB_READ_JOB_LIST,
+                                                   f.tis_request(data=bytes(4))))
+        jobs = f.parse_job_list(data)
+        self.log(f"   taches : {[(f.JOB_NAMES.get(fn, hex(fn)), seq) for fn, seq in jobs]}")
+        out = []
+        for function, seq in jobs:
+            if function != f.SUB_FORCE:
+                continue
+            answer = self.userdata(f.TIS_GROUP, f.SUB_READ_JOB, f.tis_request(data=bytes([function, seq])))
+            out.append((seq, f.parse_force_job(answer)))
+        return out
 
     def read_vars(self, variables) -> dict:
         """{Var: bytes} for watch table variables (plc_online.protocols.s7_vars), grouped

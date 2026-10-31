@@ -115,6 +115,7 @@ py -3.14-32 tools/siemens.py comparer programme_s7_...        # has the program 
 py -3.14-32 tools/siemens.py surveiller E0.0 AW4 MW10:hex DB10.DBD4:real T1 Z2   # watch table, live
 py -3.14-32 tools/siemens.py surveiller --table exemples/table_s7_banc.txt [--journal]
 py -3.14-32 tools/siemens.py ecrire MW10 123                 # write once, asks for confirmation
+py -3.14-32 tools/siemens.py forcages                     # active forces: FRCE LED, forced addresses and values
 py -3.14-32 tools/siemens.py lire                             # MB0..MB3
 py -3.14-32 tools/siemens.py lire --zone DB --db 10 --debut 20 --nombre 2
 ```

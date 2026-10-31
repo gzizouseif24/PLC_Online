@@ -14,6 +14,7 @@
                                                               table de surveillance (valeurs en direct)
     py -3.14-32 tools/siemens.py surveiller --table machine.txt [--journal]
     py -3.14-32 tools/siemens.py ecrire MW10 123              forcer une valeur une fois (avec confirmation)
+    py -3.14-32 tools/siemens.py forcages                     forcages actifs (adresses et valeurs)
     py -3.14-32 tools/siemens.py lire                         MB0..MB3
     py -3.14-32 tools/siemens.py lire --zone DB --db 10 --debut 20 --nombre 2
 
@@ -405,6 +406,28 @@ def cmd_ecrire(plc, var, value_text):
         print(f"Pour revenir en arriere : py -3.14-32 tools/siemens.py ecrire {var.text} {var.decode(old)}")
 
 
+def cmd_forcages(plc):
+    """Active forces: FRCE LED, then the force job read from the CPU."""
+    from plc_online.protocols.s7_forces import ForceFormatError, value_text
+    frce = plc.leds().get("FRCE")
+    if frce is not None:
+        print(f"Voyant FRCE : {'ALLUME (forcage actif)' if frce[0] or frce[1] else 'eteint'}")
+    try:
+        jobs = plc.forces()
+    except (S7Error, ForceFormatError) as e:
+        print(f"Liste des forcages non lue : {e}")
+        print("   Relancer avec --trace et m'envoyer la sortie.")
+        return
+    items = [item for _, values in jobs for item in values]
+    if not items:
+        print("Aucun forcage actif.")
+        return
+    print(f"\n!! {len(items)} adresse(s) forcee(s) :")
+    for address, value in items:
+        print(f"   {address:<14} = {value_text(address, value)}")
+    print("\nUn forcage reste actif apres un arret / redemarrage de la CPU, tant qu'il n'est pas supprime.")
+
+
 def cmd_lire(plc, a):
     data = plc.read_bytes(a.zone, a.debut, a.nombre, a.db)
     print("   octets :", " ".join(f"{x:02X}" for x in data))
@@ -416,7 +439,7 @@ def cmd_lire(plc, a):
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("commande", nargs="?", default="lire", choices=["etat", "diagnostic", "modules", "config", "sauvegarder-config",
-                                                         "sauvegarder-programme", "comparer", "surveiller", "ecrire", "lire"])
+                                                         "sauvegarder-programme", "comparer", "surveiller", "ecrire", "forcages", "lire"])
     p.add_argument("--mpi", type=int, default=2, help="adresse MPI de la CPU")
     p.add_argument("--rack", type=int, default=0)
     p.add_argument("--slot", type=int, default=2)
@@ -494,6 +517,8 @@ def main():
                 cmd_surveiller(plc, variables, a.periode, a.journal)
             elif a.commande == "ecrire":
                 cmd_ecrire(plc, variables[0], a.arguments[1])
+            elif a.commande == "forcages":
+                cmd_forcages(plc)
             else:
                 cmd_lire(plc, a)
     except (S7Error, AddressError, ValueError) as e:
