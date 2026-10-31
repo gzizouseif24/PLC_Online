@@ -43,7 +43,9 @@ def cmd_etat(plc):
     try:
         info = plc.identity()
         print(f"CPU        : {info.get('reference', '?')}   {info.get('nom_module', '')}")
-        print(f"Versions   : materiel {info.get('materiel', '?')}, firmware {info.get('firmware', '?')}")
+        versions = [f"{k} {info[v]}" for k, v in (("materiel", "materiel"), ("firmware", "firmware")) if info.get(v)]
+        if versions:
+            print(f"Versions   : {', '.join(versions)}")
         if info.get("numero_serie"):
             print(f"N° serie   : {info['numero_serie']}")
         if info.get("nom_automate") or info.get("repere_installation"):

@@ -5,6 +5,8 @@ Lecture seule : ne modifie rien. A lancer sur le PC ou STEP 7 est installe :
 
     python research/siemens/chercher_catalogue.py
     python research/siemens/chercher_catalogue.py "C:\\Program Files (x86)\\Siemens\\Step7"
+    python research/siemens/chercher_catalogue.py --texte "315-2AF03" "C:\\...\\Step7\\S7DATA"
+        (--texte : fichiers qui contiennent ce texte, avec les textes lisibles autour)
 
 Cherche dans chaque fichier :
   - des references de modules S7-300 ("6ES7 321", "6ES7322"...), en ASCII et en UTF-16 ;
@@ -91,8 +93,58 @@ def write_report(dirs, n_files, results, interrupted):
         print(f"   {len(r['near'])} codes  {r['orders']:5d} refs  {r['path']}")
 
 
+def strings_around(data, i, span=400):
+    """Readable texts (ASCII and UTF-16) near offset i."""
+    chunk = bytes(data[max(0, i - span):i + span])
+    found = [m.group().decode("ascii") for m in re.finditer(rb"[ -~]{4,}", chunk)]
+    found += [m.group().decode("utf-16-le") for m in re.finditer(rb"(?:[ -~]\x00){4,}", chunk)]
+    return found
+
+
+def search_text(text, dirs):
+    pat = regex([text.encode("ascii"), text.encode("utf-16-le")])
+    n_files, hits = 0, []
+    try:
+        for top in dirs:
+            for root, subdirs, files in os.walk(top):
+                subdirs[:] = [d for d in subdirs if d.lower() not in SKIP_DIRS]
+                print(f"\r{n_files:6d} fichiers, {len(hits)} trouves  {root[-60:]:<60}", end="", flush=True)
+                for name in files:
+                    if os.path.splitext(name)[1].lower() in SKIP_EXT:
+                        continue
+                    n_files += 1
+                    path = os.path.join(root, name)
+                    try:
+                        size = os.path.getsize(path)
+                        if size == 0 or size > MAX_SIZE:
+                            continue
+                        with open(path, "rb") as f, mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as data:
+                            ms = [m.start() for _, m in zip(range(5), pat.finditer(data))]
+                            if ms:
+                                hits.append((path, size, [strings_around(data, i) for i in ms[:2]]))
+                    except (OSError, ValueError):
+                        continue
+    except KeyboardInterrupt:
+        pass
+    print(f"\n{n_files} fichiers lus, {len(hits)} contiennent {text!r}.")
+    with open("catalogue_rapport.txt", "w", encoding="utf-8") as f:
+        for path, size, groups in hits[:60]:
+            f.write(f"=== {path}  ({size} octets)\n")
+            for g in groups:
+                f.write("    " + " | ".join(g)[:1500] + "\n")
+            f.write("\n")
+    print("Rapport : catalogue_rapport.txt (a envoyer)")
+    for path, _, groups in hits[:15]:
+        print(f"   {path}")
+        print(f"      {' | '.join(groups[0])[:300]}")
+
+
 def main():
-    dirs = sys.argv[1:] or [d for d in DEFAULT_DIRS if os.path.isdir(d)]
+    args = sys.argv[1:]
+    if args[:1] == ["--texte"] and len(args) >= 2:
+        dirs = args[2:] or [d for d in DEFAULT_DIRS if os.path.isdir(d)]
+        return search_text(args[1], dirs)
+    dirs = args or [d for d in DEFAULT_DIRS if os.path.isdir(d)]
     if not dirs:
         raise SystemExit("Aucun dossier Siemens trouve : donner le dossier d'installation de STEP 7 en argument.")
     order_re, code_re, code_of = build()
