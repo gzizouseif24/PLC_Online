@@ -344,7 +344,7 @@ def tsx_status(plc) -> dict:
     if io_fault:
         out["alertes"].append("Defaut E/S signale par la CPU (voyant I/O) : voir l'onglet Diagnostic")
     if mode == "VIDE":
-        out["alertes"].append("Pas d'application dans l'automate (programme perdu ? verifier la pile : voyant BAT)")
+        out["alertes"].append("Pas d'application dans l'automate (vide : programme efface ou chargement refuse)")
     faults = {n: label for n, (label, bad) in ut.SYSTEM_BITS.items() if bits.get(n) == bad}
     out["alertes"] += [f"%S{n} : {label}" for n, label in faults.items()] if mode != "VIDE" else []
     out["voyants"] = [
