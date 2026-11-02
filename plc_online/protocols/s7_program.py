@@ -101,20 +101,24 @@ def restore(plc, backup: dict, plan: dict, delete_extra=False, progress=None, ma
         plc.stop()
     seq = plc.download_sequence()
     total = len(plan["todo"]) + (len(plan["extra"]) if delete_extra else 0)
+    current = ""
     try:
         for i, (kind, n) in enumerate(plan["todo"], 1):
             if progress:
                 progress(f"chargement {kind}{n}", i, total)
+            current = f"{kind}{n}"
             seq.download(BLOCK_TYPES[kind], n, backup[(kind, n)], max_pdu)
             out["charges"].append(f"{kind}{n}")
         if delete_extra:
             for j, (kind, n) in enumerate(plan["extra"], len(plan["todo"]) + 1):
                 if progress:
                     progress(f"suppression {kind}{n}", j, total)
+                current = f"{kind}{n}"
                 seq.control(BLOCK_TYPES[kind], n, DELETE)
                 out["supprimes"].append(f"{kind}{n}")
     except DownloadError as e:
-        out["erreur"] = str(e)
+        out["erreur"] = f"{current} : {e}" if current else str(e)
+        out["bloc"] = current
         return out
     if progress:
         progress("verification (relecture du programme)", total, total)
