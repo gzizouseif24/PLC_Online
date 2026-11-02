@@ -181,6 +181,7 @@ READ_BIT, READ_SYSTEM_BIT = 0x00, 0x01
 READ_OBJECTS, WRITE_OBJECTS = 0x36, 0x37
 RUN, STOP = 0x24, 0x25
 READ_CPU = 0x4F
+READ_STATUS_MODULE = 0x44
 MONITOR = 0x93           # requete de mise au point de PL7 (sous-codes a decoder)
 WRITE_SYSTEM_BIT = 0x11  # liste des requetes UNI-TE (aide PL7) : READ_SYSTEM_BIT 01 / WRITE 11
 DEBUG_MEMORY = 0x92      # memoire de mise au point de PL7 : 92 07 <01 lire|02 ecrire> <segment> 00 <offset> <n>
@@ -410,6 +411,26 @@ class Tsx:
             raise UniteError(f"ecriture %SW refusee : {hexs(answer)}")
         return "92"
 
+    def module_status(self, position: int) -> dict:
+        """READ_STATUS_MODULE (44), as PL7 does when a module is opened in the online configuration
+        (capture 02/11/2026, client TSX 3722): 44 07 02 00 <position> ->
+          74 01 03 <04 00 type configure> <04 00 type en place> <detail>   module present
+          74 01 02 <04 00 type configure>                                   module absent
+        Returns {'configure': code, 'en_place': code or None, 'detail': bytes}."""
+        request = [READ_STATUS_MODULE, PL7_CATEGORY, 0x02, 0x00, position]
+        try:
+            data = self._ask(request, READ_STATUS_MODULE + 0x30)
+        except UniteError as e:
+            if "FD" not in str(e):
+                raise
+            self._ask([MONITOR, PL7_CATEGORY, 0x0B], MONITOR + 0x30)
+            data = self._ask(request, READ_STATUS_MODULE + 0x30)
+        if len(data) < 6 or data[0] != 0x01:
+            raise UniteError(f"etat module {position} : reponse inattendue {hexs(data)}")
+        configured = data[4] << 8 | data[5]
+        present = data[8] << 8 | data[9] if data[1] >= 3 and len(data) >= 10 else None
+        return {"configure": configured, "en_place": present, "detail": bytes(data[10:]), "brut": hexs(data)}
+
     def read_cpu(self) -> list:
         """READ_CPU (4F, categorie PL7) : diagnostic systeme, 77 octets sur le banc. Les octets
         1-2 changent avec l'etat (02 0B, 04 08 pendant un chargement, 01 0A apres) : a decoder."""
@@ -487,6 +508,20 @@ def read_program_file(filename):
 
 
 CONFIG_MODULE = re.compile(rb"\xff([\x00-\x1f])(TSX [ -~]{3,10})\x00")
+
+
+MODULE_CODES = {0x1009: "TSX DEZ 32D2", 0x1018: "TSX DSZ 32R5", 0x101B: "TSX DSZ 08T2", 0x1064: "TSX AEZ 414"}
+
+
+def config_codes(blob: bytes) -> dict:
+    """{position: type code} from the configuration: the 16-byte name field is followed by
+    04 xx <type hi> <type lo> (DEZ 32D2 = 1009, DSZ 32R5 = 1018, DSZ 08T2 = 101B, AEZ 414 = 1064)."""
+    out = {}
+    for m in CONFIG_MODULE.finditer(blob):
+        rec = blob[m.start(2) + 16:m.start(2) + 20]
+        if len(rec) == 4 and rec[0] == 0x04:
+            out.setdefault(m.group(1)[0], rec[2] << 8 | rec[3])
+    return out
 
 
 def parse_config(blob: bytes) -> list:

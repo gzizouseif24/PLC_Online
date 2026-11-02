@@ -445,3 +445,24 @@ module not powered, "surveillance defaut alimentation" ticked, then unticked and
   at 3-4 OK; %S10 = 0, %S16 = 0; %S51 = 1 clock lost; %SW96 = 0042 valid Flash backup).
 - **Clock set from the web: works** (%S50 / %SW50..53, `unitelway.set_clock`).
 - **Data save (%MW / %KW) from the web: works.**
+
+## 5y. Module status (capture on the client TSX 3722, 02/11/2026)
+
+PL7 online, hardware configuration, modules opened at positions 1 and 5:
+- **READ_STATUS_MODULE `44 07 02 00 <position>`** →
+  - position 1 (DEZ 32D2, unpowered, "alimentation ou actionneur" in PL7):
+    `74 01 03 04 00 10 09 04 00 10 09 02 02 30 FF 00` = configured type 1009, type in place 1009,
+    then a fault detail (`02 02 30 FF 00`, to decode);
+  - position 5 (DSZ 08T2 configured, nothing plugged, "module absent ou different" in PL7):
+    `74 01 02 04 00 10 1B` = configured type 101B only, no module in place.
+- Type codes are in the configuration after the 16-byte name field: `04 xx <type>`: DEZ 32D2 =
+  1009, DSZ 32R5 = 1018, DSZ 08T2 = 101B, AEZ 414 = 1064.
+- READ_IO_CHANNEL `43 07 03 00 <position> FF 01 <n> 00 00 00 00` → `73 00 01 01 00 09 00 04 80 88
+  88 88 ...` for position 1 (channel status, to decode).
+- The fault byte per position (`93 07 02 68 ...`) is 01 in both cases: it does not tell them apart.
+- RUN (`24 07`) answered FD: state stayed `21` (STOP + I/O fault), already before the module was
+  removed. Likely a RUN/STOP input configured on the unpowered DEZ (to check in PL7).
+- Deleting a module in PL7 rewrites the configuration (entry, header byte 0x12, checksum word at
+  0x2C `6B 93` → `67 93`) **and the program part** (PL7.BIN 96 bytes shorter): not reproducible
+  by the tool, left to PL7.
+- Web rack: "En place" from 44 (same type / other type / absent), state named accordingly.

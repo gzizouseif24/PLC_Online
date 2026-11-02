@@ -100,9 +100,12 @@ class DemoTsx:
         self.s[10], self.s[16] = 1, 1                              # 1 = no I/O fault
         self.running = True
         self.app = (b"STATION\0" + bytes(6) + bytes((i * 7 + 3) % 256 for i in range(4300))
-                    + b"\x04\x00TSX 3721\0" + b"\xff\x01TSX DEZ 32D2\0" + b"\xff\x02TSX DEZ 32D2\0"
-                    + b"\xff\x03TSX DSZ 32R5\0" + b"\xff\x04TSX DSZ 32R5\0" + bytes(100))
+                    + b"\x04\x00TSX 3721\0" + b"".join(b"\xff" + bytes([p]) + r.ljust(16, b"\0") + b"\x04\x00" + c + bytes(20)
+                               for p, r, c in ((1, b"TSX DEZ 32D2", b"\x10\x09"), (2, b"TSX DEZ 32D2", b"\x10\x09"),
+                                               (3, b"TSX DSZ 32R5", b"\x10\x18"), (4, b"TSX DSZ 32R5", b"\x10\x18")))
+                    + bytes(100))
         self.io_faults = [0] * 16
+        self.installed = {}                                 # position -> type in place (None = absent)
         self.clock_offset = -86400 * 400 - 3 * 3600         # clock lost after a battery fault
         self.s50 = 0
         self.tick = 0
@@ -173,6 +176,13 @@ class DemoTsx:
                                  d(values[1] >> 8), d(values[1] & 0xFF), d(values[0] >> 8))
         self.clock_offset = when.timestamp() - time.time()
         return "37"
+
+    def module_status(self, position):
+        codes = ut.config_codes(self.app)
+        if position not in codes:
+            raise UniteError("refuse par l'automate (FD)")
+        present = self.installed.get(position, codes[position])
+        return {"configure": codes[position], "en_place": present, "detail": b"", "brut": ""}
 
     def read_io_faults(self):
         return list(self.io_faults)
@@ -306,8 +316,14 @@ def fault_text(code: int) -> str:
     return f"DEFAUT (code {code:02X}{' : ' + known if known else ''})"
 
 
-def module_rows(config, faults) -> list:
-    """Rack table rows (same shape as the S7-300 one): configured modules, fault per position."""
+def code_name(code, names) -> str:
+    return names.get(code) or ut.MODULE_CODES.get(code) or f"module type {code:04X}"
+
+
+def module_rows(config, faults, statuses=None, names=None) -> list:
+    """Rack table rows (same shape as the S7-300 one): configured modules, module in place
+    (READ_STATUS_MODULE: same type, other type or nothing) and fault per position."""
+    statuses, names = statuses or {}, names or {}
     rows = []
     for pos, ref in config:
         kind, first, second = next(((k[1], k[2], k[3]) for k in MODULE_KINDS if ref.split()[-2:][0].startswith(k[0])),
@@ -317,11 +333,22 @@ def module_rows(config, faults) -> list:
             prefix = second                     # second position of a mixed module: its outputs
         address = f"{prefix}{pos}.0 ..." if prefix else ""
         fault = faults[pos] if faults is not None and pos < len(faults) else None
+        st = statuses.get(pos)
+        en_place, etat, ok = None, ("ok" if fault == 0 else fault_text(fault) if fault else "non lu"), not fault
+        if st:
+            if st["en_place"] is None:
+                etat, ok = "MODULE ABSENT (rien a cette position)", False
+            elif st["en_place"] != st["configure"]:
+                found = code_name(st["en_place"], names)
+                en_place = {"code": "", "nom": found, "references": MODULE_NAMES.get(found, "")}
+                etat, ok = f"MODULE DIFFERENT DE LA CONFIGURATION ({found} en place)", False
+            else:
+                en_place = {"code": "", "nom": ref, "references": "meme type que configure"}
+                if fault:
+                    etat = "DEFAUT EXTERNE : alimentation capteurs / actionneurs ou voie en defaut"
         rows.append({"emplacement": pos, "type": kind, "adresse": address,
                      "configure": {"code": "", "nom": ref, "references": MODULE_NAMES.get(ref, "")},
-                     "en_place": None,
-                     "etat": "ok" if fault == 0 else fault_text(fault) if fault else "non lu",
-                     "ok": fault != 1 and not (fault and fault > 0)})
+                     "en_place": en_place, "etat": etat, "ok": ok})
     if faults is not None:
         configured = {p for p, _ in config}
         for pos, f in enumerate(faults):
@@ -380,13 +407,23 @@ EXTRA_BITS = {0: "demarrage a froid", 1: "reprise a chaud", 13: "premier cycle a
 
 
 def tsx_diagnostic(plc, config=None) -> dict:
+    """config = {'modules': [(position, reference)], 'codes': {position: type code}} or None."""
     out = {"alertes": [], "systeme": [], "parametres_cpu": [], "config_compilee": ""}
     try:
         faults = plc.read_io_faults()
     except UniteError:
         faults = None
+    modules = (config or {}).get("modules") or []
+    names = {code: ref for pos, ref in modules for p, code in (config or {}).get("codes", {}).items() if p == pos}
+    statuses = {}
+    for pos, _ in modules:
+        if hasattr(plc, "module_status"):
+            try:
+                statuses[pos] = plc.module_status(pos)
+            except UniteError:
+                pass
     if config is not None or faults is not None:
-        out["modules"] = module_rows(config or [], faults)
+        out["modules"] = module_rows(modules, faults, statuses, names)
         bad = [r for r in out["modules"] if not r["ok"]]
         if bad:
             out["alertes"].append(f"{len(bad)} position(s) en defaut dans le rack : "
@@ -749,7 +786,7 @@ class TsxOps:
         takes a full program read the first time; then kept while the application signature
         (request 92 block 0A) stays the same."""
         if cpu_state(plc)[0] == "VIDE":
-            return []
+            return {"modules": [], "codes": {}}
         try:
             plc.reserve()
             try:
@@ -809,7 +846,8 @@ class TsxOps:
             name = info["nom"]
             step = "lecture du programme (3D/3E)"
             blob = plc.upload(lambda seg, n: progress(f"{text} {name} : {n} octets", 0, 0))
-            self.configs[(plc.nom, info["brut"])] = ut.parse_config(blob)
+            self.configs[(plc.nom, info["brut"])] = {"modules": ut.parse_config(blob),
+                                                     "codes": ut.config_codes(blob)}
         except UniteError as e:
             raise UniteError(f"{e}, a l'etape {step}") from None
         finally:

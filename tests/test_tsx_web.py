@@ -41,6 +41,30 @@ class TsxWebTests(unittest.TestCase):
         self.assertEqual([m["emplacement"] for m in d["modules"] if not m["ok"]], [1, 2])
         self.assertEqual(d["modules"][0]["adresse"], "%I1.0 ...")
 
+    def test_module_absent_or_different(self):
+        self.s.plc.io_faults[3] = self.s.plc.io_faults[4] = 1
+        self.s.plc.installed = {3: None, 4: 0x1009}                    # 3 removed, 4 holds a DEZ 32D2
+        rows = {m["emplacement"]: m for m in self.s.diagnostic()["modules"]}
+        self.assertIn("ABSENT", rows[3]["etat"])
+        self.assertIn("DIFFERENT", rows[4]["etat"])
+        self.assertEqual(rows[4]["en_place"]["nom"], "TSX DEZ 32D2")
+        self.assertEqual(rows[1]["en_place"]["nom"], "TSX DEZ 32D2")
+
+    def test_external_fault_named(self):
+        self.s.plc.io_faults[1] = 1
+        rows = {m["emplacement"]: m for m in self.s.diagnostic()["modules"]}
+        self.assertIn("alimentation", rows[1]["etat"])
+
+    def test_module_status_answers_from_the_capture(self):
+        from plc_online.protocols import unitelway as ut
+        t = ut.Tsx.__new__(ut.Tsx)
+        answers = iter([[0x01, 0x03, 0x04, 0x00, 0x10, 0x09, 0x04, 0x00, 0x10, 0x09, 0x02, 0x02, 0x30, 0xFF, 0x00],
+                        [0x01, 0x02, 0x04, 0x00, 0x10, 0x1B]])
+        t._ask = lambda req, expect: next(answers)
+        self.assertEqual(t.module_status(1)["en_place"], 0x1009)
+        r = t.module_status(5)
+        self.assertEqual((r["configure"], r["en_place"]), (0x101B, None))
+
     def test_config_from_image(self):
         from plc_online.protocols.unitelway import parse_config
         image = b"STATION\0" + bytes(50) + b"\x04\x00TSX 3721\0" + b"\xff\x01TSX DEZ 32D2\0" + bytes(28) \
