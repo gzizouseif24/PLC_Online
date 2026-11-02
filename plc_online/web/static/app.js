@@ -625,7 +625,7 @@ function cell(text, cls, label) {
 function moduleCell(m) {
   const box = el("div");
   if (!m) { box.append(el("span", "sub", "—")); return box; }
-  box.append(el("span", "", m.nom), el("span", "sub mono", m.code + (m.references ? " · " + m.references : "")));
+  box.append(el("span", "", m.nom), el("span", "sub mono", [m.code, m.references].filter(Boolean).join(" · ")));
   return box;
 }
 

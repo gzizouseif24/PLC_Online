@@ -128,6 +128,14 @@ def s7_diagnostic(plc, rack: int = 0) -> dict:
     except S7Error as e:
         out["alertes"].append(f"Parametres CPU non lus : {e}")
 
+    cpu = {}
+    try:
+        info = plc.identity()
+        cpu = {"nom": info.get("nom_module") or catalog_name(info.get("reference")) or "CPU",
+               "references": info.get("reference", "")}
+    except S7Error:
+        pass
+
     for slot in sorted(set(actual) | set(configured)):
         c, a = configured.get(slot), actual.get(slot)
         kind = (c or a)["type"]
@@ -143,6 +151,13 @@ def s7_diagnostic(plc, rack: int = 0) -> dict:
             row["configure"] = module_info(conf_code, kind)
         if real_code:
             row["en_place"] = module_info(real_code, kind)
+        if kind == "CPU":
+            # SDB1 and the module list only give the generic code 00C0 for a CPU:
+            # the plugged-in CPU is named from its identification, the configured one is not stored
+            if row["configure"]:
+                row["configure"] = {"code": "", "nom": "CPU", "references": "type non enregistre dans la config chargee"}
+            if row["en_place"] and cpu:
+                row["en_place"] = {"code": "", **cpu}
         if kind != "CPU" and conf_code and real_code and conf_code != real_code:
             row["ok"] = False
             row["etat"] = "MODULE DIFFERENT DE LA CONFIGURATION"
