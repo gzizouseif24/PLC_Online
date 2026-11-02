@@ -69,10 +69,11 @@ py -3.14-32 -m plc_online.web          # opens http://localhost:8000 in the brow
 32-bit Python for the S7-300 (same rules as the Siemens tool below); for a look without a
 PLC, any Python and choose **Demo**. Screen so far: connection (brand, MPI address, rack,
 slot), **Etat** refreshed every 2 s (model, RUN / STOP, LEDs, alerts, key, protection,
-checksums) and **Diagnostic** (rack: module configured vs plugged in with names and addresses,
-diagnostic buffer, CPU parameters) and **Surveillance** (watch table: live values, modify with
+checksums, CPU clock; buttons to put the CPU in RUN / STOP and set its clock to the PC time) and **Diagnostic** (rack: module configured vs plugged in with names and addresses,
+diagnostic buffer, CPU parameters) and **Surveillance** (watch table: live values while the glasses button is on, format per row, modify with
 confirmation and read back, export / import of the table as a text file) and **Programme** (save
-the CPU program with a note, compare the CPU with a copy, restore a copy, restart the CPU; long
+the CPU program with a note, compare the CPU with a copy, restore a copy, restart the CPU, download
+a copy as .zip, import a copy already on the PC: .zip, block files or a folder; long
 operations run in the background with a progress bar). Copies are kept in
 `~/PLC Online/sauvegardes/s7-300` (`--sauvegardes` for another folder). The server only listens on
 `localhost`.

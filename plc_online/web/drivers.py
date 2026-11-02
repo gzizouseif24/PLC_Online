@@ -57,7 +57,28 @@ def s7_status(plc) -> dict:
         out["alertes"].append(f"{name} allume : {FAULT_LEDS[name]}")
 
     try:
+        clock = plc.read_clock()
+        out["horloge"] = clock
+        text = clock[:19]
+        try:
+            import datetime
+            cpu_time = datetime.datetime.strptime(clock[:19], "%d/%m/%Y %H:%M:%S")
+            gap = (cpu_time - datetime.datetime.now()).total_seconds()
+            out["ecart_horloge_s"] = round(gap)
+            if abs(gap) > 300:
+                out["alertes"].append(f"Horloge CPU decalee : {clock[:16]} (PC : "
+                                      f"{datetime.datetime.now():%d/%m/%Y %H:%M}) — les dates du tampon de "
+                                      "diagnostic sont fausses")
+                text += "  (decalee)"
+        except ValueError:
+            pass
+        out["details"].insert(0, ("Horloge CPU", text))
+    except (S7Error, AttributeError):
+        pass
+
+    try:
         p = plc.protection()
+        out["cle"] = p["cle"]
         out["details"].append(("Cle", p["cle"]))
         out["details"].append(("Protection", f"niveau {p['protection_effective']}"
                                + (" (sans mot de passe)" if p["protection_parametree"] == 0 else "")))
@@ -333,6 +354,17 @@ class DemoS7:
     def is_running(self):
         return self.running
 
+    clock_offset = -662_000_000          # demo CPU clock about 21 years late, like the bench CPU
+
+    def read_clock(self):
+        import datetime
+        from plc_online.protocols.s7 import clock_bytes, parse_date_and_time
+        t = datetime.datetime.now() + datetime.timedelta(seconds=self.clock_offset)
+        return parse_date_and_time(clock_bytes(t)[2:])
+
+    def set_clock(self, when=None):
+        self.clock_offset = 0
+
     def stop(self):
         self.running = False
         self.held = True
@@ -386,6 +418,78 @@ def backup_blocks(folder: Path, backup_id: str) -> dict:
     blocks = program.load_program(backup_path(folder, backup_id))
     return {"id": backup_id, "blocs": [program.block_info(k, n, d) for (k, n), d in
                                        sorted(blocks.items(), key=lambda kv: program.sort_key(kv[0]))]}
+
+
+MAX_IMPORT = 5 * 1024 * 1024
+
+
+def export_zip(folder: Path, backup_id: str) -> tuple:
+    """(file name, zip bytes) of one copy, to keep it elsewhere or send it."""
+    import io
+    import zipfile
+    path = backup_path(folder, backup_id)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for f in sorted(path.iterdir()):
+            if f.is_file():
+                z.write(f, f.name)
+    return f"programme_s7_{backup_id}.zip", buf.getvalue()
+
+
+def import_files(folder: Path, files: list, note: str = "") -> dict:
+    """Make a copy from files chosen on the PC: block files (OB1.bin, SDB0.bin...) and / or a .zip
+    of a copy (from this page or tools/siemens.py sauvegarder-programme). Every block is checked."""
+    import io
+    import zipfile
+    blocks, ignored, total, original = {}, [], 0, {}
+    for name, data in files:
+        total += len(data)
+        if total > MAX_IMPORT:
+            raise DriverError("Fichiers trop gros pour une copie de programme S7-300")
+        base = Path(name.replace("\\", "/")).name
+        if base.lower().endswith(".zip"):
+            try:
+                with zipfile.ZipFile(io.BytesIO(data)) as z:
+                    inner = [(i.filename, z.read(i)) for i in z.infolist()
+                             if not i.is_dir() and i.file_size <= MAX_IMPORT]
+            except zipfile.BadZipFile:
+                raise DriverError(f"{base} : fichier zip illisible") from None
+            files_in = inner
+        else:
+            files_in = [(base, data)]
+        for inner_name, inner_data in files_in:
+            short = Path(inner_name.replace("\\", "/")).name
+            if short == "info.json":
+                try:
+                    original = json.loads(inner_data.decode("utf-8"))
+                except (ValueError, UnicodeDecodeError):
+                    pass
+            m = program.BLOCK_FILE.match(short)
+            if not m:
+                if short not in ("programme.txt", "info.json", "resume.txt"):
+                    ignored.append(short)
+                continue
+            try:
+                parse_block(inner_data)
+            except S7Error:
+                raise DriverError(f"{short} n'est pas un bloc S7 valide") from None
+            blocks[(m.group(1).upper(), int(m.group(2)))] = inner_data
+    if not blocks:
+        raise DriverError("Aucun bloc S7 (OB1.bin, FC1.bin...) dans les fichiers choisis")
+    stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    target = folder / ("import_" + time.strftime("%Y%m%d_%H%M%S"))
+    n = 1
+    while target.exists():
+        n += 1
+        target = folder / (f"import_{time.strftime('%Y%m%d_%H%M%S')}_{n}")
+    program.save_program(target, blocks, [f"date : {stamp}", "importe depuis des fichiers du PC"])
+    first_note = original.get("note") or "copie importee"
+    if original.get("date"):
+        first_note += f" (copie du {original['date']})"
+    meta = {"date": stamp, "cpu": str(original.get("cpu", "")), "modele": str(original.get("modele", "")),
+            "note": (note or first_note).strip()[:200], "comptes": program.count_text(blocks)}
+    (target / "info.json").write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
+    return {"id": target.name, "comptes": meta["comptes"], "ignores": ignored}
 
 
 BRANDS = {
@@ -545,6 +649,25 @@ class Session:
             plc.start()
             return {"ok": True}
         return self._call(run)
+
+    def stop_cpu(self) -> dict:
+        def run(plc):
+            plc.stop()
+            return {"ok": True}
+        return self._call(run)
+
+    def set_clock(self) -> dict:
+        def run(plc):
+            plc.set_clock()
+            return {"horloge": plc.read_clock()}
+        return self._call(run)
+
+    def export_backup(self, backup_id) -> tuple:
+        return export_zip(self.backups, backup_id)
+
+    def import_backup(self, files, note) -> dict:
+        self.backups.mkdir(parents=True, exist_ok=True)
+        return import_files(self.backups, files, note)
 
     def _call(self, action):
         if self.busy():

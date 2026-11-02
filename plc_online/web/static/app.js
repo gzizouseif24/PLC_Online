@@ -63,6 +63,7 @@ function localStorageSet(key, value) {
 
 function renderStatus(s) {
   $("etat-vide").hidden = true;
+  lastStatus = s;
   $("modele").textContent = s.modele || s.marque;
   $("reference").textContent = s.reference || "";
 
@@ -96,6 +97,28 @@ function renderStatus(s) {
 }
 
 let currentTab = localStorageGet("onglet") || "etat-plein";
+
+let lastStatus = null;
+
+function setCpuMsg(text, isError) {
+  const m = $("cpu-msg");
+  m.textContent = text || "";
+  m.className = "msg" + (isError ? " err" : "");
+}
+
+async function cpuAction(path, question, done) {
+  if (!confirm(question)) return;
+  for (const id of ["btn-run", "btn-stop", "btn-horloge"]) $(id).disabled = true;
+  try {
+    const r = await api("POST", path);
+    setCpuMsg(done(r));
+    setTimeout(refresh, 300);
+  } catch (e) {
+    setCpuMsg(e.message, true);
+  } finally {
+    for (const id of ["btn-run", "btn-stop", "btn-horloge"]) $(id).disabled = false;
+  }
+}
 
 function showTab(id) {
   if (!$(id)) id = "etat-plein";
@@ -172,6 +195,31 @@ function pollJob(onDone) {
   }, 400);
 }
 
+function toBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let text = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) text += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(text);
+}
+
+async function importBackup(fileList) {
+  const files = [...fileList].filter((f) => /\.(bin|zip)$/i.test(f.name));
+  if (!files.length) {
+    setProgMsg("Aucun fichier .zip ou .bin (OB1.bin, FC1.bin...) dans la selection.", true);
+    return;
+  }
+  setProgMsg("Import de " + files.length + " fichier(s)...");
+  try {
+    const fichiers = await Promise.all(files.map(async (f) => ({ nom: f.name, contenu: toBase64(await f.arrayBuffer()) })));
+    const r = await api("POST", "/api/programme/importer", { fichiers, note: $("sauver-note").value });
+    $("sauver-note").value = "";
+    setProgMsg("Sauvegarde importee : " + r.comptes + "." + (r.ignores.length ? " Ignores : " + r.ignores.join(", ") : ""));
+    loadBackups();
+  } catch (e) {
+    setProgMsg(e.message, true);
+  }
+}
+
 async function loadBackups() {
   try {
     const r = await api("GET", "/api/programme/sauvegardes");
@@ -186,6 +234,10 @@ async function loadBackups() {
         btn.addEventListener("click", fn);
         actions.append(btn);
       }
+      const dl = el("a", "btn small", "Telecharger");
+      dl.href = "/api/programme/telecharger?id=" + encodeURIComponent(b.id);
+      dl.title = "Copie au format .zip (cle USB, e-mail...)";
+      actions.append(dl);
       const cpu = el("div");
       cpu.append(el("span", "", b.modele || "—"), el("span", "sub mono", b.cpu));
       tr.append(cell(b.date, "mono", "Date"), cell(b.note || "—", "", "Note"), cell(cpu, "", "CPU"),
@@ -337,7 +389,7 @@ const WATCH_MS = 1000;
 let watch = loadWatch();          // [{adresse, libelle}]
 let watchTimer = null;
 let watchBusy = false;
-let watchPaused = false;
+let monitoring = localStorageGet("visualiser") === "1";      // off by default, like TIA Portal
 const lastValues = {};
 
 const FORMAT_NAMES = { dec: "DEC", ud: "DEC non signe", hex: "HEX", bin: "BIN", real: "REAL", char: "CHAR",
@@ -397,7 +449,7 @@ function renderWatchRows() {
     label.value = w.libelle || "";
     label.placeholder = "libelle";
     label.addEventListener("change", () => { w.libelle = label.value; saveWatch(); });
-    const value = el("span", "valeur", lastValues[fullAddress(w)] ?? "…");
+    const value = el("span", "valeur", (monitoring && lastValues[fullAddress(w)]) || "—");
     const formats = formatsFor(w.adresse);
     let fmt;
     if (formats.length) {
@@ -448,7 +500,7 @@ function renderWatchValues(r) {
       lastValues[a] = v;
     }
   }
-  $("watch-maj").textContent = (watchPaused ? "En pause — " : "") + "Lu a " + new Date().toLocaleTimeString("fr-FR");
+  $("watch-maj").textContent = "Lu a " + new Date().toLocaleTimeString("fr-FR");
 }
 
 async function readWatch() {
@@ -464,10 +516,20 @@ async function readWatch() {
   }
 }
 
+function setMonitoring(on) {
+  monitoring = on;
+  localStorageSet("visualiser", on ? "1" : "0");
+  $("btn-visu").setAttribute("aria-pressed", String(on));
+  $("visu-texte").textContent = on ? "Visualisation en cours" : "Visualiser";
+  $("table-watch").classList.toggle("off", !on);
+  if (!on) $("watch-maj").textContent = "Visualisation arretee : cliquer sur les lunettes pour voir les valeurs en direct.";
+  if (!$("vue-watch").hidden) startWatch();
+}
+
 function startWatch() {
   stopWatch();
   renderWatchRows();
-  if (watchPaused) return;
+  if (!monitoring) return;
   readWatch();
   watchTimer = setInterval(readWatch, WATCH_MS);
 }
@@ -513,7 +575,7 @@ async function writeValues() {
     if (r.run && io) text += " CPU en RUN : les entrees / sorties sont reecrites a chaque cycle.";
     else if (r.run) text += " CPU en RUN : le programme peut reecrire ces valeurs.";
     setWatchMsg(text, bad.length > 0);
-    readWatch();
+    if (monitoring) readWatch();
   } catch (e) {
     setWatchMsg(e.message, true);
   }
@@ -722,13 +784,23 @@ async function init() {
     }
     $("ajout-adresse").focus();
   });
-  $("btn-pause").addEventListener("click", () => {
-    watchPaused = !watchPaused;
-    $("btn-pause").textContent = watchPaused ? "Reprendre" : "Pause";
-    if (watchPaused) { stopWatch(); $("watch-maj").textContent = "En pause"; } else startWatch();
-  });
+  $("btn-visu").addEventListener("click", () => setMonitoring(!monitoring));
+  setMonitoring(monitoring);
   $("btn-ecrire").addEventListener("click", writeValues);
   $("form-sauver").addEventListener("submit", saveProgram);
+  $("btn-run").addEventListener("click", () => cpuAction("/api/cpu/demarrer",
+    "Passer la CPU en RUN ? La machine peut demarrer.\n\nMachine en securite ?",
+    () => lastStatus && lastStatus.cle === "STOP"
+      ? "Demarrage demande, mais la cle est sur STOP : la CPU restera en STOP (mettre la cle sur RUN ou RUN-P)."
+      : "Demarrage demande (RUN)."));
+  $("btn-stop").addEventListener("click", () => cpuAction("/api/cpu/arreter",
+    "Passer la CPU en STOP ? La machine s'arrete, les sorties sont coupees.\n\nMachine en securite ?",
+    () => "Arret demande (STOP)."));
+  $("btn-horloge").addEventListener("click", () => cpuAction("/api/cpu/horloge",
+    "Mettre l'horloge de la CPU a l'heure de ce PC (" + new Date().toLocaleString("fr-FR") + ") ?",
+    (r) => "Horloge CPU reglee : " + r.horloge.slice(0, 19)));
+  $("import-fichiers").addEventListener("change", (ev) => { importBackup(ev.target.files); ev.target.value = ""; });
+  $("import-dossier").addEventListener("change", (ev) => { importBackup(ev.target.files); ev.target.value = ""; });
   $("btn-exporter").addEventListener("click", exportWatch);
   $("fichier-table").addEventListener("change", (ev) => {
     if (ev.target.files[0]) importWatch(ev.target.files[0]);

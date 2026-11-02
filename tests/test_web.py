@@ -28,7 +28,8 @@ class StatusTests(unittest.TestCase):
         plc.leds = lambda: {"SF": (1, 0), "RUN": (0, 0), "STOP": (1, 0), "FRCE": (0, 1)}
         s = s7_status(plc)
         self.assertEqual((s["modele"], s["reference"], s["mode"]), ("CPU 315-2 DP", "6ES7 315-2AF03-0AB0", "STOP"))
-        self.assertEqual(s["alertes"], ["FRCE allume : Forcage actif", "SF allume : Defaut groupe"])
+        self.assertEqual(s["alertes"][:2], ["FRCE allume : Forcage actif", "SF allume : Defaut groupe"])
+        self.assertTrue(s["alertes"][2].startswith("Horloge CPU decalee : "))
         self.assertIn(("Somme programme", "6647-0600"), s["details"])
         frce = next(v for v in s["voyants"] if v["nom"] == "FRCE")
         self.assertTrue(frce["clignote"] and frce["defaut"])
@@ -227,6 +228,35 @@ class ProgramTests(unittest.TestCase):
         self.assertFalse(cpu.is_running())
         self.session.start_cpu()
         self.assertTrue(cpu.is_running())
+
+    def test_export_then_import_zip_and_bin_files(self):
+        import io
+        import zipfile
+        bid = self.save("ligne 3")
+        name, data = self.session.export_backup(bid)
+        self.assertEqual(name, f"programme_s7_{bid}.zip")
+        r = self.session.import_backup([(name, data)], "")
+        self.assertEqual(r["comptes"], "2 OB, 1 FB, 2 FC, 2 DB, 5 SDB")
+        imported = next(b for b in self.session.list_backups()["sauvegardes"] if b["id"] == r["id"])
+        self.assertTrue(imported["note"].startswith("ligne 3 (copie du "))
+        self.assertEqual(imported["modele"], "CPU 315-2 DP")
+        files = [(i.filename, zipfile.ZipFile(io.BytesIO(data)).read(i)) for i in zipfile.ZipFile(io.BytesIO(data)).infolist()]
+        r = self.session.import_backup(files + [("photo.jpg", b"x")], "cle USB")
+        self.assertEqual(r["ignores"], ["photo.jpg"])
+        with self.assertRaisesRegex(DriverError, "pas un bloc S7"):
+            self.session.import_backup([("OB1.bin", b"garbage" * 20)], "")
+        with self.assertRaisesRegex(DriverError, "Aucun bloc"):
+            self.session.import_backup([("notes.txt", b"x")], "")
+
+    def test_clock_and_run_stop(self):
+        s = self.session.status()
+        self.assertTrue(any(a.startswith("Horloge CPU decalee") for a in s["alertes"]))
+        self.session.set_clock()
+        self.assertFalse(any(a.startswith("Horloge") for a in self.session.status()["alertes"]))
+        self.session.stop_cpu()
+        self.assertFalse(self.session.plc.is_running())
+        self.session.start_cpu()
+        self.assertTrue(self.session.plc.is_running())
 
     def test_busy_and_bad_ids(self):
         bid = self.save()

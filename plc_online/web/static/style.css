@@ -249,6 +249,14 @@ label.btn { display: inline-block; }
 .row-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
 .btn.small { padding: 4px 10px; font-size: 13px; }
 
+.cpu-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; }
+.btn-run { background: var(--run); border-color: var(--run); color: #fff; min-width: 90px; }
+.btn-stop { background: var(--stop); border-color: var(--stop); color: #fff; min-width: 90px; }
+.btn-visu { display: inline-flex; align-items: center; gap: 8px; }
+.btn-visu[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.table.watch.off .valeur { opacity: .45; }
+a.btn { text-decoration: none; display: inline-block; }
+
 @media (max-width: 720px) {
   .layout { grid-template-columns: 1fr; padding: 12px 16px; }
   .tab { padding: 8px 10px; white-space: nowrap; }

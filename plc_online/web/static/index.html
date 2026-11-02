@@ -53,6 +53,13 @@
           <button type="submit" class="btn btn-primary" id="btn-sauver">Sauvegarder le programme de la CPU</button>
         </form>
         <p class="hint">Copie de tous les blocs (OB, FB, FC, DB) et de la configuration materielle (SDB).</p>
+        <div class="watch-bar">
+          <span class="hint">Sauvegarde deja sur le PC (autre dossier, cle USB, terminal) :</span>
+          <label class="btn" for="import-fichiers">Importer un .zip ou des blocs .bin</label>
+          <input type="file" id="import-fichiers" accept=".zip,.bin" multiple hidden>
+          <label class="btn" for="import-dossier">Importer un dossier</label>
+          <input type="file" id="import-dossier" webkitdirectory hidden>
+        </div>
 
         <div id="tache" class="tache" hidden>
           <div class="tache-head"><b id="tache-nom"></b><span id="tache-texte" class="hint"></span></div>
@@ -87,7 +94,10 @@
         <p class="hint">E/I, A/Q, M, DB10.DBW2, T5, Z2. Le format se change sur chaque ligne.</p>
 
         <div class="watch-bar">
-          <button type="button" class="btn" id="btn-pause">Pause</button>
+          <button type="button" class="btn btn-visu" id="btn-visu" aria-pressed="false" title="Visualiser les valeurs (comme les lunettes de TIA Portal / STEP 7)">
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M2 12h1M21 12h1M9.5 11.5c1.6-1 3.4-1 5 0"/><circle cx="6.5" cy="13" r="3.5" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="17.5" cy="13" r="3.5" fill="none" stroke="currentColor" stroke-width="2"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M3 12l2.5-5M21 12l-2.5-5"/></svg>
+            <span id="visu-texte">Visualiser</span>
+          </button>
           <button type="button" class="btn" id="btn-ecrire">Ecrire les valeurs</button>
           <span class="spacer"></span>
           <button type="button" class="btn" id="btn-exporter">Exporter</button>
@@ -142,6 +152,13 @@
           </div>
           <div id="mode" class="mode">?</div>
         </div>
+
+        <div class="cpu-actions">
+          <button type="button" class="btn btn-run" id="btn-run">Passer en RUN</button>
+          <button type="button" class="btn btn-stop" id="btn-stop">Passer en STOP</button>
+          <button type="button" class="btn" id="btn-horloge">Mettre l'horloge a l'heure du PC</button>
+        </div>
+        <p id="cpu-msg" class="msg" role="status"></p>
 
         <div id="alertes" class="alertes"></div>
 

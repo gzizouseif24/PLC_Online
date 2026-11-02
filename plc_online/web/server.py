@@ -16,11 +16,16 @@ JSON API:
     POST /api/programme/comparer {"id"}        CPU vs a copy (background)
     POST /api/programme/plan {"id", "avec_db"}  what a restore would load / leave
     POST /api/programme/restaurer {"id", "avec_db", "supprimer_en_trop"}   (background, CPU to STOP)
-    POST /api/cpu/demarrer                     restart the CPU after a restore
+    GET  /api/programme/telecharger?id=...     one copy as a .zip
+    POST /api/programme/importer {"fichiers": [{"nom", "contenu" (base64)}], "note"}   .bin files or a .zip
+    POST /api/cpu/demarrer                     CPU to RUN (warm restart)
+    POST /api/cpu/arreter                      CPU to STOP
+    POST /api/cpu/horloge                      CPU clock set to the PC time
     POST /api/deconnexion
 Errors: {"erreur": "message for the technician"} with HTTP 400 (bad request), 409 (not
 connected), 502 (the PLC did not answer), 503 (a long operation is running).
 """
+import base64
 import json
 import mimetypes
 import urllib.parse
@@ -50,6 +55,8 @@ def make_handler(session: Session):
 
         def read_json(self):
             n = int(self.headers.get("Content-Length") or 0)
+            if n > 10 * 1024 * 1024:
+                raise DriverError("Requete trop grosse")
             try:
                 return json.loads(self.rfile.read(n) or b"{}")
             except json.JSONDecodeError:
@@ -69,6 +76,19 @@ def make_handler(session: Session):
                 return self.send_json(200, session.job_state())
             if path == "/api/programme/sauvegardes":
                 return self.api(lambda: session.list_backups())
+            if path == "/api/programme/telecharger":
+                query = urllib.parse.parse_qs(self.path.partition("?")[2])
+                try:
+                    name, data = session.export_backup((query.get("id") or [""])[0])
+                except DriverError as e:
+                    return self.send_json(400, {"erreur": str(e)})
+                self.send_response(200)
+                self.send_header("Content-Type", "application/zip")
+                self.send_header("Content-Disposition", f'attachment; filename="{name}"')
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
             if path == "/api/programme/blocs":
                 query = urllib.parse.parse_qs(self.path.partition("?")[2])
                 return self.api(lambda: session.backup_blocks((query.get("id") or [""])[0]))
@@ -114,6 +134,21 @@ def make_handler(session: Session):
                 return self.api(restore)
             if path == "/api/cpu/demarrer":
                 return self.api(lambda: session.start_cpu())
+            if path == "/api/cpu/arreter":
+                return self.api(lambda: session.stop_cpu())
+            if path == "/api/cpu/horloge":
+                return self.api(lambda: session.set_clock())
+            if path == "/api/programme/importer":
+                def do_import():
+                    req = self.read_json()
+                    files = []
+                    for f in req.get("fichiers") or []:
+                        try:
+                            files.append((str(f.get("nom", "")), base64.b64decode(f.get("contenu", ""), validate=True)))
+                        except (ValueError, TypeError):
+                            raise DriverError(f"{f.get('nom', '?')} : contenu illisible") from None
+                    return session.import_backup(files, str(req.get("note") or ""))
+                return self.api(do_import)
             if path == "/api/deconnexion":
                 return self.api(lambda: (session.disconnect(), {"ok": True})[1])
             return self.send_json(404, {"erreur": "Action inconnue"})

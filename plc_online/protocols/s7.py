@@ -115,6 +115,17 @@ def parse_date_and_time(b: bytes) -> str:
     return f"{_bcd(b[2]):02d}/{_bcd(b[1]):02d}/{year} {_bcd(b[3]):02d}:{_bcd(b[4]):02d}:{_bcd(b[5]):02d}.{ms:03d}"
 
 
+def clock_bytes(when=None) -> bytes:
+    """10 bytes for 'set clock': 00, century, then DATE_AND_TIME (BCD; weekday 1 = Sunday)."""
+    import datetime
+    t = when or datetime.datetime.now()
+    bcd = lambda v: (v // 10) << 4 | v % 10
+    ms = t.microsecond // 1000
+    weekday = (t.isoweekday() % 7) + 1
+    return bytes([0, bcd(t.year // 100), bcd(t.year % 100), bcd(t.month), bcd(t.day), bcd(t.hour),
+                  bcd(t.minute), bcd(t.second), bcd(ms // 10), (ms % 10) << 4 | weekday])
+
+
 def parse_diag_entry(r: bytes) -> dict:
     """Diagnostic buffer entry, SZL 0x00A0 (§34.29): event ID, 5 words of info, DATE_AND_TIME."""
     from .s7_events import EVENT_CLASSES, event_text
@@ -417,18 +428,34 @@ class S7300:
         if r != 0:
             raise S7Error(f"ecriture {area}{db or ''} {byte}.{bit} : {self._err(r)}")
 
-    def userdata(self, group: int, subfunction: int, data: bytes) -> bytes:
-        """User data request (as daveReadSZL does), returns the user data of the answer."""
+    def userdata(self, group: int, subfunction: int, data) -> bytes:
+        """User data request (as daveReadSZL does), returns the user data of the answer.
+        data=None sends the 'no data' item libnodave uses for read-only requests (clock read)."""
         pa = (ctypes.c_ubyte * 8)(0x00, 0x01, 0x12, 0x04, 0x11, 0x40 | group, subfunction, 0x00)
-        ud = (ctypes.c_ubyte * max(len(data), 1))(*data)
         pdu = _PDU()
-        self.log(f"   userdata groupe {group} fonction {subfunction:02X} -> {bytes(data).hex(' ')}")
-        r = self.nd.daveBuildAndSendPDU(self.dc, ctypes.byref(pdu), pa, 8, ud, len(data))
+        self.log(f"   userdata groupe {group} fonction {subfunction:02X} -> {bytes(data or b'').hex(' ')}")
+        if data is None:
+            r = self.nd.daveBuildAndSendPDU(self.dc, ctypes.byref(pdu), pa, 8, None, 1)
+        else:
+            ud = (ctypes.c_ubyte * max(len(data), 1))(*data)
+            r = self.nd.daveBuildAndSendPDU(self.dc, ctypes.byref(pdu), pa, 8, ud, len(data))
         if r != 0:
             raise S7Error(f"fonction {group}/{subfunction:02X} refusee : {self._err(r)} ({r:04X})")
         answer = ctypes.string_at(pdu.udata, pdu.udlen) if pdu.udata and pdu.udlen > 0 else b""
         self.log(f"   reponse {len(answer)} octets : {answer.hex(' ')}")
         return answer
+
+    def read_clock(self) -> str:
+        """CPU clock (user data group 7 'time', function 1, as libnodave daveReadPLCTime):
+        2 bytes, then DATE_AND_TIME."""
+        answer = self.userdata(7, 0x01, None)
+        if len(answer) < 10:
+            raise S7Error(f"horloge : reponse trop courte ({answer.hex(' ')})")
+        return parse_date_and_time(answer[2:10])
+
+    def set_clock(self, when=None):
+        """Set the CPU clock (group 7, function 2, as daveSetPLCTime) to `when` (default: now)."""
+        self.userdata(7, 0x02, clock_bytes(when))
 
     def forces(self) -> list:
         """Active force jobs: [(sequence number, [(address, value bytes)])]. Read only."""
