@@ -7,6 +7,8 @@ JSON API:
     POST /api/connexion     {"marque": "s7-300", "reglages": {"mpi": 2}}  -> status
     GET  /api/etat          status of the connected PLC ({"connecte": false} if none)
     GET  /api/diagnostic    diagnostic buffer, rack (configured vs plugged in), CPU parameters
+    POST /api/valeurs       {"adresses": ["MW10", "EB0:bin"]} -> {"valeurs": {...}, "erreurs": {...}}
+    POST /api/ecrire        {"ecritures": [{"adresse": "MW10", "valeur": "5"}]} -> old / read back
     POST /api/deconnexion
 Errors: {"erreur": "message for the technician"} with HTTP 400 (bad request), 409 (not
 connected), 502 (the PLC did not answer).
@@ -75,6 +77,10 @@ def make_handler(session: Session):
                     req = self.read_json()
                     return session.connect(str(req.get("marque", "")), dict(req.get("reglages") or {}))
                 return self.api(connect)
+            if path == "/api/valeurs":
+                return self.api(lambda: session.values(list(self.read_json().get("adresses") or [])))
+            if path == "/api/ecrire":
+                return self.api(lambda: session.write(list(self.read_json().get("ecritures") or [])))
             if path == "/api/deconnexion":
                 return self.api(lambda: (session.disconnect(), {"ok": True})[1])
             return self.send_json(404, {"erreur": "Action inconnue"})

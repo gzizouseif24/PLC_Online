@@ -4,7 +4,7 @@ Multi-brand PLC diagnostic tool for maintenance: status, faults, live values, pr
 and restore, from a PC, without the vendor software.
 
 One protocol module per brand, one command-line tool per brand (French prompts), and a local
-web interface on top of the same library (connection, PLC status, diagnostic).
+web interface on top of the same library (connection, PLC status, diagnostic, watch table).
 
 | Brand | Link | What works (tested on the bench) |
 |---|---|---|
@@ -69,7 +69,9 @@ py -3.14-32 -m plc_online.web          # opens http://localhost:8000 in the brow
 PLC, any Python and choose **Demo**. Screen so far: connection (brand, MPI address, rack,
 slot), **Etat** refreshed every 2 s (model, RUN / STOP, LEDs, alerts, key, protection,
 checksums) and **Diagnostic** (rack: module configured vs plugged in with names and addresses,
-diagnostic buffer, CPU parameters). Next screens: watch table, program. The server only listens on
+diagnostic buffer, CPU parameters) and **Surveillance** (watch table: live values, modify with
+confirmation and read back, export / import of the table as a text file). Next screen: program
+(backup, compare, restore). The server only listens on
 `localhost`.
 
 ## Siemens tool

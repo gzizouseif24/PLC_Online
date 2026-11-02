@@ -63,7 +63,6 @@ function localStorageSet(key, value) {
 
 function renderStatus(s) {
   $("etat-vide").hidden = true;
-  if ($("vue-diag").hidden) $("etat-plein").hidden = false;
   $("modele").textContent = s.modele || s.marque;
   $("reference").textContent = s.reference || "";
 
@@ -92,7 +91,12 @@ function renderStatus(s) {
   setPill(faults ? "err" : "on", `${s.marque} — ${s.mode}${faults ? " — " + faults + " alerte(s)" : ""}`);
 }
 
+let currentTab = localStorageGet("onglet") || "etat-plein";
+
 function showTab(id) {
+  if (!$(id)) id = "etat-plein";
+  currentTab = id;
+  localStorageSet("onglet", id);
   for (const t of document.querySelectorAll(".tab")) {
     const on = t.dataset.tab === id;
     t.classList.toggle("active", on);
@@ -100,6 +104,171 @@ function showTab(id) {
   }
   for (const v of document.querySelectorAll(".vue")) v.hidden = v.id !== id;
   if (id === "vue-diag" && !diagLoaded) loadDiagnostic();
+  if (id === "vue-watch") startWatch(); else stopWatch();
+}
+
+// ---- watch table ----
+
+const WATCH_MS = 1000;
+let watch = loadWatch();          // [{adresse, libelle}]
+let watchTimer = null;
+let watchBusy = false;
+let watchPaused = false;
+const lastValues = {};
+
+function loadWatch() {
+  try { return JSON.parse(localStorageGet("table-surveillance")) || []; } catch { return []; }
+}
+function saveWatch() {
+  localStorageSet("table-surveillance", JSON.stringify(watch));
+}
+
+function setWatchMsg(text, isError) {
+  const m = $("watch-msg");
+  m.textContent = text || "";
+  m.className = "msg" + (isError ? " err" : "");
+}
+
+function renderWatchRows() {
+  const tbody = $("table-watch").tBodies[0];
+  if (!watch.length) {
+    const tr = el("tr");
+    const td = cell("Ajoutez une adresse (ex. MW10) ou importez une table.", "empty");
+    td.colSpan = 5;
+    tr.append(td);
+    tbody.replaceChildren(tr);
+    return;
+  }
+  tbody.replaceChildren(...watch.map((w, i) => {
+    const tr = el("tr");
+    tr.dataset.adresse = w.adresse;
+    const label = el("input", "libelle");
+    label.value = w.libelle || "";
+    label.placeholder = "libelle";
+    label.addEventListener("change", () => { w.libelle = label.value; saveWatch(); });
+    const value = el("span", "valeur", lastValues[w.adresse] ?? "…");
+    const input = el("input", "nouvelle");
+    input.placeholder = "—";
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") writeValues(); });
+    const del = el("button", "icon-btn", "×");
+    del.type = "button";
+    del.title = "Retirer " + w.adresse;
+    del.addEventListener("click", () => { watch.splice(i, 1); saveWatch(); renderWatchRows(); });
+    tr.append(cell(w.adresse, "mono", "Adresse"), cell(label, "", "Libelle"), cell(value, "", "Valeur"),
+              cell(input, "", "Nouvelle"), cell(del, "", ""));
+    return tr;
+  }));
+}
+
+function renderWatchValues(r) {
+  for (const tr of $("table-watch").tBodies[0].rows) {
+    const a = tr.dataset.adresse;
+    if (!a) continue;
+    const span = tr.querySelector(".valeur");
+    if (a in r.erreurs) {
+      span.textContent = r.erreurs[a];
+      span.className = "valeur erreur";
+    } else if (a in r.valeurs) {
+      const v = r.valeurs[a];
+      const changed = a in lastValues && lastValues[a] !== v;
+      span.textContent = v;
+      span.className = "valeur" + (v === "1" ? " bit1" : "");
+      if (changed) { void span.offsetWidth; span.classList.add("changed"); }
+      lastValues[a] = v;
+    }
+  }
+  $("watch-maj").textContent = (watchPaused ? "En pause — " : "") + "Lu a " + new Date().toLocaleTimeString("fr-FR");
+}
+
+async function readWatch() {
+  if (watchBusy || !watch.length) return;
+  watchBusy = true;
+  try {
+    renderWatchValues(await api("POST", "/api/valeurs", { adresses: watch.map((w) => w.adresse) }));
+  } catch (e) {
+    setWatchMsg(e.message, true);
+    if (e.status === 409 || e.status === 502) { stopWatch(); stopPolling(); setConnected(false); }
+  } finally {
+    watchBusy = false;
+  }
+}
+
+function startWatch() {
+  stopWatch();
+  renderWatchRows();
+  if (watchPaused) return;
+  readWatch();
+  watchTimer = setInterval(readWatch, WATCH_MS);
+}
+function stopWatch() {
+  if (watchTimer) clearInterval(watchTimer);
+  watchTimer = null;
+}
+
+function addWatch(adresse, libelle) {
+  adresse = adresse.trim();
+  if (!adresse) return false;
+  if (watch.some((w) => w.adresse.toUpperCase() === adresse.toUpperCase())) {
+    setWatchMsg(adresse + " est deja dans la table.", true);
+    return false;
+  }
+  watch.push({ adresse, libelle: (libelle || "").trim() });
+  return true;
+}
+
+async function writeValues() {
+  const items = [];
+  for (const tr of $("table-watch").tBodies[0].rows) {
+    const input = tr.querySelector("input.nouvelle");
+    if (input && input.value.trim() !== "") items.push({ adresse: tr.dataset.adresse, valeur: input.value.trim(), input });
+  }
+  if (!items.length) {
+    setWatchMsg("Tapez une nouvelle valeur dans la colonne de droite, puis Ecrire.", true);
+    return;
+  }
+  const lines = items.map((it) => `  ${it.adresse} : ${lastValues[it.adresse] ?? "?"}  ->  ${it.valeur}`).join("\n");
+  if (!confirm(`Ecrire dans l'automate ?\n\n${lines}\n\nMachine en securite ?`)) {
+    setWatchMsg("Annule, rien n'a ete ecrit.");
+    return;
+  }
+  try {
+    const r = await api("POST", "/api/ecrire", { ecritures: items.map(({ adresse, valeur }) => ({ adresse, valeur })) });
+    const bad = r.resultats.filter((x) => !x.ok);
+    for (const it of items) if (!bad.some((b) => b.adresse === it.adresse)) it.input.value = "";
+    let text = bad.length
+      ? "Relu different : " + bad.map((b) => `${b.adresse} = ${b.relu ?? "?"}`).join(", ") + " (reecrit par le programme ?)"
+      : `${r.resultats.length} valeur(s) ecrite(s) et relue(s).`;
+    const io = items.some((it) => /^[EIAQ]/i.test(it.adresse) && !/^DB/i.test(it.adresse));
+    if (r.run && io) text += " CPU en RUN : les entrees / sorties sont reecrites a chaque cycle.";
+    else if (r.run) text += " CPU en RUN : le programme peut reecrire ces valeurs.";
+    setWatchMsg(text, bad.length > 0);
+    readWatch();
+  } catch (e) {
+    setWatchMsg(e.message, true);
+  }
+}
+
+function exportWatch() {
+  const text = "# Table de surveillance PLC Online\n" + watch.map((w) => (w.adresse + " " + (w.libelle || "")).trim()).join("\n") + "\n";
+  const a = el("a");
+  a.href = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
+  a.download = "table_surveillance.txt";
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+async function importWatch(file) {
+  const text = await file.text();
+  let added = 0;
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.split("#")[0].trim();
+    if (!line) continue;
+    const [adresse, ...rest] = line.split(/\s+/);
+    if (addWatch(adresse, rest.join(" "))) added++;
+  }
+  saveWatch();
+  setWatchMsg(`${added} adresse(s) importee(s) depuis ${file.name}.`);
+  startWatch();
 }
 
 let diagLoaded = false;
@@ -181,7 +350,9 @@ function setConnected(connected) {
   $("btn-deconnecter").hidden = !connected;
   $("btn-connecter").textContent = connected ? "Reconnecter" : "Connecter";
   $("tabs").hidden = !connected;
+  if (connected) showTab(currentTab);
   if (!connected) {
+    stopWatch();
     $("etat-vide").hidden = false;
     for (const v of document.querySelectorAll(".vue")) v.hidden = true;
     diagLoaded = false;
@@ -234,7 +405,6 @@ async function connect(ev) {
     diagLoaded = false;
     renderStatus(await api("POST", "/api/connexion", { marque, reglages }));
     setConnected(true);
-    showTab("etat-plein");
     setMsg("");
     startPolling();
   } catch (e) {
@@ -270,6 +440,31 @@ async function init() {
   $("btn-deconnecter").addEventListener("click", disconnect);
   $("btn-diag").addEventListener("click", loadDiagnostic);
   for (const t of document.querySelectorAll(".tab")) t.addEventListener("click", () => showTab(t.dataset.tab));
+  $("form-ajout").addEventListener("submit", (ev) => {
+    ev.preventDefault();
+    if (addWatch($("ajout-adresse").value, $("ajout-libelle").value)) {
+      saveWatch();
+      $("ajout-adresse").value = "";
+      $("ajout-libelle").value = "";
+      setWatchMsg("");
+      startWatch();
+    }
+    $("ajout-adresse").focus();
+  });
+  $("btn-pause").addEventListener("click", () => {
+    watchPaused = !watchPaused;
+    $("btn-pause").textContent = watchPaused ? "Reprendre" : "Pause";
+    if (watchPaused) { stopWatch(); $("watch-maj").textContent = "En pause"; } else startWatch();
+  });
+  $("btn-ecrire").addEventListener("click", writeValues);
+  $("btn-exporter").addEventListener("click", exportWatch);
+  $("fichier-table").addEventListener("change", (ev) => {
+    if (ev.target.files[0]) importWatch(ev.target.files[0]);
+    ev.target.value = "";
+  });
+  $("btn-vider").addEventListener("click", () => {
+    if (watch.length && confirm("Retirer toutes les adresses de la table ?")) { watch = []; saveWatch(); renderWatchRows(); }
+  });
 
   // already connected (page reloaded): show the state straight away
   const s = await api("GET", "/api/etat").catch(() => ({ connecte: false }));

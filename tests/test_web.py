@@ -6,7 +6,7 @@ import urllib.error
 import urllib.request
 
 from plc_online.protocols.s7 import S7Error
-from plc_online.web.drivers import DemoS7, DriverError, Session, s7_diagnostic, s7_status
+from plc_online.web.drivers import DemoS7, DriverError, Session, read_values, s7_diagnostic, s7_status, write_values
 from plc_online.web.server import serve
 
 
@@ -59,6 +59,28 @@ class DiagnosticTests(unittest.TestCase):
         self.assertEqual(len(d["modules"]), 3)
         self.assertIn("Tampon de diagnostic non lu : objet inexistant", d["alertes"])
         self.assertIn("Configuration materielle non lue : objet inexistant", d["alertes"])
+
+
+class WatchTests(unittest.TestCase):
+    def test_read_values_and_errors(self):
+        r = read_values(DemoS7(), ["MW10", "DB10.DBD4:real", "M0.0", "MW5000", "XX9"])
+        self.assertEqual({k: r["valeurs"][k] for k in ("MW10", "DB10.DBD4:real", "M0.0")},
+                         {"MW10": "1234", "DB10.DBD4:real": "21.5", "M0.0": "0"})
+        self.assertIn("hors de la memoire", r["erreurs"]["MW5000"])
+        self.assertIn("adresse non comprise", r["erreurs"]["XX9"])
+
+    def test_write_reads_back(self):
+        plc = DemoS7()
+        r = write_values(plc, [{"adresse": "MW10", "valeur": "-5"}, {"adresse": "M0.1", "valeur": "1"}])
+        self.assertEqual([(x["adresse"], x["ancien"], x["relu"], x["ok"]) for x in r["resultats"]],
+                         [("MW10", "1234", "-5", True), ("M0.1", "0", "1", True)])
+        self.assertEqual(read_values(plc, ["MW10", "M0.1"])["valeurs"], {"MW10": "-5", "M0.1": "1"})
+
+    def test_bad_value_writes_nothing(self):
+        plc = DemoS7()
+        with self.assertRaisesRegex(DriverError, "MB0 : 300 ne tient pas"):
+            write_values(plc, [{"adresse": "MW10", "valeur": "1"}, {"adresse": "MB0", "valeur": "300"}])
+        self.assertEqual(read_values(plc, ["MW10"])["valeurs"]["MW10"], "1234")
 
 
 class ApiTests(unittest.TestCase):
@@ -125,6 +147,15 @@ class ApiTests(unittest.TestCase):
         self.json("POST", "/api/connexion", {"marque": "s7-300", "reglages": {"mpi": 2}})
         code, d = self.json("GET", "/api/diagnostic")
         self.assertEqual((code, len(d["modules"]), len(d["evenements"])), (200, 3, 4))
+
+    def test_watch_api(self):
+        self.json("POST", "/api/connexion", {"marque": "s7-300", "reglages": {"mpi": 2}})
+        code, r = self.json("POST", "/api/valeurs", {"adresses": ["MW10", "XX"]})
+        self.assertEqual((code, r["valeurs"], list(r["erreurs"])), (200, {"MW10": "1234"}, ["XX"]))
+        code, r = self.json("POST", "/api/ecrire", {"ecritures": [{"adresse": "MW10", "valeur": "7"}]})
+        self.assertEqual((code, r["resultats"][0]["relu"], r["run"] in (True, False)), (200, "7", True))
+        code, r = self.json("POST", "/api/ecrire", {"ecritures": []})
+        self.assertEqual((code, r["erreur"]), (400, "Rien a ecrire"))
 
     def test_brands(self):
         code, b = self.json("GET", "/api/marques")

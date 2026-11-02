@@ -11,6 +11,7 @@ from pathlib import Path
 from plc_online.protocols.s7 import S7300, S7Error, parse_block, parse_sdb1_modules
 from plc_online.protocols.s7_catalogue import catalog_name
 from plc_online.protocols.s7_names import address_range, cpu_parameter_lines, module_text
+from plc_online.protocols.s7_vars import AddressError, Var
 
 FAULT_LEDS = {"SF": "Defaut groupe", "BAF": "Defaut pile", "BUS1F": "Defaut bus MPI/DP",
               "BUS2F": "Defaut bus DP", "FRCE": "Forcage actif"}
@@ -131,6 +132,60 @@ def s7_diagnostic(plc, rack: int = 0) -> dict:
     return out
 
 
+MAX_WATCH = 100
+
+
+def parse_vars(texts) -> tuple:
+    """([Var], {text: error}) for the addresses typed in the watch table."""
+    good, bad = [], {}
+    for t in texts:
+        try:
+            good.append(Var(str(t)))
+        except AddressError as e:
+            bad[str(t)] = str(e)
+    return good, bad
+
+
+def read_values(plc, texts) -> dict:
+    """{'valeurs': {address text: value text}, 'erreurs': {address text: message}}."""
+    texts = [str(t) for t in texts][:MAX_WATCH]
+    variables, errors = parse_vars(texts)
+    raw = plc.read_vars(variables) if variables else {}
+    values = {}
+    for v in variables:
+        if raw.get(v) is None:
+            errors[v.text] = "lecture refusee par la CPU (adresse hors de la memoire ?)"
+        else:
+            values[v.text] = v.decode(raw[v])
+    return {"valeurs": values, "erreurs": errors}
+
+
+def write_values(plc, items) -> dict:
+    """Modify: items = [{'adresse': 'MW10', 'valeur': '123'}]. Everything is checked before the
+    first write; then old value, write, read back for each address."""
+    pairs = []
+    for it in items:
+        try:
+            var = Var(str(it.get("adresse", "")))
+            pairs.append((var, var.encode(str(it.get("valeur", "")))))
+        except (AddressError, ValueError) as e:
+            raise DriverError(f"{it.get('adresse', '')} : {e}") from None
+    if not pairs:
+        raise DriverError("Rien a ecrire")
+    variables = [v for v, _ in pairs]
+    old = plc.read_vars(variables)
+    for v, data in pairs:
+        plc.write_var(v, data)
+    back = plc.read_vars(variables)
+    out = []
+    for v, data in pairs:
+        wanted = str(data[0]) if v.bit is not None else v.decode(data)
+        got = v.decode(back[v]) if back.get(v) is not None else None
+        out.append({"adresse": v.text, "ancien": v.decode(old[v]) if old.get(v) is not None else None,
+                    "demande": wanted, "relu": got, "ok": got == wanted})
+    return {"resultats": out}
+
+
 SDB_DEMO = Path(__file__).resolve().parents[2] / "research" / "siemens" / "sdb" / "1_config_fausse"
 
 
@@ -140,6 +195,53 @@ class DemoS7:
 
     def __init__(self):
         self.running = True
+        self.mem = {}
+        self.log = lambda m: None
+        self.tick = 0
+        z = self._zone("M", 0)
+        z[10:12] = (1234).to_bytes(2, "big")
+        self._zone("DB", 10)[4:8] = bytes.fromhex("41AC0000")          # 21.5 as REAL
+
+    def _zone(self, area, db):
+        return self.mem.setdefault((area, db), bytearray(2048))
+
+    def _simulate(self):
+        """A little machine: inputs move, a counter counts, timer T1 runs down."""
+        self.tick += 1
+        i = self._zone("I", 0)
+        i[0] = (0b00000101 if self.tick % 6 < 3 else 0b00000011) | (0x80 if random.random() < 0.2 else 0)
+        q = self._zone("Q", 0)
+        q[4] = i[0] & 0x0F
+        m = self._zone("M", 0)
+        m[20:22] = ((int.from_bytes(m[20:22], "big") + 1) & 0xFFFF).to_bytes(2, "big")
+        m[100] = 0xFF if self.tick % 2 else 0x00                            # clock memory
+        t = self._zone("T", 0)
+        left = (50 - self.tick % 50)                                        # 5.0 s .. 0.1 s, base 100 ms
+        t[2:4] = (0x1000 | int(f"{left:03d}", 16)).to_bytes(2, "big")
+
+    def read_bytes(self, area, start, count, db=0):
+        if start + count > 1024:
+            raise S7Error("adresse hors de la memoire (demo)")
+        z = self._zone(area, db if area == "DB" else 0)
+        if area in ("T", "C"):
+            return bytes(z[2 * start:2 * (start + count)])
+        return bytes(z[start:start + count])
+
+    def read_vars(self, variables):
+        self._simulate()
+        return S7300.read_vars(self, variables)
+
+    def write_bytes(self, area, start, data, db=0):
+        if area in ("T", "C") or start + len(data) > 1024:
+            raise S7Error("ecriture refusee (demo)")
+        self._zone(area, db if area == "DB" else 0)[start:start + len(data)] = data
+
+    def write_bit(self, area, byte, bit, value, db=0):
+        z = self._zone(area, db if area == "DB" else 0)
+        z[byte] = (z[byte] & ~(1 << bit)) | ((1 if value else 0) << bit)
+
+    def write_var(self, var, data):
+        S7300.write_var(self, var, data)
 
     def identity(self):
         return {"reference": "6ES7 315-2AF03-0AB0", "firmware": "V1.2.0"}
@@ -239,6 +341,26 @@ class Session:
             except S7Error as e:
                 self._close()
                 raise DriverError(f"Liaison perdue : {e}") from None
+
+    def _call(self, action):
+        with self.lock:
+            if self.plc is None:
+                raise DriverError("Pas connecte")
+            try:
+                return action(self.plc)
+            except S7Error as e:
+                self._close()
+                raise DriverError(f"Liaison perdue : {e}") from None
+
+    def values(self, texts) -> dict:
+        return self._call(lambda plc: read_values(plc, texts))
+
+    def write(self, items) -> dict:
+        def run(plc):
+            out = write_values(plc, items)
+            out["run"] = bool(plc.leds().get("RUN", (0, 0))[0])
+            return out
+        return self._call(run)
 
     def disconnect(self):
         with self.lock:

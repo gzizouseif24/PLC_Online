@@ -40,7 +40,42 @@
       <nav class="tabs" id="tabs" role="tablist" hidden>
         <button type="button" role="tab" class="tab active" data-tab="etat-plein" aria-selected="true">Etat</button>
         <button type="button" role="tab" class="tab" data-tab="vue-diag" aria-selected="false">Diagnostic</button>
+        <button type="button" role="tab" class="tab" data-tab="vue-watch" aria-selected="false">Surveillance</button>
       </nav>
+
+      <div id="vue-watch" class="vue" hidden>
+        <form id="form-ajout" class="ajout" autocomplete="off">
+          <label class="field">
+            <span>Adresse</span>
+            <input id="ajout-adresse" placeholder="MW10, E0.0, DB10.DBD4:real" required>
+          </label>
+          <label class="field grow">
+            <span>Libelle</span>
+            <input id="ajout-libelle" placeholder="ex. compteur pieces">
+          </label>
+          <button type="submit" class="btn btn-primary">Ajouter</button>
+        </form>
+        <p class="hint">E/I, A/Q, M, DB10.DBW2, T5, Z2. Format apres <b>:</b> hex, bin, real, ud, char.</p>
+
+        <div class="watch-bar">
+          <button type="button" class="btn" id="btn-pause">Pause</button>
+          <button type="button" class="btn" id="btn-ecrire">Ecrire les valeurs</button>
+          <span class="spacer"></span>
+          <button type="button" class="btn" id="btn-exporter">Exporter</button>
+          <label class="btn" for="fichier-table">Importer</label>
+          <input type="file" id="fichier-table" accept=".txt,text/plain" hidden>
+          <button type="button" class="btn" id="btn-vider">Vider</button>
+        </div>
+        <p id="watch-msg" class="msg" role="status"></p>
+
+        <div class="table-wrap">
+          <table class="table watch" id="table-watch">
+            <thead><tr><th>Adresse</th><th>Libelle</th><th>Valeur</th><th>Nouvelle valeur</th><th></th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <p class="maj" id="watch-maj"></p>
+      </div>
 
       <div id="vue-diag" class="vue" hidden>
         <div class="diag-head">
