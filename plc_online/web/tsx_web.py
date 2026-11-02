@@ -828,13 +828,20 @@ class TsxOps:
                 before = self._upload(plc, progress, "copie de securite")
                 out["sauvegarde_avant"] = save_image(self.programs, before, plc.nom, "avant restauration")["id"]
             out["etait_en_run"] = mode == "RUN"
-            progress("passage en STOP", 0, 0)
-            plc.stop()
-            plc.reserve(ut.RESERVE_DOWNLOAD)
+            step = "passage en STOP (25)"
+            try:
+                if mode != "STOP" and mode != "VIDE":   # PL7 sends no STOP to an empty PLC (capture 02/11)
+                    progress("passage en STOP", 0, 0)
+                    plc.stop()
+                step = "reservation pour le chargement (1D)"
+                plc.reserve(ut.RESERVE_DOWNLOAD)
+            except UniteError as e:
+                out["erreur"] = f"{e}, a l'etape {step}"
+                return out
             try:
                 plc.download(blob, lambda seg, n: progress(f"chargement : {n} / {len(blob)} octets", n, len(blob)))
             except UniteError as e:
-                out["erreur"] = str(e)
+                out["erreur"] = f"{e}, a l'etape chargement (3A/3B/3C)"
                 return out
             finally:
                 try:

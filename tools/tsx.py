@@ -171,12 +171,20 @@ def cmd_restaurer(tsx, filename):
         raise UniteError(f"{filename} ne ressemble pas a une sauvegarde de programme")
     name = blob[:14].split(b"\0")[0].decode("ascii", "replace").strip()
     print(f"Fichier {filename} : {len(blob)} octets, application '{name}'")
-    print("Avant de remplacer le programme, sauvegarde automatique du programme actuel :")
-    cmd_sauvegarder(tsx, f"avant_restauration_{time.strftime('%Y%m%d_%H%M%S')}.tsxbak")
+    try:
+        state = tsx.read_cpu()[1] & 0x0F        # 1 STOP, 2 RUN, 4 pas d'application
+    except (UniteError, IndexError):
+        state = 0
+    if state == 4:
+        print("L'automate est vide (pas d'application) : rien a sauvegarder avant.")
+    else:
+        print("Avant de remplacer le programme, sauvegarde automatique du programme actuel :")
+        cmd_sauvegarder(tsx, f"avant_restauration_{time.strftime('%Y%m%d_%H%M%S')}.tsxbak")
     if not confirm("Remplacer le programme de l'automate ? Il passera en STOP. Machine en securite ?"):
         print("Annule, rien n'a ete ecrit.")
         return
-    tsx.stop()
+    if state not in (1, 4):                     # PL7 n'envoie pas STOP a un automate vide
+        tsx.stop()
     tsx.reserve(RESERVE_DOWNLOAD)
     try:
         t0 = time.time()

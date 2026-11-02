@@ -82,6 +82,9 @@ class TsxWebTests(unittest.TestCase):
         plc.app, plc.read_cpu = b"", lambda: [0, 1 if plc.app else 4, 8] + [0] * 74   # failed load: PLC empty
         plan = self.s.restore_plan(bid, False)
         self.assertEqual((plan["vide"], plan["run"]), (True, False))
+        def no_stop():
+            raise AssertionError("STOP sent to an empty PLC")
+        plc.stop = no_stop                     # an empty PLC refuses STOP (FD); PL7 does not send it
         self.s.restore(bid, False, False)
         r = self.wait()
         self.assertTrue(r["automate_vide"])
