@@ -194,7 +194,10 @@ class DemoTsx:
         pass
 
     def app_info(self):
-        return {"nom": ut.app_name(self.app), "brut": f"{len(self.app)}-{sum(self.app)}"}
+        return {"nom": ut.app_name(self.app), "brut": f"{len(self.app)}-{random.randint(0, 9)}"}   # changes, like the PLC
+
+    def app_checksums(self):
+        return (f"{sum(self.app[-200:]) & 0xFFFF:04x}", f"{sum(self.app) & 0xFFFF:04x}")
 
     def upload(self, progress=None):
         for seg, i in enumerate(range(0, len(self.app), ut.SEGMENT_SIZE), 1):
@@ -422,6 +425,8 @@ def tsx_diagnostic(plc, config=None) -> dict:
                 statuses[pos] = plc.module_status(pos)
             except UniteError:
                 pass
+    if config and config.get("erreur"):
+        out["alertes"].append(f"Configuration non lue (lecture du programme) : {config['erreur']}")
     if config is not None or faults is not None:
         out["modules"] = module_rows(modules, faults, statuses, names)
         bad = [r for r in out["modules"] if not r["ok"]]
@@ -782,22 +787,30 @@ class TsxOps:
         return self.s._call(lambda plc: tsx_diagnostic(plc, self._config(plc)))
 
     def _config(self, plc):
-        """Configured modules of the loaded application. Read from the application image, which
-        takes a full program read the first time; then kept while the application signature
-        (request 92 block 0A) stays the same."""
+        """Configured modules of the loaded application, read from the application image (a full
+        program read). Kept while the application checksums (92 07 0C) stay the same; read again
+        every time if the PLC does not give them."""
         if cpu_state(plc)[0] == "VIDE":
             return {"modules": [], "codes": {}}
+        key = None
         try:
             plc.reserve()
             try:
-                key = (plc.nom, plc.app_info()["brut"])
+                key = (plc.nom, plc.app_checksums())
             finally:
                 plc.release()
         except UniteError:
-            return None
-        if key not in self.configs:
-            self._upload(plc, lambda *a: None)
-        return self.configs.get(key)
+            key = None
+        if key and key in self.configs:
+            return self.configs[key]
+        try:
+            blob = self._upload(plc, lambda *a: None)
+        except UniteError as e:
+            return {"modules": [], "codes": {}, "erreur": str(e)}
+        config = {"modules": ut.parse_config(blob), "codes": ut.config_codes(blob)}
+        if key:
+            self.configs[key] = config
+        return config
 
     def values(self, texts):
         return self.s._call(lambda plc: read_values(plc, texts))
@@ -846,8 +859,6 @@ class TsxOps:
             name = info["nom"]
             step = "lecture du programme (3D/3E)"
             blob = plc.upload(lambda seg, n: progress(f"{text} {name} : {n} octets", 0, 0))
-            self.configs[(plc.nom, info["brut"])] = {"modules": ut.parse_config(blob),
-                                                     "codes": ut.config_codes(blob)}
         except UniteError as e:
             raise UniteError(f"{e}, a l'etape {step}") from None
         finally:

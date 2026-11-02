@@ -50,6 +50,14 @@ class TsxWebTests(unittest.TestCase):
         self.assertEqual(rows[4]["en_place"]["nom"], "TSX DEZ 32D2")
         self.assertEqual(rows[1]["en_place"]["nom"], "TSX DEZ 32D2")
 
+    def test_config_kept_when_app_info_changes(self):
+        uploads = []
+        real = self.s.plc.upload
+        self.s.plc.upload = lambda progress=None: (uploads.append(1), real(progress))[1]
+        for _ in range(3):                                         # app info differs at each read
+            self.assertEqual(len(self.s.diagnostic()["modules"]), 4)
+        self.assertEqual(len(uploads), 1)                          # program read once, then kept
+
     def test_external_fault_named(self):
         self.s.plc.io_faults[1] = 1
         rows = {m["emplacement"]: m for m in self.s.diagnostic()["modules"]}

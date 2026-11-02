@@ -411,6 +411,16 @@ class Tsx:
             raise UniteError(f"ecriture %SW refusee : {hexs(answer)}")
         return "92"
 
+    def app_checksums(self) -> tuple:
+        """(configuration, programme) : 92 07 0C 02 00 -> C2 0C 00 <2 octets> = somme de controle
+        de la configuration (6B 93 -> 67 93 quand un module est retire), 92 07 0C 01 00 -> celle
+        du programme. Stables tant que l'application ne change pas (captures du 02/11/2026)."""
+        out = []
+        for block in (0x02, 0x01):
+            data = self._ask([APP_INFO, PL7_CATEGORY, 0x0C, block, 0x00], APP_INFO + 0x30)
+            out.append(bytes(data[2:4]).hex())
+        return tuple(out)
+
     def module_status(self, position: int) -> dict:
         """READ_STATUS_MODULE (44), as PL7 does when a module is opened in the online configuration
         (capture 02/11/2026, client TSX 3722): 44 07 02 00 <position> ->
