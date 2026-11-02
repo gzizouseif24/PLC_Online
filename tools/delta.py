@@ -32,40 +32,88 @@ def confirm(question):
 
 # ---- chercher ----
 
+def request_frame(mode, station):
+    """Read D1000 (1 word): the frame sent by chercher."""
+    import struct
+    from plc_online.protocols.modbus import crc16, lrc
+    body = bytes([station]) + struct.pack(">BHH", 3, 0x1000 + 1000, 1)
+    if mode == "ascii":
+        return b":" + (body + bytes([lrc(body)])).hex().upper().encode() + b"\r\n"
+    return body + struct.pack("<H", crc16(body))
+
+
 def probe(port, mode, baud, parity, stop, station):
+    """Bytes received after the request (b'' = silence)."""
+    from plc_online.protocols.modbus import open_serial
     try:
-        plc = open_delta(port, mode, baud, parity, stop, station, timeout=0.3)
+        ser = open_serial(port, baud, parity, stop, 0.4, bytesize=7 if mode == "ascii" else 8)
     except Exception as e:
         raise SystemExit(f"ECHEC : port {port} : {e}")
     try:
-        plc.read_words("D", 1000, 1)
-        return True
-    except PlcRefused:
-        return True                     # it answered: settings are right
-    except ModbusError:
-        return False
+        ser.reset_input_buffer()
+        ser.write(request_frame(mode, station))
+        got = ser.read(64)
+        while True:                     # keep the rest of a slow reply
+            more = ser.read(64)
+            if not more:
+                return got
+            got += more
     finally:
-        plc.close()
+        ser.close()
+
+
+def answered(mode, station, got):
+    """True if got is a valid reply from station (data or Modbus exception)."""
+    try:
+        if mode == "ascii":
+            data = bytes.fromhex(got.strip()[1:].decode("ascii"))
+            from plc_online.protocols.modbus import lrc
+            return got.strip().startswith(b":") and lrc(data[:-1]) == data[-1] and data[0] == station
+        from plc_online.protocols.modbus import crc16
+        import struct
+        return len(got) >= 5 and got[0] == station and crc16(got[:-2]) == struct.unpack("<H", got[-2:])[0]
+    except (ValueError, IndexError):
+        return False
 
 
 def cmd_chercher(port, station):
     print(f"Recherche sur {port}, station {station}...")
+    echo_seen = noise_seen = False
     for mode, baud, parity, stop in SEARCH:
         bits = 7 if mode == "ascii" else 8
         print(f"   {mode.upper():5} {baud:6} {bits}{parity}{stop} ... ", end="", flush=True)
-        if probe(port, mode, baud, parity, stop, station):
+        got = probe(port, mode, baud, parity, stop, station)
+        if got and answered(mode, station, got):
             print("REPOND")
             print(f"\nA utiliser : --mode {mode} --baud {baud} --parite {parity} --stop {stop} --station {station}")
             return
-        print("non")
-    print(f"\nRien a la station {station}. Essai des stations 1..32 en ASCII 9600 7E1 et RTU 9600 8E1...")
+        if not got:
+            print("rien recu")
+        elif got.startswith(request_frame(mode, station)):
+            echo_seen = True
+            print(f"ECHO de notre trame seulement ({len(got)} octets)")
+        else:
+            noise_seen = True
+            print(f"{len(got)} octets illisibles : {got[:24].hex(' ')}")
+    if not echo_seen and not noise_seen:
+        print("\nSilence total. Causes probables :\n"
+              "   - fils + / - inverses : les permuter et relancer\n"
+              "   - COM2 utilise par le programme en MAITRE (variateurs, MODRD/MODWR) : il ne repond pas\n"
+              "     -> passer par COM1 (RS-232, mini-DIN 8, cable DVPACAB230 ou equivalent)\n"
+              "   - mauvais port COM / adaptateur : verifier dans le Gestionnaire de peripheriques")
+    elif noise_seen:
+        print("\nDes octets arrivent mais illisibles : vitesse/format non standard, ou un autre appareil parle sur la ligne.")
+        print("Envoyer cette sortie.")
+    else:
+        print("\nSeulement l'echo : l'adaptateur renvoie ce qu'il envoie, l'automate ne repond pas (voir causes ci-dessus).")
+    print(f"\nEssai des stations 1..32 en ASCII 9600 7E1 et RTU 9600 8E1 (environ 30 s)...")
     for mode in ("ascii", "rtu"):
         for st in range(1, 33):
-            if st != station and probe(port, mode, 9600, "E", 1, st):
+            got = probe(port, mode, 9600, "E", 1, st)
+            if got and answered(mode, st, got):
                 print(f"REPOND : --mode {mode} --baud 9600 --parite E --stop 1 --station {st}")
                 return
-    print("Aucune reponse. Verifier : cablage + / - (essayer d'inverser), port COM, WPLSoft ferme,\n"
-          "le port COM2 de l'automate est peut-etre configure en maitre ou autre vitesse (essayer COM1 RS-232).")
+    print("Aucune station ne repond.")
 
 
 # ---- etat ----
