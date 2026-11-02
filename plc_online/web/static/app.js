@@ -896,6 +896,7 @@ function renderDiagnostic(d) {
     return tr;
   }, "Aucun module lu", 6);
 
+  if (!d.evenements) return;                      // TSX: no diagnostic buffer
   rows($("table-events").tBodies[0], d.evenements, (e) => {
     const tr = el("tr");
     tr.title = "Info : " + e.info;

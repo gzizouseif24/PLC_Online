@@ -360,7 +360,29 @@ class Tsx:
         """Defaut par position du rack (0..15), 1 = module en defaut. Requete vue dans PL7 en ligne
         (capture du 02/11/2026) : 93 07 02 68 00 04 02 10 -> C3 02 00 + 16 octets ; DEZ 32D2 non
         alimente en positions 1-2 -> 00 01 01 00 ..., configuration vide -> tout a 0."""
-        data = self._ask([MONITOR, PL7_CATEGORY, 0x02, 0x68, 0x00, 0x04, 0x02, 0x10], MONITOR + 0x30)
+        request = [MONITOR, PL7_CATEGORY, 0x02, 0x68, 0x00, 0x04, 0x02, 0x10]
+        try:
+            data = self._ask(request, MONITOR + 0x30)
+        except UniteError as e:
+            if "FD" not in str(e):
+                raise
+            # PL7 always sends 93 07 0B first (-> C3 0B 00) when it goes online: debug session;
+            # and it had reserved the PLC (1D) in the captures: try that last
+            try:
+                self._ask([MONITOR, PL7_CATEGORY, 0x0B], MONITOR + 0x30)
+                data = self._ask(request, MONITOR + 0x30)
+            except UniteError as e2:
+                if "FD" not in str(e2):
+                    raise
+                self.reserve()
+                try:
+                    self._ask([MONITOR, PL7_CATEGORY, 0x0B], MONITOR + 0x30)
+                    data = self._ask(request, MONITOR + 0x30)
+                finally:
+                    try:
+                        self.release()
+                    except UniteError:
+                        pass
         if len(data) < 18 or data[:2] != [0x02, 0x00]:
             raise UniteError(f"defauts modules : reponse inattendue {hexs(data)}")
         return data[2:18]
