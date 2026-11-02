@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PLC Online</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="logo" aria-hidden="true"></span>PLC Online</div>
+    <div id="link-pill" class="pill pill-off">Non connecte</div>
+  </header>
+
+  <main class="layout">
+    <section class="card" id="connexion">
+      <h2>Connexion</h2>
+      <form id="form-connexion" autocomplete="off">
+        <label class="field">
+          <span>Automate</span>
+          <select id="marque"></select>
+        </label>
+        <div id="reglages"></div>
+        <div class="actions">
+          <button type="submit" id="btn-connecter" class="btn btn-primary">Connecter</button>
+          <button type="button" id="btn-deconnecter" class="btn" hidden>Deconnecter</button>
+        </div>
+        <p id="connexion-msg" class="msg" role="status"></p>
+      </form>
+      <p class="hint" id="hint-s7">S7-300 : STEP 7 installe, interface PG/PC sur <b>USB.S7USB.1</b>,
+        SIMATIC Manager ferme.</p>
+    </section>
+
+    <section class="card" id="etat" aria-live="polite">
+      <div class="etat-vide" id="etat-vide">
+        <p>Connectez un automate pour voir son etat.</p>
+        <p class="hint">Sans automate : choisir <b>Demo</b>.</p>
+      </div>
+
+      <div id="etat-plein" hidden>
+        <div class="etat-head">
+          <div>
+            <div class="modele" id="modele"></div>
+            <div class="reference" id="reference"></div>
+          </div>
+          <div id="mode" class="mode">?</div>
+        </div>
+
+        <div id="alertes" class="alertes"></div>
+
+        <h3>Voyants</h3>
+        <div id="voyants" class="voyants"></div>
+
+        <h3>Details</h3>
+        <dl id="details" class="details"></dl>
+
+        <p class="maj" id="maj"></p>
+      </div>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,103 @@
+"""Local web interface: API and pages, on a demo / fake S7-300 (no PLC, no browser)."""
+import json
+import threading
+import unittest
+import urllib.error
+import urllib.request
+
+from plc_online.protocols.s7 import S7Error
+from plc_online.web.drivers import DemoS7, DriverError, Session, s7_status
+from plc_online.web.server import serve
+
+
+class LostLink(DemoS7):
+    """Answers once (the connection), then the cable is pulled."""
+    calls = 0
+
+    def leds(self):
+        self.calls += 1
+        if self.calls > 1:
+            raise S7Error("pas de reponse")
+        return super().leds()
+
+
+class StatusTests(unittest.TestCase):
+    def test_status_of_bench_cpu(self):
+        plc = DemoS7()
+        plc.running = False
+        plc.leds = lambda: {"SF": (1, 0), "RUN": (0, 0), "STOP": (1, 0), "FRCE": (0, 1)}
+        s = s7_status(plc)
+        self.assertEqual((s["modele"], s["reference"], s["mode"]), ("CPU 315-2 DP", "6ES7 315-2AF03-0AB0", "STOP"))
+        self.assertEqual(s["alertes"], ["FRCE allume : Forcage actif", "SF allume : Defaut groupe"])
+        self.assertIn(("Somme programme", "6647-0600"), s["details"])
+        frce = next(v for v in s["voyants"] if v["nom"] == "FRCE")
+        self.assertTrue(frce["clignote"] and frce["defaut"])
+
+
+class ApiTests(unittest.TestCase):
+    def setUp(self):
+        self.opened = []
+
+        def opener(brand, settings):
+            if settings.get("mpi") == 9:
+                raise DriverError("pas de CPU a l'adresse MPI 9")
+            plc = LostLink() if settings.get("mpi") == 7 else DemoS7()
+            self.opened.append((brand, settings))
+            return plc
+
+        self.httpd = serve(0, Session(opener))
+        self.port = self.httpd.server_address[1]
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+
+    def tearDown(self):
+        self.httpd.shutdown()
+        self.httpd.server_close()
+
+    def call(self, method, path, body=None):
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}", method=method,
+                                     data=json.dumps(body).encode() if body is not None else None,
+                                     headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req) as r:
+                return r.status, r.read()
+        except urllib.error.HTTPError as e:
+            return e.code, e.read()
+
+    def json(self, method, path, body=None):
+        code, raw = self.call(method, path, body)
+        return code, json.loads(raw)
+
+    def test_page_and_files(self):
+        for path in ("/", "/app.js", "/style.css"):
+            code, raw = self.call("GET", path)
+            self.assertEqual(code, 200, path)
+        self.assertIn(b"PLC Online", self.call("GET", "/")[1])
+        self.assertEqual(self.call("GET", "/../README.md")[0], 404)
+
+    def test_connect_status_disconnect(self):
+        self.assertEqual(self.json("GET", "/api/etat"), (200, {"connecte": False}))
+        code, s = self.json("POST", "/api/connexion", {"marque": "s7-300", "reglages": {"mpi": 2}})
+        self.assertEqual((code, s["modele"], s["connecte"]), (200, "CPU 315-2 DP", True))
+        self.assertEqual(self.opened, [("s7-300", {"mpi": 2})])
+        self.assertEqual(self.json("GET", "/api/etat")[1]["mode"] in ("RUN", "STOP"), True)
+        self.assertEqual(self.json("POST", "/api/deconnexion"), (200, {"ok": True}))
+        self.assertEqual(self.json("GET", "/api/etat")[1], {"connecte": False})
+
+    def test_errors_for_the_technician(self):
+        code, e = self.json("POST", "/api/connexion", {"marque": "s7-300", "reglages": {"mpi": 9}})
+        self.assertEqual((code, e["erreur"]), (502, "pas de CPU a l'adresse MPI 9"))
+        code, e = self.json("POST", "/api/connexion", {"marque": "omron"})
+        self.assertEqual((code, e["erreur"]), (400, "Marque non disponible : omron"))
+        self.assertEqual(self.json("POST", "/api/connexion", {"marque": "s7-300", "reglages": {"mpi": 7}})[0], 200)
+        code, e = self.json("GET", "/api/etat")
+        self.assertEqual((code, e["erreur"]), (502, "Liaison perdue : pas de reponse"))
+        self.assertEqual(self.json("GET", "/api/etat")[1], {"connecte": False})
+
+    def test_brands(self):
+        code, b = self.json("GET", "/api/marques")
+        self.assertTrue(b["s7-300"]["disponible"])
+        self.assertFalse(b["omron"]["disponible"])
+
+
+if __name__ == "__main__":
+    unittest.main()

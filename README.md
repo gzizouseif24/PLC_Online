@@ -3,8 +3,8 @@
 Multi-brand PLC diagnostic tool for maintenance: status, faults, live values, program backup
 and restore, from a PC, without the vendor software.
 
-One protocol module per brand, one command-line tool per brand (French prompts); a web
-interface comes later on top of the same library.
+One protocol module per brand, one command-line tool per brand (French prompts), and a local
+web interface on top of the same library (first screen: connection and PLC status).
 
 | Brand | Link | What works (tested on the bench) |
 |---|---|---|
@@ -34,6 +34,7 @@ tools/                 WHAT YOU RUN: one command-line tool per brand
   modicon.py           Schneider Modicon
 plc_online/            library used by the tools (and later by the web interface)
   checksum.py          XOR checksum (Panasonic BCC, Omron FCS)
+  web/                 local web interface: server (standard library only), page in static/
   protocols/           one module per protocol, never run directly
     s7.py              S7: connection (libnodave + S7ONLINE), status lists, blocks, SDB decoding
     s7_vars.py         S7 watch table: addresses, formats, grouped reads
@@ -57,6 +58,18 @@ docs/                  report, architecture, protocol notes, work logs
 ```
 
 Every tool runs from the repo folder: `python tools/<brand>.py --help`.
+
+## Web interface
+
+```
+py -3.14-32 -m plc_online.web          # opens http://localhost:8000 in the browser
+```
+
+32-bit Python for the S7-300 (same rules as the Siemens tool below); for a look without a
+PLC, any Python and choose **Demo**. Screen so far: connection (brand, MPI address, rack,
+slot) and PLC status refreshed every 2 s (model, RUN / STOP, LEDs, alerts, key, protection,
+checksums). Next screens: diagnostic, watch table, program. The server only listens on
+`localhost`.
 
 ## Siemens tool
 
