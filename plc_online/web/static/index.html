@@ -41,7 +41,36 @@
         <button type="button" role="tab" class="tab active" data-tab="etat-plein" aria-selected="true">Etat</button>
         <button type="button" role="tab" class="tab" data-tab="vue-diag" aria-selected="false">Diagnostic</button>
         <button type="button" role="tab" class="tab" data-tab="vue-watch" aria-selected="false">Surveillance</button>
+        <button type="button" role="tab" class="tab" data-tab="vue-prog" aria-selected="false">Programme</button>
       </nav>
+
+      <div id="vue-prog" class="vue" hidden>
+        <form id="form-sauver" class="ajout" autocomplete="off">
+          <label class="field grow">
+            <span>Note (facultatif)</span>
+            <input id="sauver-note" maxlength="200" placeholder="ex. avant modification convoyeur 2">
+          </label>
+          <button type="submit" class="btn btn-primary" id="btn-sauver">Sauvegarder le programme de la CPU</button>
+        </form>
+        <p class="hint">Copie de tous les blocs (OB, FB, FC, DB) et de la configuration materielle (SDB).</p>
+
+        <div id="tache" class="tache" hidden>
+          <div class="tache-head"><b id="tache-nom"></b><span id="tache-texte" class="hint"></span></div>
+          <div class="barre"><div id="tache-barre"></div></div>
+        </div>
+        <p id="prog-msg" class="msg" role="status"></p>
+
+        <div id="prog-resultat" class="resultat" hidden></div>
+
+        <h3>Sauvegardes sur ce PC</h3>
+        <div class="table-wrap">
+          <table class="table" id="table-sauvegardes">
+            <thead><tr><th>Date</th><th>Note</th><th>CPU</th><th>Blocs</th><th></th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <p class="hint" id="prog-dossier"></p>
+      </div>
 
       <div id="vue-watch" class="vue" hidden>
         <form id="form-ajout" class="ajout" autocomplete="off">

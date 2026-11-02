@@ -88,7 +88,11 @@ function renderStatus(s) {
 
   $("maj").textContent = "Mis a jour a " + new Date().toLocaleTimeString("fr-FR");
   const faults = s.alertes.length;
-  setPill(faults ? "err" : "on", `${s.marque} — ${s.mode}${faults ? " — " + faults + " alerte(s)" : ""}`);
+  if (s.occupe) {
+    setPill("off", `${s.marque} — ${s.occupe}...`);
+  } else {
+    setPill(faults ? "err" : "on", `${s.marque} — ${s.mode}${faults ? " — " + faults + " alerte(s)" : ""}`);
+  }
 }
 
 let currentTab = localStorageGet("onglet") || "etat-plein";
@@ -105,6 +109,226 @@ function showTab(id) {
   for (const v of document.querySelectorAll(".vue")) v.hidden = v.id !== id;
   if (id === "vue-diag" && !diagLoaded) loadDiagnostic();
   if (id === "vue-watch") startWatch(); else stopWatch();
+  if (id === "vue-prog") loadBackups();
+}
+
+// ---- program: save, compare, restore ----
+
+let jobTimer = null;
+
+function setProgMsg(text, isError) {
+  const m = $("prog-msg");
+  m.textContent = text || "";
+  m.className = "msg" + (isError ? " err" : "");
+}
+
+function showResult(cls, build) {
+  const box = $("prog-resultat");
+  box.className = "resultat" + (cls ? " " + cls : "");
+  box.replaceChildren();
+  build(box);
+  box.hidden = false;
+  box.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function chips(items, cls) {
+  const d = el("div", "chips");
+  d.append(...items.map((t) => el("span", "chip" + (cls ? " " + cls : ""), t)));
+  return d;
+}
+
+function setProgButtons(disabled) {
+  for (const b of document.querySelectorAll("#vue-prog button")) b.disabled = disabled;
+}
+
+function runJob(path, body, onDone) {
+  setProgMsg("");
+  setProgButtons(true);
+  api("POST", path, body).then(() => {
+    $("tache").hidden = false;
+    pollJob(onDone);
+  }).catch((e) => {
+    setProgButtons(false);
+    setProgMsg(e.message, true);
+  });
+}
+
+function pollJob(onDone) {
+  clearTimeout(jobTimer);
+  jobTimer = setTimeout(async () => {
+    let j;
+    try { j = await api("GET", "/api/tache"); } catch (e) { setProgMsg(e.message, true); setProgButtons(false); return; }
+    $("tache-nom").textContent = j.nom.charAt(0).toUpperCase() + j.nom.slice(1);
+    $("tache-texte").textContent = j.texte || "...";
+    const bar = $("tache-barre").parentElement;
+    bar.classList.toggle("indet", !j.total);
+    $("tache-barre").style.width = j.total ? Math.round(100 * j.fait / j.total) + "%" : "";
+    if (!j.fini) return pollJob(onDone);
+    $("tache").hidden = true;
+    setProgButtons(false);
+    if (j.erreur) setProgMsg(j.erreur, true);
+    else onDone(j.resultat);
+    loadBackups();
+  }, 400);
+}
+
+async function loadBackups() {
+  try {
+    const r = await api("GET", "/api/programme/sauvegardes");
+    $("prog-dossier").textContent = "Dossier : " + r.dossier;
+    rows($("table-sauvegardes").tBodies[0], r.sauvegardes, (b) => {
+      const tr = el("tr");
+      const actions = el("div", "row-actions");
+      for (const [text, fn] of [["Comparer", () => compareBackup(b)], ["Restaurer", () => planRestore(b, false)],
+                                ["Blocs", () => showBlocks(b)]]) {
+        const btn = el("button", "btn small", text);
+        btn.type = "button";
+        btn.addEventListener("click", fn);
+        actions.append(btn);
+      }
+      const cpu = el("div");
+      cpu.append(el("span", "", b.modele || "—"), el("span", "sub mono", b.cpu));
+      tr.append(cell(b.date, "mono", "Date"), cell(b.note || "—", "", "Note"), cell(cpu, "", "CPU"),
+                cell(String(b.blocs), "mono", "Blocs"), cell(actions, "", ""));
+      return tr;
+    }, "Aucune sauvegarde : cliquez sur Sauvegarder le programme de la CPU.", 5);
+  } catch (e) {
+    setProgMsg(e.message, true);
+  }
+}
+
+function saveProgram(ev) {
+  ev.preventDefault();
+  runJob("/api/programme/sauvegarder", { note: $("sauver-note").value }, (r) => {
+    $("sauver-note").value = "";
+    showResult("ok", (box) => {
+      box.append(el("h4", "", "Programme sauvegarde"), el("p", "", r.comptes + "."));
+    });
+  });
+}
+
+function compareBackup(b) {
+  runJob("/api/programme/comparer", { id: b.id }, (r) => {
+    showResult(r.identique ? "ok" : "bad", (box) => {
+      box.append(el("h4", "", r.identique ? "Programme identique a la sauvegarde du " + b.date
+                                           : r.differences.length + " bloc(s) different(s) de la sauvegarde du " + b.date));
+      if (!r.identique) {
+        const ul = el("ul");
+        ul.append(...r.differences.map((d) => {
+          const li = el("li");
+          li.append(el("b", "mono", d.bloc + " " + d.verdict), document.createTextNode(d.detail ? "  " + d.detail : ""));
+          return li;
+        }));
+        box.append(ul);
+      }
+      if (r.valeurs_db.length) {
+        box.append(el("p", "hint", "Valeurs actuelles differentes (normal en marche, pas un changement de programme) :"),
+                   chips(r.valeurs_db));
+      }
+    });
+  });
+}
+
+async function showBlocks(b) {
+  try {
+    const r = await api("GET", "/api/programme/blocs?id=" + encodeURIComponent(b.id));
+    showResult("", (box) => {
+      box.append(el("h4", "", "Blocs de la sauvegarde du " + b.date + (b.note ? " — " + b.note : "")));
+      const wrap = el("div", "table-wrap");
+      const t = el("table", "table");
+      const head = el("thead");
+      const hr = el("tr");
+      hr.append(...["Bloc", "Taille", "Date", "Somme"].map((h) => el("th", "", h)));
+      head.append(hr);
+      const body = el("tbody");
+      body.append(...r.blocs.map((x) => {
+        const tr = el("tr");
+        tr.append(cell(x.bloc, "mono", "Bloc"), cell(x.taille + " octets", "mono", "Taille"),
+                  cell(x.date || "—", "mono", "Date"), cell(x.somme || "—", "mono", "Somme"));
+        return tr;
+      }));
+      t.append(head, body);
+      wrap.append(t);
+      box.append(wrap);
+    });
+  } catch (e) {
+    setProgMsg(e.message, true);
+  }
+}
+
+async function planRestore(b, withDb, deleteExtra = false) {
+  let plan;
+  try {
+    plan = await api("POST", "/api/programme/plan", { id: b.id, avec_db: withDb });
+  } catch (e) {
+    setProgMsg(e.message, true);
+    return;
+  }
+  showResult("", (box) => {
+    box.append(el("h4", "", "Restaurer la sauvegarde du " + b.date + (b.note ? " — " + b.note : "")));
+    box.append(el("p", "", `Blocs a charger dans la CPU (${plan.charger.length}) :`), chips(plan.charger));
+    if (plan.en_trop.length) {
+      box.append(el("p", "", "Dans la CPU mais pas dans la sauvegarde :"), chips(plan.en_trop, "warn"));
+    }
+    const db = el("label", "check");
+    const dbBox = el("input");
+    dbBox.type = "checkbox";
+    dbBox.checked = withDb;
+    db.append(dbBox, el("span", "", "Charger aussi les DB (remplace les valeurs actuelles de la machine : compteurs, recettes...)"));
+    dbBox.addEventListener("change", () => planRestore(b, dbBox.checked, delBox.checked));
+    const del = el("label", "check");
+    const delBox = el("input");
+    delBox.type = "checkbox";
+    delBox.checked = deleteExtra;
+    delBox.disabled = !plan.en_trop.length;
+    del.append(delBox, el("span", "", "Supprimer de la CPU les blocs absents de la sauvegarde"));
+    box.append(db, del);
+    box.append(el("p", "hint", "La configuration materielle (SDB) n'est pas modifiee."));
+    if (plan.run) box.append(el("p", "avert", "La CPU est en RUN : elle sera mise en STOP pendant le chargement."));
+    const go = el("button", "btn btn-danger", "Lancer la restauration");
+    go.type = "button";
+    go.disabled = !plan.charger.length;
+    go.addEventListener("click", () => {
+      const lines = [`${plan.charger.length} bloc(s) vont etre charges dans la CPU.`];
+      if (plan.run) lines.push("La CPU va passer en STOP : la machine s'arrete.");
+      if (dbBox.checked) lines.push("Les DB seront remplacees par celles de la sauvegarde.");
+      if (delBox.checked && plan.en_trop.length) lines.push("Blocs supprimes : " + plan.en_trop.join(" "));
+      if (!confirm(lines.join("\n") + "\n\nMachine en securite ?")) return;
+      runJob("/api/programme/restaurer", { id: b.id, avec_db: dbBox.checked, supprimer_en_trop: delBox.checked },
+             (r) => restoreDone(b, r));
+    });
+    box.append(go);
+  });
+}
+
+function restoreDone(b, r) {
+  const ok = !r.erreur && !r.differences.length;
+  showResult(ok ? "ok" : "bad", (box) => {
+    if (r.erreur) {
+      box.append(el("h4", "", "Restauration arretee : " + r.erreur));
+      box.append(el("p", "", "Blocs charges avant l'erreur : " + (r.charges.join(" ") || "aucun")));
+      box.append(el("p", "avert", "La CPU reste en STOP. Relancer la restauration complete avant de redemarrer."));
+      return;
+    }
+    box.append(el("h4", "", ok ? "Restauration terminee : programme identique a la sauvegarde"
+                               : "Restauration terminee, mais la relecture differe"));
+    box.append(el("p", "", "Blocs charges : "), chips(r.charges));
+    if (r.supprimes.length) box.append(el("p", "", "Blocs supprimes : "), chips(r.supprimes, "warn"));
+    if (r.differences.length) box.append(el("p", "avert", "Differences : " + r.differences.join(", ")));
+    box.append(el("p", "", "La CPU est en STOP."));
+    const start = el("button", "btn btn-primary", "Redemarrer la CPU (RUN)");
+    start.type = "button";
+    start.addEventListener("click", async () => {
+      if (!confirm("Redemarrer la CPU ? La machine repart.\n\nMachine en securite ?")) return;
+      try {
+        await api("POST", "/api/cpu/demarrer");
+        start.disabled = true;
+        start.textContent = "Demarrage demande — verifier le voyant RUN";
+        refresh();
+      } catch (e) { setProgMsg(e.message, true); }
+    });
+    box.append(start);
+  });
 }
 
 // ---- watch table ----
@@ -504,6 +728,7 @@ async function init() {
     if (watchPaused) { stopWatch(); $("watch-maj").textContent = "En pause"; } else startWatch();
   });
   $("btn-ecrire").addEventListener("click", writeValues);
+  $("form-sauver").addEventListener("submit", saveProgram);
   $("btn-exporter").addEventListener("click", exportWatch);
   $("fichier-table").addEventListener("change", (ev) => {
     if (ev.target.files[0]) importWatch(ev.target.files[0]);
@@ -515,6 +740,10 @@ async function init() {
 
   // already connected (page reloaded): show the state straight away
   const s = await api("GET", "/api/etat").catch(() => ({ connecte: false }));
+  if (s.connecte && s.connexion && brands[s.connexion.marque]) {
+    select.value = s.connexion.marque;
+    renderSettings();
+  }
   if (s.connecte) {
     renderStatus(s);
     setConnected(true);

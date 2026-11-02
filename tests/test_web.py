@@ -165,3 +165,76 @@ class ApiTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ProgramTests(unittest.TestCase):
+    """Save, compare, restore on the demo CPU, in a temporary backup folder."""
+
+    def setUp(self):
+        import tempfile
+        self.dir = tempfile.TemporaryDirectory()
+        self.session = Session(backups=self.dir.name)
+        self.session.connect("demo", {})
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def wait(self):
+        import time
+        for _ in range(200):
+            j = self.session.job_state()
+            if j["fini"]:
+                return j
+            time.sleep(0.05)
+        self.fail("operation sans fin")
+
+    def save(self, note=""):
+        self.session.save_program(note)
+        j = self.wait()
+        self.assertEqual(j["erreur"], "")
+        return j["resultat"]["id"]
+
+    def test_save_lists_and_shows_blocks(self):
+        bid = self.save("avant modif")
+        [b] = self.session.list_backups()["sauvegardes"]
+        self.assertEqual((b["id"], b["note"], b["modele"], b["blocs"]), (bid, "avant modif", "CPU 315-2 DP", 12))
+        blocks = [x["bloc"] for x in self.session.backup_blocks(bid)["blocs"]]
+        self.assertEqual(blocks[:5], ["OB1", "OB35", "FB1", "FC1", "FC2"])
+
+    def test_compare_finds_changed_block_and_db_values(self):
+        bid = self.save()
+        self.session.write([{"adresse": "DB10.DBD4", "valeur": "30.5"}])
+        fc2 = self.session.plc.blocks[("FC", 2)]
+        self.session.plc.blocks[("FC", 2)] = fc2[:40] + b"\x99" + fc2[41:]
+        self.session.compare(bid)
+        r = self.wait()["resultat"]
+        self.assertEqual([d["bloc"] for d in r["differences"]], ["FC2"])
+        self.assertEqual(r["valeurs_db"], ["DB10"])
+
+    def test_restore_puts_program_back_and_leaves_cpu_in_stop(self):
+        bid = self.save()
+        cpu = self.session.plc
+        old = cpu.blocks[("FC", 2)]
+        cpu.blocks[("FC", 2)] = old[:40] + b"\x99" + old[41:]
+        cpu.blocks[("FC", 9)] = old                         # added after the backup
+        plan = self.session.restore_plan(bid, False)
+        self.assertEqual((plan["charger"], plan["en_trop"], plan["db_ignorees"]),
+                         (["FC1", "FC2", "FB1", "OB1", "OB35"], ["FC9"], True))
+        self.session.restore(bid, False, True)
+        r = self.wait()["resultat"]
+        self.assertEqual((r["differences"], r["supprimes"], r["erreur"]), ([], ["FC9"], ""))
+        self.assertEqual(cpu.blocks[("FC", 2)][36:-36], old[36:-36])
+        self.assertFalse(cpu.is_running())
+        self.session.start_cpu()
+        self.assertTrue(cpu.is_running())
+
+    def test_busy_and_bad_ids(self):
+        bid = self.save()
+        self.session.restore(bid, False, False)
+        with self.assertRaisesRegex(DriverError, "Operation en cours"):
+            self.session.values(["MW10"])
+        self.assertEqual(self.session.status()["mode"], "?")
+        self.wait()
+        for bad in ("../etc", "", "inconnu"):
+            with self.assertRaises(DriverError):
+                self.session.restore_plan(bad, False)

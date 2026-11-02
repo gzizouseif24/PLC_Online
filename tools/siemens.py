@@ -35,6 +35,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from plc_online.protocols.s7 import (  # noqa: E402
     AREAS, DEFAULT_DLL, PROGRAM_KINDS, S7300, S7Error, compare_blocks, parse_block,
     parse_sdb1_modules, word_be)
+from plc_online.protocols import s7_program as program  # noqa: E402
 from plc_online.protocols.s7_catalogue import catalog_name  # noqa: E402
 from plc_online.protocols.s7_names import address_range, cpu_parameter_lines, module_text  # noqa: E402
 from plc_online.protocols.s7_vars import AddressError, Var, load_table  # noqa: E402
@@ -206,85 +207,45 @@ def cmd_config(sdb1: bytes, actual=None, sdb0=None):
               f"\n   {differences} emplacement(s) different(s) de la configuration.")
 
 
-BLOCK_FILE = re.compile(r"^(OB|FB|FC|DB|SDB)(\d+)\.bin$", re.IGNORECASE)
-
-
 def upload_program(plc, progress=True):
-    """{("OB", 1): bytes, ...} for every block of PROGRAM_KINDS in the CPU."""
-    blocks = {}
-    for kind in PROGRAM_KINDS:
-        numbers = plc.list_blocks(kind)
-        for i, n in enumerate(numbers, 1):
-            if progress:
-                print(f"\r   {kind:<3} {i}/{len(numbers)}   ", end="", flush=True)
-            blocks[(kind, n)] = plc.upload_block(kind, n)
+    """Every block of the CPU, with a progress line in the terminal."""
+    def show(kind, i, n):
+        print(f"\r   {kind:<3} {i}/{n}   ", end="", flush=True)
+    blocks = program.upload_program(plc, show if progress else None)
     if progress:
         print("\r" + " " * 30 + "\r", end="")
     return blocks
 
 
-def load_program(folder):
-    blocks = {}
-    for f in Path(folder).iterdir():
-        m = BLOCK_FILE.match(f.name)
-        if m:
-            blocks[(m.group(1).upper(), int(m.group(2)))] = f.read_bytes()
-    if not blocks:
-        raise S7Error(f"aucun bloc (OB1.bin, DB10.bin...) dans {folder}")
-    return blocks
-
-
-def block_line(kind, n, data):
-    try:
-        b = parse_block(data)
-        return f"{kind:<3} {n:<5} {b['longueur']:6d} octets  {b['date']}  somme {b['somme']:04X}"
-    except S7Error:
-        return f"{kind:<3} {n:<5} {len(data):6d} octets  (format non reconnu)"
+load_program = program.load_program
 
 
 def cmd_sauvegarder_programme(plc, folder=None):
     """Full copy of the CPU: every OB, FB, FC, DB and SDB, as uploaded ("upload to PG")."""
-    import time
     blocks = upload_program(plc)
     if not blocks:
         print("Aucun bloc dans la CPU.")
         return
-    folder = Path(folder or f"programme_s7_{time.strftime('%Y%m%d_%H%M%S')}")
-    folder.mkdir(parents=True, exist_ok=True)
-    lines = []
-    for (kind, n), data in sorted(blocks.items(), key=lambda kv: (PROGRAM_KINDS.index(kv[0][0]), kv[0][1])):
-        (folder / f"{kind}{n}.bin").write_bytes(data)
-        lines.append(block_line(kind, n, data))
-    with open(folder / "programme.txt", "w", encoding="utf-8") as f:
-        f.write(f"date : {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-        try:
-            info = plc.identity()
-            f.write(f"CPU  : {info.get('reference', '?')} firmware {info.get('firmware', '?')}\n")
-        except S7Error:
-            pass
-        f.write("\n".join(lines) + "\n")
-    counts = ", ".join(f"{sum(1 for k in blocks if k[0] == kind)} {kind}" for kind in PROGRAM_KINDS
-                       if any(k[0] == kind for k in blocks))
-    print(f"Programme copie : {folder}/  ({counts}, {sum(map(len, blocks.values()))} octets, + programme.txt)")
-
-
-RESTORE_ORDER = ["DB", "FC", "FB", "OB"]          # called blocks before the blocks that call them
+    header = [f"date : {time.strftime('%Y-%m-%d %H:%M:%S')}"]
+    try:
+        info = plc.identity()
+        header.append(f"CPU  : {info.get('reference', '?')} firmware {info.get('firmware', '?')}")
+    except S7Error:
+        pass
+    folder = program.save_program(folder or f"programme_s7_{time.strftime('%Y%m%d_%H%M%S')}", blocks, header)
+    print(f"Programme copie : {folder}/  ({program.count_text(blocks)}, {sum(map(len, blocks.values()))} octets,"
+          " + programme.txt)")
 
 
 def cmd_restaurer(plc, folder, with_db=False, delete_extra=False, max_pdu=240):
     """Load a program copy (sauvegarder-programme) back into the CPU: OB, FB, FC (and DB with
     with_db). CPU in STOP during the load. SDB (hardware configuration) are not touched."""
-    from plc_online.protocols.s7 import BLOCK_TYPES
-    from plc_online.protocols.s7_download import DELETE, DownloadError
     backup = load_program(folder)
-    kinds = RESTORE_ORDER if with_db else [k for k in RESTORE_ORDER if k != "DB"]
-    todo = sorted((k for k in backup if k[0] in kinds), key=lambda k: (RESTORE_ORDER.index(k[0]), k[1]))
-    current = {kind: set(plc.list_blocks(kind)) for kind in kinds}
-    extra = sorted(((kind, n) for kind in kinds for n in current[kind] if (kind, n) not in backup),
-                   key=lambda k: (RESTORE_ORDER.index(k[0]), k[1]))
+    plan = program.restore_plan(plc, backup, with_db)
+    todo, extra = plan["todo"], plan["extra"]
     print(f"Copie : {folder}")
     print(f"   a charger ({len(todo)}) : {' '.join(f'{k}{n}' for k, n in todo)}")
-    if not with_db and any(k[0] == "DB" for k in backup):
+    if plan["db_skipped"]:
         print("   DB non chargees (valeurs actuelles de la machine gardees) : ajouter --avec-db pour les charger")
     if extra:
         print(f"   dans la CPU mais pas dans la copie : {' '.join(f'{k}{n}' for k, n in extra)}"
@@ -297,36 +258,25 @@ def cmd_restaurer(plc, folder, with_db=False, delete_extra=False, max_pdu=240):
     if not confirm(f"Charger {len(todo)} bloc(s) dans la CPU{' (passage en STOP)' if running else ''} ? Machine en securite ?"):
         print("Annule, rien n'a ete modifie.")
         return
-    if running:
-        plc.stop()
-        print("CPU en STOP.")
-    seq = plc.download_sequence()
-    done = []
-    try:
-        for kind, n in todo:
-            print(f"   {kind}{n} ...", end="", flush=True)
-            seq.download(BLOCK_TYPES[kind], n, backup[(kind, n)], max_pdu)
-            done.append((kind, n))
-            print(" ok")
-        if delete_extra:
-            for kind, n in extra:
-                seq.control(BLOCK_TYPES[kind], n, DELETE)
-                print(f"   {kind}{n} supprime")
-    except DownloadError as e:
-        print(f"\n!! ARRET : {e}")
-        print(f"   Blocs charges avant l'erreur : {' '.join(f'{k}{n}' for k, n in done) or 'aucun'}")
+
+    def show(text, i, n):
+        print(f"   {i}/{n} {text}")
+    r = program.restore(plc, backup, plan, delete_extra, show, max_pdu)
+    if r["etait_en_run"]:
+        print("CPU mise en STOP pour le chargement.")
+    if r["erreur"]:
+        print(f"\n!! ARRET : {r['erreur']}")
+        print(f"   Blocs charges avant l'erreur : {' '.join(r['charges']) or 'aucun'}")
         print("   La CPU reste en STOP. Recharger la copie complete avant de redemarrer.")
         return
-    now = upload_program(plc, progress=False)
-    diffs = [d for d in compare_blocks({k: v for k, v in backup.items() if k[0] in kinds},
-                                       {k: v for k, v in now.items() if k[0] in kinds}) if d[2] != "valeurs"]
-    if delete_extra or not extra:
-        print("\nVerification : programme identique a la copie." if not diffs else
-              "\n!! Verification : " + ", ".join(f"{k}{n} {v}" for k, n, v, _ in diffs))
+    for b in r["supprimes"]:
+        print(f"   {b} supprime")
+    whole = delete_extra or not extra
+    if not r["differences"]:
+        print("\nVerification : programme identique a la copie." if whole else
+              "\nVerification : blocs de la copie identiques.")
     else:
-        left = [d for d in diffs if (d[0], d[1]) not in extra]
-        print("\nVerification : blocs de la copie identiques." if not left else
-              "\n!! Verification : " + ", ".join(f"{k}{n} {v}" for k, n, v, _ in left))
+        print("\n!! Verification : " + ", ".join(r["differences"]))
     if confirm("Redemarrer la CPU (RUN) ?"):
         plc.start()
         print("Demarrage demande. Verifier le voyant RUN (cle sur RUN ou RUN-P).")
@@ -335,19 +285,17 @@ def cmd_restaurer(plc, folder, with_db=False, delete_extra=False, max_pdu=240):
 
 
 def cmd_comparer(ref, now, ref_name, now_name):
-    diffs = compare_blocks(ref, now)
+    c = program.comparison(ref, now)
     print(f"Reference : {ref_name} ({len(ref)} blocs)\nCompare   : {now_name} ({len(now)} blocs)\n")
-    changes = [d for d in diffs if d[2] != "valeurs"]
-    if not changes:
+    if c["identique"]:
         print("   PROGRAMME IDENTIQUE a la reference.")
     else:
-        print(f"   !! {len(changes)} bloc(s) different(s) :")
-        for kind, n, verdict, detail in changes:
-            print(f"      {kind:<3} {n:<5} {verdict:<9} {detail}")
-    values = [d for d in diffs if d[2] == "valeurs"]
-    if values:
-        print(f"\n   {len(values)} DB avec d'autres valeurs actuelles (normal en marche) : "
-              + ", ".join(f"DB{n}" for _, n, _, _ in values))
+        print(f"   !! {len(c['differences'])} bloc(s) different(s) :")
+        for d in c["differences"]:
+            print(f"      {d['type']:<3} {d['numero']:<5} {d['verdict']:<9} {d['detail']}")
+    if c["valeurs_db"]:
+        print(f"\n   {len(c['valeurs_db'])} DB avec d'autres valeurs actuelles (normal en marche) : "
+              + ", ".join(c["valeurs_db"]))
 
 
 def value_texts(variables, values):

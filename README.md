@@ -4,7 +4,7 @@ Multi-brand PLC diagnostic tool for maintenance: status, faults, live values, pr
 and restore, from a PC, without the vendor software.
 
 One protocol module per brand, one command-line tool per brand (French prompts), and a local
-web interface on top of the same library (connection, PLC status, diagnostic, watch table).
+web interface on top of the same library (connection, PLC status, diagnostic, watch table, program).
 
 | Brand | Link | What works (tested on the bench) |
 |---|---|---|
@@ -38,6 +38,7 @@ plc_online/            library used by the tools (and later by the web interface
   protocols/           one module per protocol, never run directly
     s7.py              S7: connection (libnodave + S7ONLINE), status lists, blocks, SDB decoding
     s7_vars.py         S7 watch table: addresses, formats, grouped reads
+    s7_program.py      S7 program copies: upload, save / load, compare, restore
     s7_download.py     S7 block download (restore), straight on S7ONLINE
     s7_events.py       S7 diagnostic event texts (Siemens manual, chapter 35)
     s7_modules.py      S7 module type codes -> names   (generated from STEP 7)
@@ -70,8 +71,10 @@ PLC, any Python and choose **Demo**. Screen so far: connection (brand, MPI addre
 slot), **Etat** refreshed every 2 s (model, RUN / STOP, LEDs, alerts, key, protection,
 checksums) and **Diagnostic** (rack: module configured vs plugged in with names and addresses,
 diagnostic buffer, CPU parameters) and **Surveillance** (watch table: live values, modify with
-confirmation and read back, export / import of the table as a text file). Next screen: program
-(backup, compare, restore). The server only listens on
+confirmation and read back, export / import of the table as a text file) and **Programme** (save
+the CPU program with a note, compare the CPU with a copy, restore a copy, restart the CPU; long
+operations run in the background with a progress bar). Copies are kept in
+`~/PLC Online/sauvegardes/s7-300` (`--sauvegardes` for another folder). The server only listens on
 `localhost`.
 
 ## Siemens tool
