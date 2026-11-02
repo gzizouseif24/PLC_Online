@@ -103,6 +103,8 @@ class DemoTsx:
                     + b"\x04\x00TSX 3721\0" + b"\xff\x01TSX DEZ 32D2\0" + b"\xff\x02TSX DEZ 32D2\0"
                     + b"\xff\x03TSX DSZ 32R5\0" + b"\xff\x04TSX DSZ 32R5\0" + bytes(100))
         self.io_faults = [0] * 16
+        self.clock_offset = -86400 * 400 - 3 * 3600         # clock lost after a battery fault
+        self.s50 = 0
         self.tick = 0
         self.slave = type("S", (), {"category": 0})()
 
@@ -112,7 +114,7 @@ class DemoTsx:
             self.mw[20] = (self.mw[20] + 1) & 0xFFFF               # piece counter
             self.mw[21] = 200 + random.randint(-3, 3)              # temperature x10
             self.s[10] = 1
-        t = time.localtime()
+        t = time.localtime(time.time() + self.clock_offset)
         bcd = lambda v: int(str(v), 16)                            # noqa: E731
         self.sw[49:54] = [t.tm_wday + 1, bcd(t.tm_sec) << 8, bcd(t.tm_hour) << 8 | bcd(t.tm_min),
                           bcd(t.tm_mon) << 8 | bcd(t.tm_mday), bcd(t.tm_year)]
@@ -156,6 +158,21 @@ class DemoTsx:
     def read_cpu(self):
         state = (2 if self.running else 1) | (0x20 if any(self.io_faults) else 0)
         return [0, state, 0x0B if self.running else 0x0A] + [0] * 74
+
+    def write_system_bit(self, n, value):
+        if n != 50:
+            raise UniteError("refuse par l'automate (FD)")
+        self.s50 = self.s[50] = 1 if value else 0
+
+    def write_system_words(self, start, values):
+        if start != 50 or not self.s50:
+            raise UniteError("refuse par l'automate (FD)")
+        import datetime
+        d = lambda v: int(f"{v:X}")                                # noqa: E731  BCD -> int
+        when = datetime.datetime(d(values[3]), d(values[2] >> 8), d(values[2] & 0xFF),
+                                 d(values[1] >> 8), d(values[1] & 0xFF), d(values[0] >> 8))
+        self.clock_offset = when.timestamp() - time.time()
+        return "37"
 
     def read_io_faults(self):
         return list(self.io_faults)
@@ -750,6 +767,18 @@ class TsxOps:
 
     def stop_cpu(self):
         return self.s._call(lambda plc: (plc.stop(), {"ok": True})[1])
+
+    def set_clock(self):
+        def run(plc):
+            import datetime
+            now = datetime.datetime.now()
+            done = ut.set_clock(plc, now)
+            sw = dict(zip(range(49, 54), plc.read("SW", 49, 5)))
+            words = [sw[50], sw[51], sw[52], sw[53]]
+            if words[1:] != done["mots"][1:] and words[1:] != ut.clock_words(datetime.datetime.now())[1:]:
+                raise UniteError(f"horloge relue {clock_text(sw)} : la mise a l'heure n'a pas pris")
+            return {"horloge": clock_text(sw), "methode": done["methode"]}
+        return self.s._call(run)
 
     # program
 

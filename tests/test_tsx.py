@@ -57,6 +57,14 @@ class FakeTsx:
 
     def answer(self, u):
         code = u[0]
+        if code == 0x92 and u[2] == 0x02 and u[3] == 0x58:          # PL7 debug write, %SW at 0x50 + 2n
+            off, n = u[5] | u[6] << 8, u[7]
+            raw = bytes(u[8:8 + n])
+            for i in range(0, n, 2):
+                if self.s[50]:                                       # only kept in update mode
+                    self.sw[(off - 0x50) // 2 + i // 2] = struct.unpack("<H", raw[i:i + 2])[0]
+            self.debug_writes = getattr(self, "debug_writes", 0) + 1
+            return [0xC2, 0x02, 0x00]
         if code == tsx.IDENTIFICATION:
             return [0x3F, *IDENT]
         if code == tsx.READ_SYSTEM_BIT:
@@ -116,6 +124,10 @@ class FakeTsx:
         if code == tsx.CLOSE_UPLOAD:
             self.upload_open = False
             return [0x6F, 0x00]
+        if code == 0x11:                                             # WRITE_SYSTEM_BIT
+            n = u[2] | u[3] << 8
+            self.s[n] = u[4]
+            return [0xFE]
         if code in (tsx.RUN, tsx.STOP):
             self.mode = "RUN" if code == tsx.RUN else "STOP"
             return [0xFE]
@@ -368,6 +380,13 @@ class TsxTests(unittest.TestCase):
             self.assertEqual(zones, {"MW": {0: 0, 12: 3248, 13: 0xFFFF}})
             with self.assertRaisesRegex(tsx.UniteError, "restaurer-donnees"):
                 tsx.read_program_file(f)                # not a program
+
+    def test_set_clock_falls_back_to_the_pl7_write(self):
+        import datetime
+        tsx.set_clock(self.tsx, datetime.datetime(2026, 11, 2, 12, 45, 30))
+        self.assertEqual(self.plc.sw[50:54], [0x3000, 0x1245, 0x1102, 0x2026])
+        self.assertEqual(self.plc.debug_writes, 1)                  # 37 on %SW refused, 92 used
+        self.assertEqual(self.plc.s[50], 0)
 
     def test_refused_request(self):
         with self.assertRaisesRegex(tsx.UniteError, "FD"):

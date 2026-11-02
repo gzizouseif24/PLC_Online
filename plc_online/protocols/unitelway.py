@@ -182,6 +182,9 @@ READ_OBJECTS, WRITE_OBJECTS = 0x36, 0x37
 RUN, STOP = 0x24, 0x25
 READ_CPU = 0x4F
 MONITOR = 0x93           # requete de mise au point de PL7 (sous-codes a decoder)
+WRITE_SYSTEM_BIT = 0x11  # liste des requetes UNI-TE (aide PL7) : READ_SYSTEM_BIT 01 / WRITE 11
+DEBUG_MEMORY = 0x92      # memoire de mise au point de PL7 : 92 07 <01 lire|02 ecrire> <segment> 00 <offset> <n>
+DEBUG_SYSTEM_WORDS = 0x58          # segment 58 : %SWn a l'offset 0x50 + 2n (%SW50 = 0xB4, capture 02/11)
 CPU_IO_FAULT = 0x20      # bit de l'octet d'etat (READ_CPU / identification) : defaut E/S
 OK_ANSWER = 0xFE
 WORD, DWORD = 0x07, 0x08
@@ -362,6 +365,29 @@ class Tsx:
             raise UniteError(f"defauts modules : reponse inattendue {hexs(data)}")
         return data[2:18]
 
+    def write_system_bit(self, n: int, value: int) -> None:
+        self._ask([WRITE_SYSTEM_BIT, self.slave.category, n & 0xFF, n >> 8, 1 if value else 0], OK_ANSWER)
+
+    def write_system_words(self, start: int, values: list) -> str:
+        """Ecrit des %SW : WRITE_OBJECTS sur le segment des mots systeme, sinon comme PL7 dans
+        une table d'animation (92 07 02 58 00 <offset> <n> <donnees>, vu le 02/11 pour %SW50).
+        Renvoie la methode acceptee."""
+        data = [b for v in values for b in (v & 0xFFFF).to_bytes(2, "little")]
+        seg, typ, _ = WORD_ZONES["SW"]
+        try:
+            self._ask([WRITE_OBJECTS, self.slave.category, seg, typ, start & 0xFF, start >> 8,
+                       len(values) & 0xFF, len(values) >> 8, *data], OK_ANSWER)
+            return "37"
+        except UniteError as e:
+            if "FD" not in str(e):
+                raise
+        offset = 0x50 + 2 * start
+        answer = self._ask([DEBUG_MEMORY, PL7_CATEGORY, 0x02, DEBUG_SYSTEM_WORDS, 0x00,
+                            offset & 0xFF, offset >> 8, len(data), *data], DEBUG_MEMORY + 0x30)
+        if answer[:1] != [0x02]:
+            raise UniteError(f"ecriture %SW refusee : {hexs(answer)}")
+        return "92"
+
     def read_cpu(self) -> list:
         """READ_CPU (4F, categorie PL7) : diagnostic systeme, 77 octets sur le banc. Les octets
         1-2 changent avec l'etat (02 0B, 04 08 pendant un chargement, 01 0A apres) : a decoder."""
@@ -452,6 +478,33 @@ def parse_config(blob: bytes) -> list:
             seen.add(pos)
             out.append((pos, m.group(2).decode("ascii").strip()))
     return out
+
+
+def bcd(v: int) -> int:
+    return int(str(v), 16)
+
+
+def clock_words(when) -> list:
+    """%SW50..53 (BCD) pour une date : secondes (16#SS00), heures-minutes (16#HHMM),
+    mois-jour (16#MMJJ), annee (16#AAAA)."""
+    return [bcd(when.second) << 8, bcd(when.hour) << 8 | bcd(when.minute),
+            bcd(when.month) << 8 | bcd(when.day), bcd(when.year)]
+
+
+def set_clock(tsx, when=None) -> dict:
+    """Mise a l'heure du TSX Micro / Premium : %S50 = 1 (mode mise a jour), ecriture de %SW50..53,
+    %S50 = 0. Sans %S50 = 1 l'automate recopie son horloge dans %SW50..53 a chaque cycle (une
+    ecriture seule est effacee aussitot, vu dans la capture du 02/11). Chaque etape est relue."""
+    import datetime
+    when = when or datetime.datetime.now()
+    tsx.write_system_bit(50, 1)
+    if tsx.read("S", 50, 1)[0] != 1:
+        raise UniteError("%S50 n'est pas passe a 1 (mise a jour de l'horloge refusee)")
+    try:
+        method = tsx.write_system_words(50, clock_words(when))
+    finally:
+        tsx.write_system_bit(50, 0)
+    return {"methode": method, "mots": clock_words(when)}
 
 
 def app_name(blob: bytes) -> str:

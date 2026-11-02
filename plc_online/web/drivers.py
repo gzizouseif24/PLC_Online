@@ -572,7 +572,7 @@ def import_files(folder: Path, files: list, note: str = "") -> dict:
 
 
 S7_FEATURES = ["horloge", "rack", "evenements", "db", "projet_step7"]
-TSX_FEATURES = ["donnees"]
+TSX_FEATURES = ["donnees", "horloge"]
 
 
 def _brands():
@@ -779,7 +779,7 @@ class Session:
 
     def set_clock(self) -> dict:
         if self._ops():
-            raise DriverError("Reglage de l'horloge pas encore disponible pour le TSX")
+            return self.tsx.set_clock()
         def run(plc):
             plc.set_clock()
             return {"horloge": plc.read_clock()}

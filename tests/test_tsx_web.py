@@ -56,6 +56,17 @@ class TsxWebTests(unittest.TestCase):
         with self.assertRaises(DriverError):
             self.s.write([{"adresse": "%KW0", "valeur": "1"}])
 
+    def test_set_clock(self):
+        r = self.s.set_clock()
+        self.assertEqual(r["methode"], "37")
+        self.assertEqual(r["horloge"][:10], time.strftime("%d/%m/%Y"))
+        self.assertEqual(self.s.plc.s50, 0)                          # update mode switched off again
+
+    def test_clock_words(self):
+        import datetime
+        from plc_online.protocols.unitelway import clock_words
+        self.assertEqual(clock_words(datetime.datetime(2026, 11, 2, 12, 45, 30)), [0x3000, 0x1245, 0x1102, 0x2026])
+
     def test_var_formats(self):
         self.assertEqual(TsxVar("%MW1:bin").decode(5), "2#0000_0000_0000_0101")
         self.assertEqual(TsxVar("%MW1").encode("-1"), 0xFFFF)

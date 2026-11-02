@@ -424,3 +424,16 @@ module not powered, "surveillance defaut alimentation" ticked, then unticked and
   `04 00 "TSX 3721"` for the CPU, then `FF <position> "TSX DEZ 32D2" 00 ...` per position.
   Client .stx: DEZ 32D2 at 1-2, DSZ 32R5 at 3-4. `parse_config()`.
 - Still no %I / %Q animation or clock setting in the captures.
+
+## 5w. Clock (capture of 02/11/2026 + PL7 behaviour)
+
+- A %SW written from an animation table: `92 07 02 58 00 B4 00 02 00 45` → `C2 02 00`
+  (debug memory, subcode 02 = write, segment 58, offset 0x00B4 = %SW50 → %SWn at 0x50 + 2n,
+  2 bytes, value 16#4500 = 45 s). The seconds read 45 once, then the clock's own value again:
+  %SW50..53 are refreshed from the real-time clock unless %S50 = 1.
+- Debug memory format: `92 07 <01 read | 02 write> <segment> 00 <offset lo> <offset hi> <n>
+  [data]`; read answer `C2 01 00 <data>`, write answer `C2 02 00`.
+- Implemented (`unitelway.set_clock`, `tsx.py horloge`, button on the web Etat tab): %S50 = 1
+  with WRITE_SYSTEM_BIT `11` (code from the PL7 request list; read back to check), %SW50..53 in
+  BCD with WRITE_OBJECTS `37` on the system word segment, falling back to the debug write above,
+  then %S50 = 0, clock read back. **Not run on the bench yet.**

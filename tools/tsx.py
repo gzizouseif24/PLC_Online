@@ -5,6 +5,7 @@
     python tools/tsx.py surveiller MW 0 100           afficher ce qui change (Ctrl+C pour arreter)
     python tools/tsx.py ecrire MW 10 1234             ecrire UN mot, avec confirmation et relecture
     python tools/tsx.py run | stop                    passer l'automate en RUN / STOP, avec confirmation
+    python tools/tsx.py horloge                       mettre l'horloge de l'automate a l'heure du PC
     python tools/tsx.py sauvegarder [FICHIER]         copier le programme de l'automate dans un fichier
     python tools/tsx.py comparer FICHIER              le programme a-t-il change depuis cette sauvegarde ?
     python tools/tsx.py restaurer FICHIER             remettre un programme dans l'automate (.tsxbak ou .stx PL7)
@@ -111,6 +112,22 @@ def cmd_ecrire(tsx, zone, addr, value):
     ok = back == value & ((1 << 8 * size) - 1)
     print(f"Relu : %{zone}{addr} = {back}  {'OK' if ok else '!! DIFFERENT'}")
     print(f"Pour revenir en arriere : python tools/tsx.py ecrire {zone} {addr} {old}")
+
+
+def cmd_horloge(tsx):
+    import datetime
+    from plc_online.protocols.unitelway import set_clock
+    sw = tsx.read("SW", 49, 5)
+    print(f"Horloge automate : {sw[3] & 0xFF:02X}/{sw[3] >> 8:02X}/{sw[4]:04X} "
+          f"{sw[2] >> 8:02X}:{sw[2] & 0xFF:02X}:{sw[1] >> 8:02X}")
+    now = datetime.datetime.now()
+    if not confirm(f"Mettre l'automate a l'heure du PC ({now:%d/%m/%Y %H:%M:%S}) ?"):
+        print("Annule.")
+        return
+    r = set_clock(tsx)
+    sw = tsx.read("SW", 49, 5)
+    print(f"Ecrit (requete {r['methode']}). Relu : {sw[3] & 0xFF:02X}/{sw[3] >> 8:02X}/{sw[4]:04X} "
+          f"{sw[2] >> 8:02X}:{sw[2] & 0xFF:02X}:{sw[1] >> 8:02X}")
 
 
 def cmd_run_stop(tsx, what):
@@ -275,7 +292,7 @@ def cmd_restaurer_donnees(tsx, filename):
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("commande", choices=["etat", "lire", "surveiller", "ecrire", "run", "stop",
-                                        "sauvegarder", "comparer", "sauvegarder-donnees",
+                                        "sauvegarder", "comparer", "sauvegarder-donnees", "horloge",
                                         "restaurer-donnees", "restaurer"])
     p.add_argument("args", nargs="*", help="zone, adresse, nombre ou valeur")
     p.add_argument("--port", default="COM6")
@@ -311,6 +328,8 @@ def main():
             cmd_surveiller(tsx, zone, n1, n2)
         elif a.commande == "ecrire":
             cmd_ecrire(tsx, zone, n1, n2)
+        elif a.commande == "horloge":
+            cmd_horloge(tsx)
         elif a.commande == "sauvegarder":
             cmd_sauvegarder(tsx, a.args[0] if a.args else None)
         elif a.commande == "comparer":
