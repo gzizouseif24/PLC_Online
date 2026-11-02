@@ -30,7 +30,22 @@ class TsxWebTests(unittest.TestCase):
         self.assertEqual((st["modele"], st["mode"], st["alertes"]), ("TSX 3721", "RUN", []))
         d = self.s.diagnostic()
         self.assertIn("%S10", [x["adresse"] for x in d["systeme"]])
-        self.assertNotIn("modules", d)
+        self.assertEqual([(m["emplacement"], m["configure"]["nom"], m["ok"]) for m in d["modules"]],
+                         [(1, "TSX DEZ 32D2", True), (2, "TSX DEZ 32D2", True),
+                          (3, "TSX DSZ 32R5", True), (4, "TSX DSZ 32R5", True)])
+
+    def test_unpowered_module(self):
+        self.s.plc.io_faults[1] = self.s.plc.io_faults[2] = 1      # as captured from PL7 on the bench
+        self.assertIn("voyant I/O", self.s.status()["alertes"][0])
+        d = self.s.diagnostic()
+        self.assertEqual([m["emplacement"] for m in d["modules"] if not m["ok"]], [1, 2])
+        self.assertEqual(d["modules"][0]["adresse"], "%I1.0 ...")
+
+    def test_config_from_image(self):
+        from plc_online.protocols.unitelway import parse_config
+        image = b"STATION\0" + bytes(50) + b"\x04\x00TSX 3721\0" + b"\xff\x01TSX DEZ 32D2\0" + bytes(28) \
+            + b"\xff\x02TSX DEZ 32D2\0" + b"\xff\x03TSX AEZ 414\0"
+        self.assertEqual(parse_config(image), [(1, "TSX DEZ 32D2"), (2, "TSX DEZ 32D2"), (3, "TSX AEZ 414")])
 
     def test_watch_and_write(self):
         r = self.s.values(["%MW12", "MW12:hex", "%MW9999", "E0.0"])

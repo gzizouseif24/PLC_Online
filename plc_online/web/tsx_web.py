@@ -99,7 +99,10 @@ class DemoTsx:
         self.s = [0] * 128
         self.s[10], self.s[16] = 1, 1                              # 1 = no I/O fault
         self.running = True
-        self.app = b"STATION\0" + bytes(6) + bytes((i * 7 + 3) % 256 for i in range(4498))
+        self.app = (b"STATION\0" + bytes(6) + bytes((i * 7 + 3) % 256 for i in range(4300))
+                    + b"\x04\x00TSX 3721\0" + b"\xff\x01TSX DEZ 32D2\0" + b"\xff\x02TSX DEZ 32D2\0"
+                    + b"\xff\x03TSX DSZ 32R5\0" + b"\xff\x04TSX DSZ 32R5\0" + bytes(100))
+        self.io_faults = [0] * 16
         self.tick = 0
         self.slave = type("S", (), {"category": 0})()
 
@@ -151,7 +154,11 @@ class DemoTsx:
         self.mw[start:start + len(values)] = [v & 0xFFFF for v in values]
 
     def read_cpu(self):
-        return [0, 2 if self.running else 1, 0x0B if self.running else 0x0A] + [0] * 74
+        state = (2 if self.running else 1) | (0x20 if any(self.io_faults) else 0)
+        return [0, state, 0x0B if self.running else 0x0A] + [0] * 74
+
+    def read_io_faults(self):
+        return list(self.io_faults)
 
     def reserve(self, params=None):
         pass
@@ -160,7 +167,7 @@ class DemoTsx:
         pass
 
     def app_info(self):
-        return {"nom": ut.app_name(self.app), "brut": ""}
+        return {"nom": ut.app_name(self.app), "brut": f"{len(self.app)}-{sum(self.app)}"}
 
     def upload(self, progress=None):
         for seg, i in enumerate(range(0, len(self.app), ut.SEGMENT_SIZE), 1):
@@ -222,14 +229,79 @@ def clock_text(sw: dict) -> str:
             f"{sw[51] >> 8:02X}:{sw[51] & 0xFF:02X}:{sw[50] >> 8:02X}")
 
 
-def cpu_state(plc):
-    """(mode, raw text) from READ_CPU; ('?', '') when the PLC refuses it."""
+def cpu_state(plc, with_flags=False):
+    """(mode, raw text) from READ_CPU; ('?', '') when the PLC refuses it. The state byte is the
+    mode in the low bits and 0x20 when the CPU signals an I/O fault (I/O light): 21 seen with an
+    unpowered input module, 01 once its supply monitoring was switched off (capture 02/11)."""
     try:
         data = plc.read_cpu()
     except UniteError:
-        return "?", ""
+        return ("?", "", False) if with_flags else ("?", "")
     raw = " ".join(f"{b:02X}" for b in data[:3])
-    return CPU_STATES.get(data[1] if len(data) > 1 else -1, "?"), raw
+    state = data[1] if len(data) > 1 else -1
+    mode = CPU_STATES.get(state & 0x0F, "?") if state >= 0 else "?"
+    if with_flags:
+        return mode, raw, bool(state >= 0 and state & ut.CPU_IO_FAULT)
+    return mode, raw
+
+
+# ---- configured modules (from the application image) and faults per position ----
+
+MODULE_KINDS = [("DMZ", "entrees / sorties TOR", "%I", "%Q"), ("DEZ", "entrees TOR", "%I", None),
+                ("DEY", "entrees TOR", "%I", None), ("DSZ", "sorties TOR", "%Q", None),
+                ("DSY", "sorties TOR", "%Q", None), ("AEZ", "entrees analogiques", "%IW", None),
+                ("AEY", "entrees analogiques", "%IW", None), ("ASZ", "sorties analogiques", "%QW", None),
+                ("ASY", "sorties analogiques", "%QW", None), ("CTZ", "comptage", "%ID", None),
+                ("SCP", "communication", "", None)]
+
+MODULE_NAMES = {
+    "TSX DEZ 32D2": "32 entrees 24 V cc (connecteurs HE10)",
+    "TSX DEZ 12D2": "12 entrees 24 V cc",
+    "TSX DEZ 08A4": "8 entrees 120 V ca",
+    "TSX DEZ 08A5": "8 entrees 220 V ca",
+    "TSX DSZ 32R5": "32 sorties relais",
+    "TSX DSZ 32T2": "32 sorties transistors 24 V cc",
+    "TSX DSZ 08R5": "8 sorties relais",
+    "TSX DSZ 08T2": "8 sorties transistors 24 V cc",
+    "TSX DSZ 04T22": "4 sorties transistors 24 V cc 2 A",
+    "TSX DMZ 28DR": "16 entrees 24 V cc + 12 sorties relais",
+    "TSX DMZ 28DT": "16 entrees 24 V cc + 12 sorties transistors",
+    "TSX DMZ 28DTK": "16 entrees + 12 sorties transistors (HE10)",
+    "TSX DMZ 64DTK": "32 entrees + 32 sorties transistors (HE10)",
+    "TSX AEZ 414": "4 entrees analogiques (thermocouple, sonde, +/-10 V)",
+    "TSX AEZ 801": "8 entrees analogiques tension",
+    "TSX AEZ 802": "8 entrees analogiques courant",
+    "TSX ASZ 401": "4 sorties analogiques +/-10 V",
+    "TSX ASZ 200": "2 sorties analogiques",
+    "TSX CTZ 1A": "1 voie de comptage",
+    "TSX CTZ 2A": "2 voies de comptage",
+}
+
+
+def module_rows(config, faults) -> list:
+    """Rack table rows (same shape as the S7-300 one): configured modules, fault per position."""
+    rows = []
+    for pos, ref in config:
+        kind, first, second = next(((k[1], k[2], k[3]) for k in MODULE_KINDS if ref.split()[-2:][0].startswith(k[0])),
+                                   ("module", "", None))
+        prefix = first
+        if second and any(p == pos - 1 and r == ref for p, r in config):
+            prefix = second                     # second position of a mixed module: its outputs
+        address = f"{prefix}{pos}.0 ..." if prefix else ""
+        fault = faults[pos] if faults is not None and pos < len(faults) else None
+        rows.append({"emplacement": pos, "type": kind, "adresse": address,
+                     "configure": {"code": "", "nom": ref, "references": MODULE_NAMES.get(ref, "")},
+                     "en_place": None,
+                     "etat": "ok" if fault == 0 else "DEFAUT MODULE (absent, non alimente ou voie en defaut)"
+                     if fault else "non lu",
+                     "ok": fault != 1 and not (fault and fault > 0)})
+    if faults is not None:
+        configured = {p for p, _ in config}
+        for pos, f in enumerate(faults):
+            if f and pos not in configured and pos > 0:
+                rows.append({"emplacement": pos, "type": "?", "adresse": "", "configure": None, "en_place": None,
+                             "etat": "DEFAUT sur une position non configuree", "ok": False})
+    return sorted(rows, key=lambda r: r["emplacement"])
 
 
 def flash_lines(sw: dict) -> list:
@@ -250,15 +322,17 @@ def tsx_status(plc) -> dict:
            "voyants": [], "details": []}
     bits = read_bits(plc, "S", ut.SYSTEM_BITS)
     sw = read_system_words(plc)
-    mode, raw = cpu_state(plc)
+    mode, raw, io_fault = cpu_state(plc, with_flags=True)
     out["mode"] = mode
+    if io_fault:
+        out["alertes"].append("Defaut E/S signale par la CPU (voyant I/O) : voir l'onglet Diagnostic")
     if mode == "VIDE":
         out["alertes"].append("Pas d'application dans l'automate (programme perdu ? verifier la pile : voyant BAT)")
     faults = {n: label for n, (label, bad) in ut.SYSTEM_BITS.items() if bits.get(n) == bad}
     out["alertes"] += [f"%S{n} : {label}" for n, label in faults.items()] if mode != "VIDE" else []
     out["voyants"] = [
         {"nom": "RUN", "texte": "RUN", "allume": mode == "RUN", "clignote": False, "defaut": False},
-        {"nom": "I/O", "texte": "Defaut E/S (%S10)", "allume": 10 in faults, "clignote": False, "defaut": True},
+        {"nom": "I/O", "texte": "Defaut E/S", "allume": io_fault or 10 in faults, "clignote": False, "defaut": True},
         {"nom": "ERR", "texte": "Chien de garde (%S11)", "allume": 11 in faults, "clignote": False, "defaut": True},
         {"nom": "BAT", "texte": "Pile (%S68)", "allume": 68 in faults, "clignote": False, "defaut": True},
     ]
@@ -278,8 +352,20 @@ def tsx_status(plc) -> dict:
 EXTRA_BITS = {0: "demarrage a froid", 1: "reprise a chaud", 13: "premier cycle apres RUN"}
 
 
-def tsx_diagnostic(plc) -> dict:
+def tsx_diagnostic(plc, config=None) -> dict:
     out = {"alertes": [], "systeme": [], "parametres_cpu": [], "config_compilee": ""}
+    try:
+        faults = plc.read_io_faults()
+    except UniteError:
+        faults = None
+    if config is not None or faults is not None:
+        out["modules"] = module_rows(config or [], faults)
+        bad = [r for r in out["modules"] if not r["ok"]]
+        if bad:
+            out["alertes"].append(f"{len(bad)} position(s) en defaut dans le rack : "
+                                  + ", ".join(str(r["emplacement"]) for r in bad))
+        if faults is None:
+            out["alertes"].append("Defauts des modules non lus (requete refusee)")
     numbers = sorted(set(ut.SYSTEM_BITS) | set(EXTRA_BITS))
     bits = read_bits(plc, "S", numbers)
     for n in numbers:
@@ -615,6 +701,7 @@ class TsxOps:
 
     def __init__(self, session):
         self.s = session
+        self.configs = {}                  # (PLC, application signature) -> configured modules
 
     @property
     def programs(self) -> Path:
@@ -628,7 +715,25 @@ class TsxOps:
         return tsx_status(plc)
 
     def diagnostic(self):
-        return self.s._call(tsx_diagnostic)
+        return self.s._call(lambda plc: tsx_diagnostic(plc, self._config(plc)))
+
+    def _config(self, plc):
+        """Configured modules of the loaded application. Read from the application image, which
+        takes a full program read the first time; then kept while the application signature
+        (request 92 block 0A) stays the same."""
+        if cpu_state(plc)[0] == "VIDE":
+            return []
+        try:
+            plc.reserve()
+            try:
+                key = (plc.nom, plc.app_info()["brut"])
+            finally:
+                plc.release()
+        except UniteError:
+            return None
+        if key not in self.configs:
+            self._upload(plc, lambda *a: None)
+        return self.configs.get(key)
 
     def values(self, texts):
         return self.s._call(lambda plc: read_values(plc, texts))
@@ -661,9 +766,11 @@ class TsxOps:
             raise UniteError(f"{e}, a l'etape {step} : PL7 ou un autre PC connecte ?") from None
         try:
             step = "infos application (92)"
-            name = plc.app_info()["nom"]
+            info = plc.app_info()
+            name = info["nom"]
             step = "lecture du programme (3D/3E)"
             blob = plc.upload(lambda seg, n: progress(f"{text} {name} : {n} octets", 0, 0))
+            self.configs[(plc.nom, info["brut"])] = ut.parse_config(blob)
         except UniteError as e:
             raise UniteError(f"{e}, a l'etape {step}") from None
         finally:

@@ -100,6 +100,10 @@ function applyBrand(key) {
     : "E/I, A/Q, M, DB10.DBW2, T5, Z2. Le format se change sur chaque ligne.";
   $("ajout-adresse").placeholder = tsx ? "%MW10, %MD4, %M5, %S10" : "MW10, E0.0, DB10.DBD4";
   $("titre-params").textContent = tsx ? "Automate" : "Parametres CPU";
+  const head = $("table-rack").tHead.rows[0].cells;
+  head[0].textContent = tsx ? "Position" : "Empl.";
+  head[3].textContent = tsx ? "Configure (PL7)" : "Configure (HW Config)";
+  head[4].textContent = tsx ? "En place (pas encore lu)" : "En place";
   watch = loadWatch();
   for (const k of Object.keys(lastValues)) delete lastValues[k];
   diagLoaded = false;

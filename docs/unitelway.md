@@ -408,3 +408,19 @@ animation table with %I1.0 → PC ← PLC transfer. Frames decoded with
   configured**. Next capture: real modules configured in PL7, an input toggled while animated,
   and the module debug screens.
 - No clock setting in this capture.
+
+## 5v. Second capture (02/11/2026): modules configured, DEZ unpowered
+
+Application with TSX DEZ 32D2 (positions 1-2) and TSX AEZ 414 (position 3); the first input
+module not powered, "surveillance defaut alimentation" ticked, then unticked and downloaded again.
+
+- **State byte flag 0x20 = I/O fault:** READ_CPU / identification state `21` (STOP + I/O fault)
+  while the unpowered module was monitored, `01` after the supply monitoring was unticked.
+- **Fault per rack position:** `93 07 02 68 00 04 02 10` → `C3 02 00` + 16 bytes, one per
+  position: `00 01 01 00 ...` = positions 1 and 2 (the unpowered DEZ 32D2, a 32-channel module
+  takes two positions) in fault, position 3 fine. All zeros with the empty configuration.
+  `Tsx.read_io_faults()`; to confirm on the bench by powering the module (expect all zeros).
+- **Configured modules in the application image** (EXE/CONF/BAC.BIN, end of the upload):
+  `04 00 "TSX 3721"` for the CPU, then `FF <position> "TSX DEZ 32D2" 00 ...` per position.
+  Client .stx: DEZ 32D2 at 1-2, DSZ 32R5 at 3-4. `parse_config()`.
+- Still no %I / %Q animation or clock setting in the captures.

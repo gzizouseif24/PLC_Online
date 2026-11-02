@@ -181,6 +181,8 @@ READ_BIT, READ_SYSTEM_BIT = 0x00, 0x01
 READ_OBJECTS, WRITE_OBJECTS = 0x36, 0x37
 RUN, STOP = 0x24, 0x25
 READ_CPU = 0x4F
+MONITOR = 0x93           # requete de mise au point de PL7 (sous-codes a decoder)
+CPU_IO_FAULT = 0x20      # bit de l'octet d'etat (READ_CPU / identification) : defaut E/S
 OK_ANSWER = 0xFE
 WORD, DWORD = 0x07, 0x08
 
@@ -351,6 +353,15 @@ class Tsx:
                 except UniteError:
                     pass
 
+    def read_io_faults(self) -> list:
+        """Defaut par position du rack (0..15), 1 = module en defaut. Requete vue dans PL7 en ligne
+        (capture du 02/11/2026) : 93 07 02 68 00 04 02 10 -> C3 02 00 + 16 octets ; DEZ 32D2 non
+        alimente en positions 1-2 -> 00 01 01 00 ..., configuration vide -> tout a 0."""
+        data = self._ask([MONITOR, PL7_CATEGORY, 0x02, 0x68, 0x00, 0x04, 0x02, 0x10], MONITOR + 0x30)
+        if len(data) < 18 or data[:2] != [0x02, 0x00]:
+            raise UniteError(f"defauts modules : reponse inattendue {hexs(data)}")
+        return data[2:18]
+
     def read_cpu(self) -> list:
         """READ_CPU (4F, categorie PL7) : diagnostic systeme, 77 octets sur le banc. Les octets
         1-2 changent avec l'etat (02 0B, 04 08 pendant un chargement, 01 0A apres) : a decoder."""
@@ -425,6 +436,22 @@ def read_program_bytes(data: bytes, name: str = "fichier"):
 def read_program_file(filename):
     with open(filename, "rb") as f:
         return read_program_bytes(f.read(), filename)
+
+
+CONFIG_MODULE = re.compile(rb"\xff([\x00-\x1f])(TSX [ -~]{3,10})\x00")
+
+
+def parse_config(blob: bytes) -> list:
+    """[(position, reference)] des modules configures, lus dans la partie configuration
+    (EXE/CONF/BAC.BIN, a la fin de l'image) : 'FF <position> TSX DEZ 32D2'. Un module format
+    standard (32 voies) occupe 2 positions et apparait 2 fois (1 et 2), comme dans PL7."""
+    seen, out = set(), []
+    for m in CONFIG_MODULE.finditer(blob):
+        pos = m.group(1)[0]
+        if pos not in seen:
+            seen.add(pos)
+            out.append((pos, m.group(2).decode("ascii").strip()))
+    return out
 
 
 def app_name(blob: bytes) -> str:
