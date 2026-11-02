@@ -437,3 +437,11 @@ module not powered, "surveillance defaut alimentation" ticked, then unticked and
   with WRITE_SYSTEM_BIT `11` (code from the PL7 request list; read back to check), %SW50..53 in
   BCD with WRITE_OBJECTS `37` on the system word segment, falling back to the debug write above,
   then %S50 = 0, clock read back. **Not run on the bench yet.**
+
+## 5x. Client TSX 37 (02/11/2026): first use on a real machine
+
+- Web interface, read-only plus clock: Etat, Diagnostic (system bits; rack with the fault per
+  position read after the `93 07 0B` retry: DEZ 32D2 at 1-2 and DSZ 08T2 at 5 in fault, DSZ 32R5
+  at 3-4 OK; %S10 = 0, %S16 = 0; %S51 = 1 clock lost; %SW96 = 0042 valid Flash backup).
+- **Clock set from the web: works** (%S50 / %SW50..53, `unitelway.set_clock`).
+- **Data save (%MW / %KW) from the web: works.**
