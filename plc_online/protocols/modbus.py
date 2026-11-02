@@ -20,7 +20,7 @@ MAX_REGISTERS = 125   # per request (Modbus limit)
 MAX_BITS = 2000
 
 READ_COILS, READ_DISCRETE_INPUTS, READ_HOLDING, READ_INPUT_REGISTERS = 1, 2, 3, 4
-WRITE_SINGLE_REGISTER = 6
+WRITE_SINGLE_COIL, WRITE_SINGLE_REGISTER, WRITE_MULTIPLE_REGISTERS = 5, 6, 16
 
 EXCEPTIONS = {
     1: "fonction non supportée",
@@ -56,11 +56,15 @@ def crc16(data: bytes) -> int:
 
 
 def open_serial(port: str, baud: int = 19200, parity: str = "E", stopbits: int = 1,
-                timeout: float = 1.0):
-    """Serial port for Modbus RTU: 8 data bits; parity and stop bits as set in the PLC."""
+                timeout: float = 1.0, bytesize: int = 8):
+    """Serial port for Modbus: 8 data bits for RTU, 7 for ASCII; parity and stop bits as set in the PLC."""
     import serial  # imported here so the rest of the module works without pyserial
 
-    return serial.Serial(port, baud, bytesize=8, parity=parity, stopbits=stopbits, timeout=timeout)
+    return serial.Serial(port, baud, bytesize=bytesize, parity=parity, stopbits=stopbits, timeout=timeout)
+
+
+def lrc(data: bytes) -> int:
+    return -sum(data) & 0xFF
 
 
 def dint_lw(words: list, i: int) -> int:
@@ -99,7 +103,7 @@ class RtuTransport:
             rest_len = 2                      # exception code already in head[2], then CRC
         elif func in (READ_COILS, READ_DISCRETE_INPUTS, READ_HOLDING, READ_INPUT_REGISTERS):
             rest_len = head[2] + 2            # byte count, then CRC
-        elif func == WRITE_SINGLE_REGISTER:
+        elif func in (WRITE_SINGLE_COIL, WRITE_SINGLE_REGISTER, WRITE_MULTIPLE_REGISTERS):
             rest_len = 5                      # rest of the echo, then CRC
         else:
             raise ModbusError(f"code fonction inattendu : {head.hex()}")
@@ -113,6 +117,42 @@ class RtuTransport:
         if body[0] != unit:
             raise ModbusError(f"réponse d'un autre esclave ({body[0]} au lieu de {unit})")
         return body[1:]
+
+    def close(self):
+        self.ser.close()
+
+
+class AsciiTransport:
+    """Modbus ASCII over a serial port: ':' + hex(slave + PDU + LRC) + CR LF (Delta default)."""
+
+    def __init__(self, ser, trace=False):
+        self.ser = ser
+        self.trace = trace
+
+    def exchange(self, unit: int, pdu: bytes) -> bytes:
+        body = bytes([unit]) + pdu
+        frame = b":" + (body + bytes([lrc(body)])).hex().upper().encode() + b"\r\n"
+        self.ser.reset_input_buffer()
+        self.ser.write(frame)
+        if self.trace:
+            print(f"   -> {frame.decode().strip()}")
+        reply = self.ser.read_until(b"\n")
+        if self.trace:
+            print(f"   <- {reply.decode('latin-1').strip()}")
+        if not reply:
+            raise ModbusError("pas de réponse (timeout)")
+        text = reply.strip()
+        if not text.startswith(b":") or not reply.endswith(b"\n"):
+            raise ModbusError(f"réponse coupée : {reply!r}")
+        try:
+            data = bytes.fromhex(text[1:].decode("ascii"))
+        except ValueError:
+            raise ModbusError(f"réponse illisible : {reply!r}")
+        if len(data) < 3 or lrc(data[:-1]) != data[-1]:
+            raise ModbusError(f"LRC faux : {reply!r}")
+        if data[0] != unit:
+            raise ModbusError(f"réponse d'un autre esclave ({data[0]} au lieu de {unit})")
+        return data[1:-1]
 
     def close(self):
         self.ser.close()
@@ -159,10 +199,13 @@ class TcpTransport:
 class Modicon:
     """One Modbus slave (unit) reached through a transport."""
 
-    def __init__(self, transport, unit: int = 1, retries: int = 2):
+    def __init__(self, transport, unit: int = 1, retries: int = 2,
+                 max_registers: int = MAX_REGISTERS, max_bits: int = MAX_BITS):
         self.transport = transport
         self.unit = unit
         self.retries = retries
+        self.max_registers = max_registers
+        self.max_bits = max_bits
 
     def _request(self, pdu: bytes, check, retry: bool = True) -> bytes:
         """Send pdu, return the reply data after check(reply) passes."""
@@ -199,7 +242,7 @@ class Modicon:
         words = []
         addr, end = start, start + count
         while addr < end:
-            n = min(MAX_REGISTERS, end - addr)
+            n = min(self.max_registers, end - addr)
             data = self._read(func, addr, n, 2 * n)
             words += struct.unpack(f">{n}H", data)
             addr += n
@@ -209,7 +252,7 @@ class Modicon:
         bits = []
         addr, end = start, start + count
         while addr < end:
-            n = min(MAX_BITS, end - addr)
+            n = min(self.max_bits, end - addr)
             data = self._read(func, addr, n, (n + 7) // 8)
             bits += [bool(data[i // 8] >> (i % 8) & 1) for i in range(n)]
             addr += n
@@ -240,6 +283,26 @@ class Modicon:
                 raise ModbusError(f"écho d'écriture différent : {data.hex()}")
             return data
         self._request(pdu, check, retry=False)
+
+    def _write(self, pdu: bytes, echo: bytes) -> None:
+        def check(data):
+            if data != echo:
+                raise ModbusError(f"écho d'écriture différent : {data.hex()}")
+            return data
+        self._request(pdu, check, retry=False)
+
+    def write_coil(self, addr: int, on: bool) -> None:
+        """Function 05. Not retried."""
+        pdu = struct.pack(">BHH", WRITE_SINGLE_COIL, addr, 0xFF00 if on else 0)
+        self._write(pdu, pdu[1:])
+
+    def write_registers(self, addr: int, values: list) -> None:
+        """Function 16, split in blocks of max_registers. Not retried."""
+        for i in range(0, len(values), self.max_registers):
+            part = [v & 0xFFFF for v in values[i:i + self.max_registers]]
+            pdu = struct.pack(f">BHHB{len(part)}H", WRITE_MULTIPLE_REGISTERS, addr + i, len(part),
+                              2 * len(part), *part)
+            self._write(pdu, struct.pack(">HH", addr + i, len(part)))
 
     def close(self):
         self.transport.close()
