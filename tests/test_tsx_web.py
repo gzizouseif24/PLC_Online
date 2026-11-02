@@ -73,6 +73,21 @@ class TsxWebTests(unittest.TestCase):
         self.assertEqual((r["erreur"], r["differences"]), ("", []))
         self.assertIn(r["sauvegarde_avant"], [b["id"] for b in self.s.list_backups()["sauvegardes"]])
 
+    def test_restore_into_an_empty_plc(self):
+        self.s.save_program("bon programme")
+        bid = self.wait()["id"]
+        good = self.s.plc.app
+        self.s.plc.stop()
+        plc = self.s.plc
+        plc.app, plc.read_cpu = b"", lambda: [0, 1 if plc.app else 4, 8] + [0] * 74   # failed load: PLC empty
+        plan = self.s.restore_plan(bid, False)
+        self.assertEqual((plan["vide"], plan["run"]), (True, False))
+        self.s.restore(bid, False, False)
+        r = self.wait()
+        self.assertTrue(r["automate_vide"])
+        self.assertEqual((r["erreur"], r["differences"]), ("", []))
+        self.assertEqual(self.s.plc.app, good)
+
     def test_stx_import_warns_other_cpu(self):
         apx = b"STATION\0" + bytes(500)
         buf = io.BytesIO()

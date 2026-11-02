@@ -452,6 +452,7 @@ async function planRestoreTsx(b) {
     }
     box.append(el("p", "hint", "Le programme actuel de l'automate est d'abord copie dans la liste (note \"avant restauration\"). " +
                   "L'automate passe en STOP, l'application est chargee puis relue pour verification."));
+    if (plan.vide) box.append(el("p", "avert", "L'automate est vide (pas d'application) : rien a copier avant, l'application sera chargee directement."));
     if (plan.run) box.append(el("p", "avert", "L'automate est en RUN : il sera mis en STOP, la machine s'arrete."));
     const go = el("button", "btn btn-danger", "Lancer la restauration");
     go.type = "button";

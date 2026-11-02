@@ -811,8 +811,8 @@ class TsxOps:
         def run(plc):
             target = meta.get("cible") or ""
             return {"charger": [f"application {ut.app_name(blob) or '?'} ({len(blob)} octets)"], "en_trop": [],
-                    "db_ignorees": False, "run": cpu_state(plc)[0] != "STOP", "cible": target,
-                    "automate": plc.nom,
+                    "db_ignorees": False, "run": cpu_state(plc)[0] == "RUN", "cible": target,
+                    "automate": plc.nom, "vide": cpu_state(plc)[0] == "VIDE",
                     "autre_automate": bool(target) and target.replace(" ", "") != plc.nom.replace(" ", "")}
         return self.s._call(run)
 
@@ -821,9 +821,13 @@ class TsxOps:
 
         def work(plc, progress):
             out = {"charges": [], "supprimes": [], "erreur": "", "differences": [], "etait_en_run": False}
-            before = self._upload(plc, progress, "copie de securite")
-            out["sauvegarde_avant"] = save_image(self.programs, before, plc.nom, "avant restauration")["id"]
-            out["etait_en_run"] = cpu_state(plc)[0] != "STOP"
+            mode = cpu_state(plc)[0]
+            if mode == "VIDE":                     # nothing to keep: an empty PLC (failed load, lost program)
+                out["automate_vide"] = True
+            else:
+                before = self._upload(plc, progress, "copie de securite")
+                out["sauvegarde_avant"] = save_image(self.programs, before, plc.nom, "avant restauration")["id"]
+            out["etait_en_run"] = mode == "RUN"
             progress("passage en STOP", 0, 0)
             plc.stop()
             plc.reserve(ut.RESERVE_DOWNLOAD)
@@ -891,7 +895,7 @@ class TsxOps:
             return {"mots": len(saved), "differents": len(diffs), "zone_automate": len(current),
                     "hors_zone": sum(1 for a in saved if a >= len(current)), "kw_ignores": len(zones.get("KW", {})),
                     "automate_fichier": plc_in_file or "", "automate": plc.nom,
-                    "run": cpu_state(plc)[0] != "STOP",
+                    "run": cpu_state(plc)[0] == "RUN",
                     "exemples": [{"adresse": f"%MW{a}", "automate": ut.signed(current[a], 2),
                                   "fichier": ut.signed(diffs[a], 2)} for a in sorted(diffs)[:12]]}
         return self.s._call(run)
