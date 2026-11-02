@@ -17,7 +17,8 @@ JSON API:
     POST /api/programme/plan {"id", "avec_db"}  what a restore would load / leave
     POST /api/programme/restaurer {"id", "avec_db", "supprimer_en_trop"}   (background, CPU to STOP)
     GET  /api/programme/telecharger?id=...     one copy as a .zip
-    POST /api/programme/importer {"fichiers": [{"nom", "contenu" (base64)}], "note"}   .bin files or a .zip
+    POST /api/programme/importer {"fichiers": [{"nom", "contenu" (base64)}], "note"}   .bin files, a .zip,
+                                               or a STEP 7 V5 project (nom = path inside the folder)
     POST /api/cpu/demarrer                     CPU to RUN (warm restart)
     POST /api/cpu/arreter                      CPU to STOP
     POST /api/cpu/horloge                      CPU clock set to the PC time
@@ -55,7 +56,7 @@ def make_handler(session: Session):
 
         def read_json(self):
             n = int(self.headers.get("Content-Length") or 0)
-            if n > 10 * 1024 * 1024:
+            if n > 90 * 1024 * 1024:            # a STEP 7 project, base64
                 raise DriverError("Requete trop grosse")
             try:
                 return json.loads(self.rfile.read(n) or b"{}")

@@ -12,6 +12,9 @@
     python tools/siemens.py comparer DOSSIER --depuis AUTRE   compare deux copies (sans CPU)
     py -3.14-32 tools/siemens.py restaurer DOSSIER [--avec-db] [--supprimer-en-trop]
                                                               recharger dans la CPU une copie du programme
+    python tools/siemens.py importer-projet PROJET [DOSSIER]  blocs d'un projet STEP 7 V5 -> copie
+                                                              (comparer / restaurer acceptent aussi PROJET,
+                                                              --programme NOM s'il y a plusieurs programmes)
     py -3.14-32 tools/siemens.py surveiller E0.0 AW4 MW10:hex DB10.DBD4:real T1 Z2
                                                               table de surveillance (valeurs en direct)
     py -3.14-32 tools/siemens.py surveiller --table machine.txt [--journal]
@@ -237,10 +240,21 @@ def cmd_sauvegarder_programme(plc, folder=None):
           " + programme.txt)")
 
 
-def cmd_restaurer(plc, folder, with_db=False, delete_extra=False, max_pdu=240):
+def cmd_importer_projet(project, folder=None, name=None):
+    """Blocks of a STEP 7 V5 project rebuilt as the CPU holds them, saved as a copy folder."""
+    from plc_online.protocols import s7_project
+    blocks, prog = s7_project.load_project(project, name)
+    folder = folder or f"projet_{s7_project.project_name(project)}_{prog}".replace(" ", "_")
+    header = [f"date : {time.strftime('%Y-%m-%d %H:%M:%S')}",
+              f"projet STEP 7 : {s7_project.find_project(project)}  programme {prog}"]
+    folder = program.save_program(folder, blocks, header)
+    print(f"Projet importe : {folder}/  ({program.count_text(blocks)})")
+
+
+def cmd_restaurer(plc, folder, with_db=False, delete_extra=False, max_pdu=240, program_name=None):
     """Load a program copy (sauvegarder-programme) back into the CPU: OB, FB, FC (and DB with
     with_db). CPU in STOP during the load. SDB (hardware configuration) are not touched."""
-    backup = load_program(folder)
+    backup = load_program(folder, program_name)
     plan = program.restore_plan(plc, backup, with_db)
     todo, extra = plan["todo"], plan["extra"]
     print(f"Copie : {folder}")
@@ -449,7 +463,8 @@ def cmd_lire(plc, a):
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("commande", nargs="?", default="lire", choices=["etat", "diagnostic", "modules", "config", "sauvegarder-config",
-                                                         "sauvegarder-programme", "comparer", "restaurer", "surveiller", "ecrire", "lire"])
+                                                         "sauvegarder-programme", "comparer", "restaurer", "importer-projet",
+                                                         "surveiller", "ecrire", "lire"])
     p.add_argument("--mpi", type=int, default=2, help="adresse MPI de la CPU")
     p.add_argument("--rack", type=int, default=0)
     p.add_argument("--slot", type=int, default=2)
@@ -468,6 +483,7 @@ def main():
     p.add_argument("--avec-db", action="store_true", help="restaurer : charger aussi les DB (valeurs de la copie)")
     p.add_argument("--supprimer-en-trop", action="store_true",
                    help="restaurer : supprimer les blocs de la CPU absents de la copie")
+    p.add_argument("--programme", default=None, help="projet STEP 7 : nom du programme S7 s'il y en a plusieurs")
     p.add_argument("arguments", nargs="*", help="dossier (comparer), adresses (surveiller), adresse valeur (ecrire)")
     a = p.parse_args()
     a.reference = a.arguments[0] if a.arguments else None
@@ -492,7 +508,17 @@ def main():
         p.error("comparer : donner le dossier de reference (copie faite avec sauvegarder-programme)")
     if a.commande == "comparer" and a.depuis:
         try:
-            cmd_comparer(load_program(a.reference), load_program(a.depuis), a.reference, a.depuis)
+            cmd_comparer(load_program(a.reference, a.programme), load_program(a.depuis, a.programme),
+                         a.reference, a.depuis)
+        except (OSError, S7Error) as e:
+            raise SystemExit(f"ECHEC : {e}")
+        return
+
+    if a.commande == "importer-projet":
+        if not a.reference:
+            p.error("importer-projet : donner le dossier du projet STEP 7 (celui du fichier .s7p)")
+        try:
+            cmd_importer_projet(a.reference, a.arguments[1] if len(a.arguments) > 1 else a.dossier, a.programme)
         except (OSError, S7Error) as e:
             raise SystemExit(f"ECHEC : {e}")
         return
@@ -524,14 +550,14 @@ def main():
             elif a.commande == "sauvegarder-programme":
                 cmd_sauvegarder_programme(plc, a.dossier or a.reference)
             elif a.commande == "comparer":
-                ref = load_program(a.reference)
+                ref = load_program(a.reference, a.programme)
                 cmd_comparer(ref, upload_program(plc), a.reference, "CPU")
             elif a.commande == "sauvegarder-config":
                 cmd_sauvegarder_config(plc, a.dossier)
             elif a.commande == "restaurer":
                 if not a.reference:
                     raise SystemExit("restaurer : donner le dossier de la copie (sauvegarder-programme)")
-                cmd_restaurer(plc, a.reference, a.avec_db, a.supprimer_en_trop)
+                cmd_restaurer(plc, a.reference, a.avec_db, a.supprimer_en_trop, program_name=a.programme)
             elif a.commande == "surveiller":
                 cmd_surveiller(plc, variables, a.periode, a.journal)
             elif a.commande == "ecrire":

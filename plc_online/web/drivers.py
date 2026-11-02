@@ -421,6 +421,8 @@ def backup_blocks(folder: Path, backup_id: str) -> dict:
 
 
 MAX_IMPORT = 5 * 1024 * 1024
+MAX_PROJECT = 60 * 1024 * 1024                    # STEP 7 project files kept (ombstx/offline, hrs, .s7p)
+PROJECT_FILE = re.compile(r"(^|/)(ombstx/offline|hrs)/|\.s7p$", re.IGNORECASE)
 
 
 def export_zip(folder: Path, backup_id: str) -> tuple:
@@ -436,52 +438,111 @@ def export_zip(folder: Path, backup_id: str) -> tuple:
     return f"programme_s7_{backup_id}.zip", buf.getvalue()
 
 
-def import_files(folder: Path, files: list, note: str = "") -> dict:
-    """Make a copy from files chosen on the PC: block files (OB1.bin, SDB0.bin...) and / or a .zip
-    of a copy (from this page or tools/siemens.py sauvegarder-programme). Every block is checked."""
-    import io
-    import zipfile
-    blocks, ignored, total, original = {}, [], 0, {}
-    for name, data in files:
-        total += len(data)
-        if total > MAX_IMPORT:
-            raise DriverError("Fichiers trop gros pour une copie de programme S7-300")
-        base = Path(name.replace("\\", "/")).name
-        if base.lower().endswith(".zip"):
-            try:
-                with zipfile.ZipFile(io.BytesIO(data)) as z:
-                    inner = [(i.filename, z.read(i)) for i in z.infolist()
-                             if not i.is_dir() and i.file_size <= MAX_IMPORT]
-            except zipfile.BadZipFile:
-                raise DriverError(f"{base} : fichier zip illisible") from None
-            files_in = inner
-        else:
-            files_in = [(base, data)]
-        for inner_name, inner_data in files_in:
-            short = Path(inner_name.replace("\\", "/")).name
-            if short == "info.json":
-                try:
-                    original = json.loads(inner_data.decode("utf-8"))
-                except (ValueError, UnicodeDecodeError):
-                    pass
-            m = program.BLOCK_FILE.match(short)
-            if not m:
-                if short not in ("programme.txt", "info.json", "resume.txt"):
-                    ignored.append(short)
-                continue
-            try:
-                parse_block(inner_data)
-            except S7Error:
-                raise DriverError(f"{short} n'est pas un bloc S7 valide") from None
-            blocks[(m.group(1).upper(), int(m.group(2)))] = inner_data
-    if not blocks:
-        raise DriverError("Aucun bloc S7 (OB1.bin, FC1.bin...) dans les fichiers choisis")
-    stamp = time.strftime("%Y-%m-%d %H:%M:%S")
-    target = folder / ("import_" + time.strftime("%Y%m%d_%H%M%S"))
-    n = 1
+def _new_folder(folder: Path, prefix: str) -> Path:
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    target, n = folder / f"{prefix}_{stamp}", 1
     while target.exists():
         n += 1
-        target = folder / (f"import_{time.strftime('%Y%m%d_%H%M%S')}_{n}")
+        target = folder / f"{prefix}_{stamp}_{n}"
+    return target
+
+
+def _expand(files: list) -> list:
+    """[(path, data)] with the .zip files opened (paths inside kept, '/' separators)."""
+    import io
+    import zipfile
+    out, total = [], 0
+    for name, data in files:
+        name = name.replace("\\", "/")
+        if not name.lower().endswith(".zip"):
+            out.append((name, data))
+            continue
+        try:
+            with zipfile.ZipFile(io.BytesIO(data)) as z:
+                for i in z.infolist():
+                    inner = i.filename.replace("\\", "/")
+                    keep = PROJECT_FILE.search(inner) or program.BLOCK_FILE.match(Path(inner).name) \
+                        or Path(inner).name in ("info.json", "programme.txt", "resume.txt")
+                    if i.is_dir() or not keep:
+                        continue
+                    total += i.file_size
+                    if total > MAX_PROJECT:
+                        raise DriverError(f"{Path(name).name} : trop gros")
+                    out.append((inner, z.read(i)))
+        except zipfile.BadZipFile:
+            raise DriverError(f"{Path(name).name} : fichier zip illisible") from None
+    return out
+
+
+def import_project(folder: Path, files: list, note: str = "") -> dict:
+    """STEP 7 V5 project files (folder chosen on the PC, or a zip / STEP 7 archive): every S7
+    program of the project becomes one copy, blocks rebuilt as the CPU holds them."""
+    import tempfile
+    from plc_online.protocols import s7_project
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        for name, data in files:
+            parts = [p for p in name.split("/") if p not in ("", ".", "..") and ":" not in p]
+            if parts and PROJECT_FILE.search("/".join(parts)):
+                target = root.joinpath(*parts)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(data)
+        try:
+            project = s7_project.find_project(root)
+            name = s7_project.project_name(project)
+            progs = s7_project.programs(project)
+            found = [(p["nom"], s7_project.project_blocks(p["dossier"])) for p in progs]
+        except (S7Error, OSError, ValueError, struct.error) as e:
+            raise DriverError(f"Projet STEP 7 illisible : {e}") from None
+    stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    made = []
+    for prog, blocks in found:
+        if not blocks:
+            continue
+        target = _new_folder(folder, "projet")
+        program.save_program(target, blocks, [f"date : {stamp}", f"projet STEP 7 {name}, programme {prog}"])
+        meta = {"date": stamp, "cpu": "", "modele": "", "comptes": program.count_text(blocks),
+                "note": (note.strip() or f"projet STEP 7 {name} / {prog}")[:200]}
+        (target / "info.json").write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
+        made.append({"id": target.name, "programme": prog, "comptes": meta["comptes"]})
+    if not made:
+        raise DriverError(f"Projet {name} : aucun bloc compile (OB, FB, FC, DB)")
+    return {"id": made[0]["id"], "comptes": made[0]["comptes"], "ignores": [], "projet": name, "programmes": made}
+
+
+def import_files(folder: Path, files: list, note: str = "") -> dict:
+    """Make a copy from files chosen on the PC: block files (OB1.bin, SDB0.bin...), a .zip of a
+    copy (from this page or tools/siemens.py sauvegarder-programme), or a STEP 7 V5 project
+    (its folder, or zipped). Every block is checked."""
+    if sum(len(d) for _, d in files) > MAX_PROJECT:
+        raise DriverError("Fichiers trop gros")
+    files = _expand(files)
+    if any(PROJECT_FILE.search(n) and Path(n).name.lower() == "subblk.dbf" for n, _ in files):
+        return import_project(folder, files, note)
+    blocks, ignored, original = {}, [], {}
+    if sum(len(d) for _, d in files) > MAX_IMPORT:
+        raise DriverError("Fichiers trop gros pour une copie de programme S7-300")
+    for inner_name, inner_data in files:
+        short = Path(inner_name).name
+        if short == "info.json":
+            try:
+                original = json.loads(inner_data.decode("utf-8"))
+            except (ValueError, UnicodeDecodeError):
+                pass
+        m = program.BLOCK_FILE.match(short)
+        if not m:
+            if short not in ("programme.txt", "info.json", "resume.txt"):
+                ignored.append(short)
+            continue
+        try:
+            parse_block(inner_data)
+        except S7Error:
+            raise DriverError(f"{short} n'est pas un bloc S7 valide") from None
+        blocks[(m.group(1).upper(), int(m.group(2)))] = inner_data
+    if not blocks:
+        raise DriverError("Aucun bloc S7 (OB1.bin, FC1.bin...) ni projet STEP 7 dans les fichiers choisis")
+    stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    target = _new_folder(folder, "import")
     program.save_program(target, blocks, [f"date : {stamp}", "importe depuis des fichiers du PC"])
     first_note = original.get("note") or "copie importee"
     if original.get("date"):

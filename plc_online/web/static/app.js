@@ -202,18 +202,27 @@ function toBase64(buffer) {
   return btoa(text);
 }
 
+// STEP 7 V5 project: only the block folders, the program names and the .s7p are needed
+const PROJECT_FILE = /(^|\/)(ombstx\/offline|hrs)\/|\.s7p$/i;
+
 async function importBackup(fileList) {
-  const files = [...fileList].filter((f) => /\.(bin|zip)$/i.test(f.name));
+  const files = [...fileList].filter((f) => /\.(bin|zip)$/i.test(f.name) || PROJECT_FILE.test(f.webkitRelativePath || ""));
   if (!files.length) {
-    setProgMsg("Aucun fichier .zip ou .bin (OB1.bin, FC1.bin...) dans la selection.", true);
+    setProgMsg("Aucun fichier .zip, .bin (OB1.bin, FC1.bin...) ou projet STEP 7 dans la selection.", true);
     return;
   }
   setProgMsg("Import de " + files.length + " fichier(s)...");
   try {
-    const fichiers = await Promise.all(files.map(async (f) => ({ nom: f.name, contenu: toBase64(await f.arrayBuffer()) })));
+    const fichiers = await Promise.all(files.map(async (f) => ({
+      nom: f.webkitRelativePath || f.name, contenu: toBase64(await f.arrayBuffer()) })));
     const r = await api("POST", "/api/programme/importer", { fichiers, note: $("sauver-note").value });
     $("sauver-note").value = "";
-    setProgMsg("Sauvegarde importee : " + r.comptes + "." + (r.ignores.length ? " Ignores : " + r.ignores.join(", ") : ""));
+    if (r.projet) {
+      setProgMsg("Projet STEP 7 " + r.projet + " importe : " +
+        r.programmes.map((p) => p.programme + " (" + p.comptes + ")").join(", ") + ".");
+    } else {
+      setProgMsg("Sauvegarde importee : " + r.comptes + "." + (r.ignores.length ? " Ignores : " + r.ignores.join(", ") : ""));
+    }
     loadBackups();
   } catch (e) {
     setProgMsg(e.message, true);

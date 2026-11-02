@@ -31,7 +31,11 @@ def upload_program(plc, progress=None) -> dict:
     return blocks
 
 
-def load_program(folder) -> dict:
+def load_program(folder, program_name=None) -> dict:
+    """Blocks of a copy folder, or of a STEP 7 V5 project folder (program_name if it has several)."""
+    from plc_online.protocols import s7_project
+    if not any(BLOCK_FILE.match(f.name) for f in Path(folder).iterdir()) and s7_project.is_project(folder):
+        return s7_project.load_project(folder, program_name)[0]
     blocks = {}
     for f in Path(folder).iterdir():
         m = BLOCK_FILE.match(f.name)

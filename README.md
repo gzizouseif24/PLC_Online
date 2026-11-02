@@ -40,6 +40,7 @@ plc_online/            library used by the tools (and later by the web interface
     s7_vars.py         S7 watch table: addresses, formats, grouped reads
     s7_program.py      S7 program copies: upload, save / load, compare, restore
     s7_download.py     S7 block download (restore), straight on S7ONLINE
+    s7_project.py      S7 blocks read from a STEP 7 V5 project (dBase files), rebuilt as in the CPU
     s7_events.py       S7 diagnostic event texts (Siemens manual, chapter 35)
     s7_modules.py      S7 module type codes -> names   (generated from STEP 7)
     s7_catalogue.py    S7 order numbers -> names        (generated from STEP 7)
@@ -73,7 +74,8 @@ checksums, CPU clock; buttons to put the CPU in RUN / STOP and set its clock to 
 diagnostic buffer, CPU parameters) and **Surveillance** (watch table: live values while the glasses button is on, format per row, modify with
 confirmation and read back, export / import of the table as a text file) and **Programme** (save
 the CPU program with a note, compare the CPU with a copy, restore a copy, restart the CPU, download
-a copy as .zip, import a copy already on the PC: .zip, block files or a folder; long
+a copy as .zip, import a copy already on the PC: .zip, block files or a folder, or a STEP 7 V5
+project (its folder or a STEP 7 archive .zip: each S7 program becomes a copy); long
 operations run in the background with a progress bar). Copies are kept in
 `~/PLC Online/sauvegardes/s7-300` (`--sauvegardes` for another folder). The server only listens on
 `localhost`.
@@ -96,6 +98,7 @@ py -3.14-32 tools/siemens.py sauvegarder-config      # copy the HW config (SDB b
 py -3.14-32 tools/siemens.py sauvegarder-programme   # copy every block (OB FB FC DB SDB) to a folder
 py -3.14-32 tools/siemens.py comparer DOSSIER        # which blocks changed in the CPU since that copy
 py -3.14-32 tools/siemens.py restaurer DOSSIER       # load the copy back (STOP, load, check, restart)
+python tools/siemens.py importer-projet PROJET       # blocks of a STEP 7 V5 project -> copy folder
 py -3.14-32 tools/siemens.py surveiller EB0:bin AB4 MW10 DB10.DBD4:real T1 Z2   # watch table, live
 py -3.14-32 tools/siemens.py surveiller --table exemples/table_s7_banc.txt --journal
 py -3.14-32 tools/siemens.py ecrire MW10 123 M0.1 1  # modify values (confirmation, read back, undo command)
@@ -104,6 +107,9 @@ py -3.14-32 tools/siemens.py ecrire M0.1 1 --maintenir   # keep writing until Ct
 
 Good to know:
 - `config --depuis DOSSIER` and `comparer A --depuis B` work on copies, without a CPU (normal Python).
+- `comparer` and `restaurer` also take a STEP 7 V5 project folder (the one with the `.s7p`) instead
+  of a copy: the customer's project goes into the CPU without STEP 7. `--programme NOM` when the
+  project has several S7 programs.
 - `restaurer` loads OB, FB and FC. DB only with `--avec-db` (they hold the machine's current values),
   the HW config never. Blocks in the CPU but not in the copy are kept unless `--supprimer-en-trop`.
 - Addresses: `E0.0`/`I0.0`, `EB0` `EW0` `ED0`, `A4.1`/`Q4.1`, `M10.3` `MB10` `MW10` `MD10`,
