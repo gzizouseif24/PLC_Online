@@ -172,10 +172,15 @@ python tools/tsx.py ecrire MW 10 1234     # one word, confirmation + read-back
 python tools/tsx.py run                   # or stop, with confirmation
 python tools/tsx.py sauvegarder           # copy the PLC program to a file (+ .txt summary)
 python tools/tsx.py comparer FILE         # has the program changed since that backup?
-python tools/tsx.py restaurer FILE        # put a backed-up program back
+python tools/tsx.py restaurer FILE        # put a program back: .tsxbak, or a PL7 .stx file
 python tools/tsx.py sauvegarder-donnees   # all %MW and %KW values to a CSV file
-python tools/tsx.py restaurer-donnees F   # write back the %MW from that CSV (changed words only)
+python tools/tsx.py restaurer-donnees F   # write back the %MW from that CSV or PL7 .dat (changed words only)
 ```
+
+A PL7 `.stx` is a zip: `EXE/APP/<appli>.APX` = 192-byte header + `EXE/PROG/PL7.BIN` (program) +
+`EXE/CONF/BAC.BIN` (configuration), the same image the PLC gives on upload; `restaurer` loads
+it and checks the target CPU (`STATION.INI`, RefProcess). A PL7 `.dat` (data transfer) is
+PLCopen text, `AT %MW12 : WORD := (3248);`. Loading a `.stx` not yet confirmed on the bench.
 
 Protocol notes and what is confirmed: [docs/unitelway.md](docs/unitelway.md).
 All commands tested on a TSX 3721 (9600 baud, 8 bits, odd parity; PC = slave 1).

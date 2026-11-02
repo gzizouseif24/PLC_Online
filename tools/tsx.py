@@ -8,9 +8,9 @@
     python tools/tsx.py run | stop                    passer l'automate en RUN / STOP, avec confirmation
     python tools/tsx.py sauvegarder [FICHIER]         copier le programme de l'automate dans un fichier
     python tools/tsx.py comparer FICHIER              le programme a-t-il change depuis cette sauvegarde ?
-    python tools/tsx.py restaurer FICHIER             remettre un programme sauvegarde dans l'automate
+    python tools/tsx.py restaurer FICHIER             remettre un programme dans l'automate (.tsxbak ou .stx PL7)
     python tools/tsx.py sauvegarder-donnees [FICHIER] copier tous les %MW et %KW dans un fichier CSV
-    python tools/tsx.py restaurer-donnees FICHIER     remettre les %MW du fichier CSV dans l'automate
+    python tools/tsx.py restaurer-donnees FICHIER     remettre les %MW du fichier (CSV ou .dat PL7) dans l'automate
 
 Options : --port COM6, --trace (octets), --adresses 1-3 (plus rapide, a l'essai : 1 par defaut).
 Fermer PL7 avant. Cable TSX PCX 1031 : meme position qu'avec PL7.
@@ -21,6 +21,7 @@ Teste sur TSX 3721 : toutes les commandes ci-dessus.
 pip install pyserial
 """
 import argparse
+import re
 import time
 
 DLE, STX, EOT, ENQ, ACK, NAK = 0x10, 0x02, 0x04, 0x05, 0x06, 0x15
@@ -527,10 +528,42 @@ def cmd_sauvegarder(tsx, filename=None):
     print(f"Sauvegarde : {filename}  (+ {filename}.txt)")
 
 
+def read_program_file(filename):
+    """(image, automate cible) d'un .tsxbak (copie de l'automate) ou d'un .stx PL7.
+    Un .stx est un zip : EXE/APP/<appli>.APX = en-tete 192 octets + EXE/PROG/PL7.BIN (programme)
+    + EXE/CONF/BAC.BIN (configuration), la meme image que celle lue dans l'automate."""
+    import zipfile
+    if not zipfile.is_zipfile(filename):
+        with open(filename, "rb") as f:
+            blob = f.read()
+        if blob.startswith(b"[HEADER]"):
+            raise UniteError(f"{filename} est un fichier de donnees PL7 : utiliser restaurer-donnees")
+        return blob, None
+    with zipfile.ZipFile(filename) as z:
+        apx = [n for n in z.namelist() if n.upper().startswith("EXE/APP/") and n.upper().endswith(".APX")]
+        if len(apx) != 1:
+            raise UniteError(f"{filename} : pas d'application compilee (EXE/APP/*.APX) dans le .stx")
+        blob = z.read(apx[0])
+        target = None
+        ini = next((n for n in z.namelist() if n.upper() == "STATION.INI"), None)
+        if ini:
+            for line in z.read(ini).decode("latin-1").splitlines():
+                if line.startswith("RefProcess="):
+                    target = line.split("=", 1)[1].split()[0:2]
+                    target = " ".join(target) if target else None
+    return blob, target
+
+
 def cmd_restaurer(tsx, filename):
-    """Remet un .tsxbak dans l'automate, comme le transfert PC -> automate de PL7."""
-    with open(filename, "rb") as f:
-        blob = f.read()
+    """Remet un .tsxbak (ou un .stx PL7) dans l'automate, comme le transfert PC -> automate de PL7."""
+    blob, target = read_program_file(filename)
+    if target:
+        plc = tsx.identification()["nom"]
+        print(f"Application faite pour : {target}   automate connecte : {plc}")
+        if target.replace(" ", "") != plc.replace(" ", "") and not confirm(
+                "ATTENTION : automate different de celui de l'application. Continuer quand meme ?"):
+            print("Annule, rien n'a ete ecrit.")
+            return
     if len(blob) < 16 or not blob[:16].rstrip(b"\0 ").strip():
         raise UniteError(f"{filename} ne ressemble pas a une sauvegarde de programme")
     name = blob[:14].split(b"\0")[0].decode("ascii", "replace").strip()
@@ -561,8 +594,7 @@ def cmd_restaurer(tsx, filename):
 
 
 def cmd_comparer(tsx, filename):
-    with open(filename, "rb") as f:
-        saved = f.read()
+    saved, _ = read_program_file(filename)
     _, _, blob = do_upload(tsx)
     if blob == saved:
         print(f"IDENTIQUE : le programme de l'automate est le meme que {filename}")
@@ -617,8 +649,24 @@ def cmd_sauvegarder_donnees(tsx, filename=None):
     print(f"Donnees : {filename}")
 
 
+def read_data_dat(filename):
+    """Fichier .dat de PL7 (transfert de donnees, format PLCopen : 'AT %MW12 : WORD := (3248);')
+    -> ({zone: {adresse: valeur}}, None)."""
+    zones = {}
+    with open(filename, encoding="latin-1") as f:
+        for line in f:
+            m = re.match(r"\s*AT\s+%(MW|KW)(\d+)\s*:\s*\w+\s*:=\s*\(?\s*(-?\d+)", line, re.IGNORECASE)
+            if m:
+                zones.setdefault(m.group(1).upper(), {})[int(m.group(2))] = int(m.group(3)) & 0xFFFF
+    if not zones:
+        raise UniteError(f"{filename} : aucune valeur %MW dans le fichier")
+    return zones, None
+
+
 def read_data_csv(filename):
-    """CSV de sauvegarder-donnees -> ({zone: {adresse: valeur}}, nom de l'automate)."""
+    """CSV de sauvegarder-donnees (ou .dat de PL7) -> ({zone: {adresse: valeur}}, nom de l'automate)."""
+    if filename.lower().endswith(".dat"):
+        return read_data_dat(filename)
     zones, plc = {}, None
     with open(filename, encoding="utf-8") as f:
         for line in f:
@@ -707,11 +755,11 @@ def main():
                     f"   (zones : {' '.join(zones)})")
         zone, n1, n2 = a.args[0].upper(), int(a.args[1]), int(a.args[2])
     if a.commande == "comparer" and len(a.args) != 1:
-        p.error("usage : comparer FICHIER.tsxbak")
+        p.error("usage : comparer FICHIER.tsxbak (ou .stx)")
     if a.commande == "restaurer" and len(a.args) != 1:
-        p.error("usage : restaurer FICHIER.tsxbak")
+        p.error("usage : restaurer FICHIER.tsxbak (ou .stx de PL7)")
     if a.commande == "restaurer-donnees" and len(a.args) != 1:
-        p.error("usage : restaurer-donnees FICHIER.csv")
+        p.error("usage : restaurer-donnees FICHIER.csv (ou .dat de PL7)")
 
     import serial
     ser = serial.Serial(a.port, a.baud, bytesize=8, parity=a.parite, stopbits=1, timeout=0.02)

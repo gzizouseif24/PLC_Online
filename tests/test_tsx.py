@@ -312,6 +312,63 @@ class TsxTests(unittest.TestCase):
         self.assertEqual(self.plc.app, before)
         self.assertEqual(self.plc.mode, "RUN")      # no STOP sent when cancelled
 
+    def make_stx(self, d, apx, target="TSX 3721   V2.0"):
+        """.stx like PL7 Pro writes it: a zip with EXE/APP/STATION.APX and STATION.INI."""
+        import os, zipfile
+        f = os.path.join(d, "appli.stx")
+        with zipfile.ZipFile(f, "w", zipfile.ZIP_DEFLATED) as z:
+            z.writestr("EXE/APP/STATION.APP", bytes(192))
+            z.writestr("EXE/APP/STATION.APX", apx)
+            z.writestr("EXE/PROG/PL7.BIN", apx[192:])
+            z.writestr("STATION.INI", f"[PL7TOOL3]\r\nRefProcess={target}\r\nNomAppli=STATION /  0.0\r\n")
+        return f
+
+    def test_restaurer_stx_loads_the_apx(self):
+        import os, tempfile
+        apx = b"STATION\0" + bytes((i * 7) % 256 for i in range(1000))
+        with tempfile.TemporaryDirectory() as d:
+            f = self.make_stx(d, apx)
+            cwd = os.getcwd()
+            os.chdir(d)
+            try:
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out), unittest.mock.patch("builtins.input", return_value="OUI"):
+                    tsx.cmd_restaurer(self.tsx, f)
+            finally:
+                os.chdir(cwd)
+        self.assertEqual(self.plc.app, apx)
+        self.assertIn("Application faite pour : TSX 3721", out.getvalue())
+        self.assertIn("Restauration OK", out.getvalue())
+
+    def test_restaurer_stx_for_another_cpu_asks_first(self):
+        import os, tempfile
+        before = self.plc.app
+        with tempfile.TemporaryDirectory() as d:
+            f = self.make_stx(d, b"STATION\0" + bytes(300), "TSX 3722   V2.0")
+            cwd = os.getcwd()
+            os.chdir(d)
+            try:
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out), unittest.mock.patch("builtins.input", return_value="non"):
+                    tsx.cmd_restaurer(self.tsx, f)
+            finally:
+                os.chdir(cwd)
+        self.assertEqual(self.plc.app, before)
+        self.assertIn("Annule", out.getvalue())
+
+    def test_dat_file_of_pl7(self):
+        import os, tempfile
+        with tempfile.TemporaryDirectory() as d:
+            f = os.path.join(d, "F225_1.dat")
+            Path(f).write_text("[HEADER]\nSENDER = 'Schneider Electric Industries SAS PL7 PRO V4.5'\n"
+                               "[DATA_UNIT]\nBODY = \nVAR_GLOBAL\nAT %MW0 : WORD := (0);\n"
+                               "AT %MW12 : WORD := (3248);\nAT %MW13 : WORD := (-1);\nEND_VAR\n[EOF]\n",
+                               encoding="latin-1")
+            zones, _ = tsx.read_data_csv(f)
+            self.assertEqual(zones, {"MW": {0: 0, 12: 3248, 13: 0xFFFF}})
+            with self.assertRaisesRegex(tsx.UniteError, "restaurer-donnees"):
+                tsx.read_program_file(f)                # not a program
+
     def test_refused_request(self):
         with self.assertRaisesRegex(tsx.UniteError, "FD"):
             self.tsx._ask([tsx.READ_OBJECTS, 0, 0x6B, 7, 0, 0, 1, 0], 0x66)
