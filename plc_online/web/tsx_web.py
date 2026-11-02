@@ -650,10 +650,18 @@ class TsxOps:
         return {"dossier": str(self.programs), "sauvegardes": list_copies(self.programs, PROGRAM_FILE)}
 
     def _upload(self, plc, progress, text="lecture"):
-        plc.reserve()
+        step = "reservation de l'automate (1D)"
         try:
+            plc.reserve()
+        except UniteError as e:
+            raise UniteError(f"{e}, a l'etape {step} : PL7 ou un autre PC connecte ?") from None
+        try:
+            step = "infos application (92)"
             name = plc.app_info()["nom"]
+            step = "lecture du programme (3D/3E)"
             blob = plc.upload(lambda seg, n: progress(f"{text} {name} : {n} octets", 0, 0))
+        except UniteError as e:
+            raise UniteError(f"{e}, a l'etape {step}") from None
         finally:
             try:
                 plc.release()
