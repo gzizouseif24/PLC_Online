@@ -273,3 +273,7 @@ a.btn { text-decoration: none; display: inline-block; }
 
 /* hidden always wins over display rules (labels styled as buttons, sections per brand) */
 [hidden] { display: none !important; }
+
+/* delete a copy: quiet until hovered */
+.btn-suppr { color: var(--fault); }
+.btn-suppr:hover { border-color: var(--fault); }

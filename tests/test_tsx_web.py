@@ -114,6 +114,18 @@ class TsxWebTests(unittest.TestCase):
         from plc_online.protocols.unitelway import clock_words
         self.assertEqual(clock_words(datetime.datetime(2026, 11, 2, 12, 45, 30)), [0x3000, 0x1245, 0x1102, 0x2026])
 
+    def test_delete_copies(self):
+        self.s.save_program("a supprimer")
+        bid = self.wait()["id"]
+        self.s.data_save("")
+        did = self.wait()["id"]
+        self.s.delete_backup(bid)
+        self.s.data_delete(did)
+        self.assertEqual(self.s.list_backups()["sauvegardes"], [])
+        self.assertEqual(self.s.data_list()["sauvegardes"], [])
+        with self.assertRaises(DriverError):
+            self.s.delete_backup("../../etc")
+
     def test_var_formats(self):
         self.assertEqual(TsxVar("%MW1:bin").decode(5), "2#0000_0000_0000_0101")
         self.assertEqual(TsxVar("%MW1").encode("-1"), 0xFFFF)

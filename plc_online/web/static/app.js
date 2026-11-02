@@ -311,6 +311,7 @@ async function loadBackups() {
       dl.href = "/api/programme/telecharger?id=" + encodeURIComponent(b.id);
       dl.title = "Copie au format .zip (cle USB, e-mail...)";
       actions.append(dl);
+      actions.append(deleteButton(b, "/api/programme/supprimer", setProgMsg, loadBackups));
       const cpu = el("div");
       cpu.append(el("span", "", b.modele || "—"), el("span", "sub mono", b.cpu));
       tr.append(cell(b.date, "mono", "Date"), cell(b.note || "—", "", "Note"), cell(cpu, "", "CPU"),
@@ -519,7 +520,7 @@ async function loadData() {
       btn.addEventListener("click", () => planData(b));
       const dl = el("a", "btn small", "Telecharger");
       dl.href = "/api/donnees/telecharger?id=" + encodeURIComponent(b.id);
-      actions.append(btn, dl);
+      actions.append(btn, dl, deleteButton(b, "/api/donnees/supprimer", setDataMsg, loadData));
       tr.append(cell(b.date, "mono", "Date"), cell(b.note || "—", "", "Note"), cell(b.modele || "—", "", "Automate"),
                 cell(b.resume || "", "mono", "Contenu"), cell(actions, "", ""));
       return tr;
@@ -527,6 +528,23 @@ async function loadData() {
   } catch (e) {
     setDataMsg(e.message, true);
   }
+}
+
+function deleteButton(b, path, msg, reload) {
+  const btn = el("button", "btn small btn-suppr", "Supprimer");
+  btn.type = "button";
+  btn.title = "Supprimer cette copie du PC (l'automate n'est pas touche)";
+  btn.addEventListener("click", async () => {
+    if (!confirm(`Supprimer du PC la copie du ${b.date}${b.note ? " (" + b.note + ")" : ""} ?\n\nCette copie sera perdue (l'automate n'est pas touche).`)) return;
+    try {
+      await api("POST", path, { id: b.id });
+      msg("Copie du " + b.date + " supprimee.");
+      reload();
+    } catch (e) {
+      msg(e.message, true);
+    }
+  });
+  return btn;
 }
 
 function saveData(ev) {

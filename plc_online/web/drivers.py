@@ -443,6 +443,16 @@ MAX_PROJECT = 60 * 1024 * 1024                    # STEP 7 project files kept (o
 PROJECT_FILE = re.compile(r"(^|/)(ombstx/offline|hrs)/|\.s7p$", re.IGNORECASE)
 
 
+def delete_copy(folder: Path, backup_id: str) -> dict:
+    """Delete one copy (its folder) from the PC. The PLC is not touched."""
+    import shutil
+    path = backup_path(folder, backup_id)
+    if path.parent.resolve() != folder.resolve():
+        raise DriverError("Sauvegarde inconnue")
+    shutil.rmtree(path)
+    return {"supprime": backup_id}
+
+
 def export_zip(folder: Path, backup_id: str, prefix: str = "programme_s7") -> tuple:
     """(file name, zip bytes) of one copy, to keep it elsewhere or send it."""
     import io
@@ -784,6 +794,16 @@ class Session:
             plc.set_clock()
             return {"horloge": plc.read_clock()}
         return self._call(run)
+
+    def delete_backup(self, backup_id) -> dict:
+        if self.busy():
+            raise DriverError(f"Operation en cours : {self.busy()}")
+        return delete_copy(self.tsx.programs if self._ops() else self.backups, backup_id)
+
+    def data_delete(self, backup_id) -> dict:
+        if self.busy():
+            raise DriverError(f"Operation en cours : {self.busy()}")
+        return delete_copy(self.tsx.data, backup_id)
 
     def export_backup(self, backup_id) -> tuple:
         if self._ops():

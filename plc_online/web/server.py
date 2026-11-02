@@ -17,6 +17,7 @@ JSON API:
     POST /api/programme/plan {"id", "avec_db"}  what a restore would load / leave
     POST /api/programme/restaurer {"id", "avec_db", "supprimer_en_trop"}   (background, CPU to STOP)
     GET  /api/programme/telecharger?id=...     one copy as a .zip
+    POST /api/programme/supprimer {"id"}       delete one copy from the PC (/api/donnees/supprimer too)
     POST /api/programme/importer {"fichiers": [{"nom", "contenu" (base64)}], "note"}   .bin files, a .zip,
                                                or a STEP 7 V5 project (nom = path inside the folder)
     POST /api/cpu/demarrer                     CPU to RUN (warm restart)
@@ -152,6 +153,10 @@ def make_handler(session: Session):
                 return self.api(lambda: session.stop_cpu())
             if path == "/api/cpu/horloge":
                 return self.api(lambda: session.set_clock())
+            if path == "/api/programme/supprimer":
+                return self.api(lambda: session.delete_backup(str(self.read_json().get("id") or "")))
+            if path == "/api/donnees/supprimer":
+                return self.api(lambda: session.data_delete(str(self.read_json().get("id") or "")))
             if path == "/api/donnees/sauvegarder":
                 return self.api(lambda: session.data_save(str(self.read_json().get("note") or "")))
             if path == "/api/donnees/plan":
