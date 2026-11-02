@@ -5,6 +5,7 @@ and restore, from a PC, without the vendor software.
 
 One protocol module per brand, one command-line tool per brand (French prompts), and a local
 web interface on top of the same library (connection, PLC status, diagnostic, watch table, program).
+The web interface covers the S7-300 for now; the other brands are next ([plan](docs/interface.md)).
 
 | Brand | Link | What works (tested on the bench) |
 |---|---|---|
@@ -18,6 +19,7 @@ Docs:
 - [architecture](docs/architecture.md)
 - [technical report and field notes](docs/rapport-technique-2026-10-23.md)
 - [S7-300 plan and bench results](docs/s7-300.md)
+- [web interface: plan for Omron, TSX, Panasonic](docs/interface.md)
 - [Omron notes](docs/omron.md)
 - [Uni-Telway notes](docs/unitelway.md)
 - [understanding the PLC logic](docs/logique.md)
@@ -32,7 +34,7 @@ tools/                 WHAT YOU RUN: one command-line tool per brand
   tsx.py               Schneider TSX (single file, protocol included)
   panasonic.py         Panasonic FP0R
   modicon.py           Schneider Modicon
-plc_online/            library used by the tools (and later by the web interface)
+plc_online/            library used by the tools and the web interface
   checksum.py          XOR checksum (Panasonic BCC, Omron FCS)
   web/                 local web interface: server (standard library only), page in static/
   protocols/           one module per protocol, never run directly
@@ -70,7 +72,7 @@ py -3.14-32 -m plc_online.web          # opens http://localhost:8000 in the brow
 32-bit Python for the S7-300 (same rules as the Siemens tool below); for a look without a
 PLC, any Python and choose **Demo**. Screen so far: connection (brand, MPI address, rack,
 slot), **Etat** refreshed every 2 s (model, RUN / STOP, LEDs, alerts, key, protection,
-checksums, CPU clock; buttons to put the CPU in RUN / STOP and set its clock to the PC time) and **Diagnostic** (rack: module configured vs plugged in with names and addresses,
+checksums, CPU clock; buttons to put the CPU in RUN / STOP and set its clock to the PC time) and **Diagnostic** (rack: module configured vs plugged in with names and addresses, CPU named from its identification,
 diagnostic buffer, CPU parameters) and **Surveillance** (watch table: live values while the glasses button is on, format per row, modify with
 confirmation and read back, export / import of the table as a text file) and **Programme** (save
 the CPU program with a note, compare the CPU with a copy, restore a copy, restart the CPU, download
