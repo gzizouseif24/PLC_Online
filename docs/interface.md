@@ -30,6 +30,17 @@ work in this step: only what `tools/omron.py`, `tools/tsx.py` and `tools/panason
 New tab **Donnees**: data backup / restore (machine recipes, counters, settings), separate from
 the program. Same list, download and import as the Programme tab, CSV files.
 
+## Done
+
+- **TSX (02/11):** connection (COM port list, PC address), Etat (system-bit faults, clock, cycle,
+  Flash backup, RUN/STOP buttons; RUN/STOP read from request 4F, decoding to confirm), Diagnostic
+  (system bits and words, application name), Surveillance (%MW %MD %KW %KD %SW %M %S, write
+  %MW / %MD), Programme (save / compare / restore with a copy taken first, import .stx /
+  .tsxbak), Donnees (%MW / %KW to CSV, restore changed %MW, import PL7 .dat). Demo TSX.
+- **TSX still missing:** rack configured vs plugged in, %I / %Q, setting the clock: need a PL7
+  capture on the bench (module debug screens, animation table with %I / %Q, clock) and two
+  .stx with different configurations to decode the configuration part (EXE/CONF/BAC.BIN).
+
 ## Order
 
 1. **Shared serial connection** (COM port list, settings per brand, one port open at a time,

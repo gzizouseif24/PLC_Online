@@ -37,21 +37,72 @@ function setMsg(text, isError) {
 }
 
 function renderSettings() {
-  const brand = brands[$("marque").value];
+  const key = $("marque").value;
+  const brand = brands[key];
   const box = $("reglages");
   box.replaceChildren();
   for (const r of brand.reglages) {
     const label = el("label", "field");
     label.append(el("span", "", r.nom));
     const input = el("input");
-    input.type = "number";
-    input.min = "0";
+    if (r.type === "port" || r.type === "texte") {
+      input.type = "text";
+      input.dataset.texte = "1";
+      if (r.type === "port") { input.setAttribute("list", "ports"); loadPorts(); }
+    } else {
+      input.type = "number";
+      input.min = "0";
+    }
     input.name = r.cle;
-    input.value = localStorageGet("reglage-" + r.cle) ?? r.defaut;
+    input.value = localStorageGet("reglage-" + key + "-" + r.cle) ?? r.defaut;
     label.append(input);
     box.append(label);
   }
-  $("hint-s7").hidden = $("marque").value !== "s7-300";
+  $("hint-s7").hidden = key !== "s7-300";
+  $("hint-tsx").hidden = key !== "tsx";
+}
+
+async function loadPorts() {
+  try {
+    const r = await api("GET", "/api/ports");
+    $("ports").replaceChildren(...r.ports.map((p) => {
+      const o = el("option");
+      o.value = p.port;
+      o.label = p.port + (p.description ? " — " + p.description : "");
+      return o;
+    }));
+  } catch { /* no list: the port is typed */ }
+}
+
+// ---- brand of the connected PLC: what the page shows ----
+
+let family = "s7";
+let features = [];
+
+function applyBrand(key) {
+  const b = brands[key] || {};
+  family = b.famille || "s7";
+  features = b.fonctions || [];
+  for (const e of document.querySelectorAll("[data-fonction]")) e.hidden = !features.includes(e.dataset.fonction);
+  const tsx = family === "tsx";
+  $("prog-hint").textContent = tsx
+    ? "Copie de l'application de l'automate (programme et configuration), comme le transfert automate -> PC de PL7."
+    : "Copie de tous les blocs (OB, FB, FC, DB) et de la configuration materielle (SDB).";
+  $("import-hint").textContent = tsx
+    ? "Programme deja sur le PC : fichier PL7 .stx, copie .tsxbak (outil terminal) ou .zip de cette page :"
+    : "Sauvegarde deja sur le PC (autre dossier, cle USB, terminal) ou projet STEP 7 V5 (dossier du .s7p, ou archive .zip) :";
+  $("import-fichiers-texte").textContent = tsx ? "Importer un .stx, .tsxbak ou .zip" : "Importer un .zip ou des blocs .bin";
+  $("import-fichiers").accept = tsx ? ".stx,.tsxbak,.zip" : ".zip,.bin";
+  $("btn-sauver").textContent = tsx ? "Sauvegarder le programme de l'automate" : "Sauvegarder le programme de la CPU";
+  $("col-contenu").textContent = tsx ? "Contenu" : "Blocs";
+  $("watch-hint").textContent = tsx
+    ? "%MW, %MD, %KW, %KD, %SW, %M, %S (le % est facultatif). Ecriture : %MW et %MD. Le format se change sur chaque ligne."
+    : "E/I, A/Q, M, DB10.DBW2, T5, Z2. Le format se change sur chaque ligne.";
+  $("ajout-adresse").placeholder = tsx ? "%MW10, %MD4, %M5, %S10" : "MW10, E0.0, DB10.DBD4";
+  $("titre-params").textContent = tsx ? "Automate" : "Parametres CPU";
+  watch = loadWatch();
+  for (const k of Object.keys(lastValues)) delete lastValues[k];
+  diagLoaded = false;
 }
 
 function localStorageGet(key) {
@@ -68,7 +119,8 @@ function renderStatus(s) {
   $("reference").textContent = s.reference || "";
 
   const mode = $("mode");
-  mode.textContent = s.mode;
+  mode.textContent = s.mode + (s.mode_a_confirmer && s.mode !== "?" ? " ?" : "");
+  mode.title = s.mode_a_confirmer ? "Etat lu par la requete 4F, decodage a confirmer sur le banc" : "";
   mode.className = "mode" + (s.mode === "RUN" ? " run" : s.mode === "STOP" ? " stop" : "");
 
   const alerts = $("alertes");
@@ -121,7 +173,8 @@ async function cpuAction(path, question, done) {
 }
 
 function showTab(id) {
-  if (!$(id)) id = "etat-plein";
+  const tab = document.querySelector(`.tab[data-tab="${id}"]`);
+  if (!$(id) || !tab || tab.hidden) id = "etat-plein";
   currentTab = id;
   localStorageSet("onglet", id);
   for (const t of document.querySelectorAll(".tab")) {
@@ -133,6 +186,7 @@ function showTab(id) {
   if (id === "vue-diag" && !diagLoaded) loadDiagnostic();
   if (id === "vue-watch") startWatch(); else stopWatch();
   if (id === "vue-prog") loadBackups();
+  if (id === "vue-data") loadData();
 }
 
 // ---- program: save, compare, restore ----
@@ -145,8 +199,8 @@ function setProgMsg(text, isError) {
   m.className = "msg" + (isError ? " err" : "");
 }
 
-function showResult(cls, build) {
-  const box = $("prog-resultat");
+function showResult(cls, build, boxId = "prog-resultat") {
+  const box = $(boxId);
   box.className = "resultat" + (cls ? " " + cls : "");
   box.replaceChildren();
   build(box);
@@ -160,38 +214,42 @@ function chips(items, cls) {
   return d;
 }
 
-function setProgButtons(disabled) {
-  for (const b of document.querySelectorAll("#vue-prog button")) b.disabled = disabled;
+function setProgButtons(disabled, view = "vue-prog") {
+  for (const b of document.querySelectorAll("#" + view + " button")) b.disabled = disabled;
 }
 
-function runJob(path, body, onDone) {
-  setProgMsg("");
-  setProgButtons(true);
+// where a background operation shows its progress: Programme tab or Donnees tab
+const PROG = { prefix: "", view: "vue-prog", msg: (t, e) => setProgMsg(t, e), reload: () => loadBackups() };
+const DATA = { prefix: "data-", view: "vue-data", msg: (t, e) => setDataMsg(t, e), reload: () => loadData() };
+
+function runJob(path, body, onDone, ctx = PROG) {
+  ctx.msg("");
+  setProgButtons(true, ctx.view);
   api("POST", path, body).then(() => {
-    $("tache").hidden = false;
-    pollJob(onDone);
+    $(ctx.prefix + "tache").hidden = false;
+    pollJob(onDone, ctx);
   }).catch((e) => {
-    setProgButtons(false);
-    setProgMsg(e.message, true);
+    setProgButtons(false, ctx.view);
+    ctx.msg(e.message, true);
   });
 }
 
-function pollJob(onDone) {
+function pollJob(onDone, ctx = PROG) {
   clearTimeout(jobTimer);
   jobTimer = setTimeout(async () => {
     let j;
-    try { j = await api("GET", "/api/tache"); } catch (e) { setProgMsg(e.message, true); setProgButtons(false); return; }
-    $("tache-nom").textContent = j.nom.charAt(0).toUpperCase() + j.nom.slice(1);
-    $("tache-texte").textContent = j.texte || "...";
-    const bar = $("tache-barre").parentElement;
+    try { j = await api("GET", "/api/tache"); } catch (e) { ctx.msg(e.message, true); setProgButtons(false, ctx.view); return; }
+    $(ctx.prefix + "tache-nom").textContent = j.nom.charAt(0).toUpperCase() + j.nom.slice(1);
+    $(ctx.prefix + "tache-texte").textContent = j.texte || "...";
+    const bar = $(ctx.prefix + "tache-barre").parentElement;
     bar.classList.toggle("indet", !j.total);
-    $("tache-barre").style.width = j.total ? Math.round(100 * j.fait / j.total) + "%" : "";
-    if (!j.fini) return pollJob(onDone);
-    $("tache").hidden = true;
-    setProgButtons(false);
-    if (j.erreur) setProgMsg(j.erreur, true);
+    $(ctx.prefix + "tache-barre").style.width = j.total ? Math.round(100 * j.fait / j.total) + "%" : "";
+    if (!j.fini) return pollJob(onDone, ctx);
+    $(ctx.prefix + "tache").hidden = true;
+    setProgButtons(false, ctx.view);
+    if (j.erreur) ctx.msg(j.erreur, true);
     else onDone(j.resultat);
-    loadBackups();
+    ctx.reload();
   }, 400);
 }
 
@@ -206,9 +264,10 @@ function toBase64(buffer) {
 const PROJECT_FILE = /(^|\/)(ombstx\/offline|hrs)\/|\.s7p$/i;
 
 async function importBackup(fileList) {
-  const files = [...fileList].filter((f) => /\.(bin|zip)$/i.test(f.name) || PROJECT_FILE.test(f.webkitRelativePath || ""));
+  const files = [...fileList].filter((f) => /\.(bin|zip|stx|tsxbak)$/i.test(f.name) || PROJECT_FILE.test(f.webkitRelativePath || ""));
   if (!files.length) {
-    setProgMsg("Aucun fichier .zip, .bin (OB1.bin, FC1.bin...) ou projet STEP 7 dans la selection.", true);
+    setProgMsg(family === "tsx" ? "Aucun fichier .stx, .tsxbak ou .zip dans la selection."
+                                : "Aucun fichier .zip, .bin (OB1.bin, FC1.bin...) ou projet STEP 7 dans la selection.", true);
     return;
   }
   setProgMsg("Import de " + files.length + " fichier(s)...");
@@ -236,8 +295,9 @@ async function loadBackups() {
     rows($("table-sauvegardes").tBodies[0], r.sauvegardes, (b) => {
       const tr = el("tr");
       const actions = el("div", "row-actions");
-      for (const [text, fn] of [["Comparer", () => compareBackup(b)], ["Restaurer", () => planRestore(b, false)],
-                                ["Blocs", () => showBlocks(b)]]) {
+      for (const [text, fn] of [["Comparer", () => compareBackup(b)],
+                                ["Restaurer", () => (family === "tsx" ? planRestoreTsx(b) : planRestore(b, false))],
+                                [family === "tsx" ? "Details" : "Blocs", () => showBlocks(b)]]) {
         const btn = el("button", "btn small", text);
         btn.type = "button";
         btn.addEventListener("click", fn);
@@ -250,9 +310,9 @@ async function loadBackups() {
       const cpu = el("div");
       cpu.append(el("span", "", b.modele || "—"), el("span", "sub mono", b.cpu));
       tr.append(cell(b.date, "mono", "Date"), cell(b.note || "—", "", "Note"), cell(cpu, "", "CPU"),
-                cell(String(b.blocs), "mono", "Blocs"), cell(actions, "", ""));
+                cell(String(b.resume || b.blocs), "mono", family === "tsx" ? "Contenu" : "Blocs"), cell(actions, "", ""));
       return tr;
-    }, "Aucune sauvegarde : cliquez sur Sauvegarder le programme de la CPU.", 5);
+    }, "Aucune sauvegarde : cliquez sur Sauvegarder le programme.", 5);
   } catch (e) {
     setProgMsg(e.message, true);
   }
@@ -272,6 +332,7 @@ function compareBackup(b) {
   runJob("/api/programme/comparer", { id: b.id }, (r) => {
     showResult(r.identique ? "ok" : "bad", (box) => {
       box.append(el("h4", "", r.identique ? "Programme identique a la sauvegarde du " + b.date
+                                           : family === "tsx" ? "Programme different de la sauvegarde du " + b.date
                                            : r.differences.length + " bloc(s) different(s) de la sauvegarde du " + b.date));
       if (!r.identique) {
         const ul = el("ul");
@@ -294,6 +355,13 @@ async function showBlocks(b) {
   try {
     const r = await api("GET", "/api/programme/blocs?id=" + encodeURIComponent(b.id));
     showResult("", (box) => {
+      if (family === "tsx") {
+        box.append(el("h4", "", "Sauvegarde du " + b.date + (b.note ? " — " + b.note : "")));
+        const dl = el("dl", "details");
+        dl.append(...r.blocs.flatMap((x) => [el("dt", "", x.bloc), el("dd", "", x.taille)]));
+        box.append(dl);
+        return;
+      }
       box.append(el("h4", "", "Blocs de la sauvegarde du " + b.date + (b.note ? " — " + b.note : "")));
       const wrap = el("div", "table-wrap");
       const t = el("table", "table");
@@ -362,13 +430,46 @@ async function planRestore(b, withDb, deleteExtra = false) {
   });
 }
 
+async function planRestoreTsx(b) {
+  let plan;
+  try {
+    plan = await api("POST", "/api/programme/plan", { id: b.id });
+  } catch (e) {
+    setProgMsg(e.message, true);
+    return;
+  }
+  showResult("", (box) => {
+    box.append(el("h4", "", "Restaurer la sauvegarde du " + b.date + (b.note ? " — " + b.note : "")));
+    box.append(el("p", "", "A charger dans l'automate : "), chips(plan.charger));
+    if (plan.cible) box.append(el("p", "", "Application faite pour : " + plan.cible + "   —   automate connecte : " + plan.automate));
+    if (plan.autre_automate) {
+      box.append(el("p", "avert", "ATTENTION : l'application a ete faite pour un " + plan.cible +
+                    ", l'automate connecte est un " + plan.automate + ". L'automate peut la refuser."));
+    }
+    box.append(el("p", "hint", "Le programme actuel de l'automate est d'abord copie dans la liste (note \"avant restauration\"). " +
+                  "L'automate passe en STOP, l'application est chargee puis relue pour verification."));
+    if (plan.run) box.append(el("p", "avert", "L'automate est en RUN : il sera mis en STOP, la machine s'arrete."));
+    const go = el("button", "btn btn-danger", "Lancer la restauration");
+    go.type = "button";
+    go.addEventListener("click", () => {
+      const lines = ["L'application va remplacer le programme de l'automate.", "L'automate passe en STOP : la machine s'arrete."];
+      if (plan.autre_automate) lines.push("Automate different de celui de l'application (" + plan.cible + ").");
+      if (!confirm(lines.join("\n") + "\n\nMachine en securite ?")) return;
+      runJob("/api/programme/restaurer", { id: b.id }, (r) => restoreDone(b, r));
+    });
+    box.append(go);
+  });
+}
+
 function restoreDone(b, r) {
   const ok = !r.erreur && !r.differences.length;
   showResult(ok ? "ok" : "bad", (box) => {
     if (r.erreur) {
       box.append(el("h4", "", "Restauration arretee : " + r.erreur));
       box.append(el("p", "", "Blocs charges avant l'erreur : " + (r.charges.join(" ") || "aucun")));
-      box.append(el("p", "avert", "La CPU reste en STOP. Relancer la restauration complete avant de redemarrer."));
+      box.append(el("p", "avert", family === "tsx"
+        ? "L'automate reste en STOP. Le programme d'avant est dans la liste (note \"avant restauration\")."
+        : "La CPU reste en STOP. Relancer la restauration complete avant de redemarrer."));
       return;
     }
     box.append(el("h4", "", ok ? "Restauration terminee : programme identique a la sauvegarde"
@@ -376,11 +477,12 @@ function restoreDone(b, r) {
     box.append(el("p", "", "Blocs charges : "), chips(r.charges));
     if (r.supprimes.length) box.append(el("p", "", "Blocs supprimes : "), chips(r.supprimes, "warn"));
     if (r.differences.length) box.append(el("p", "avert", "Differences : " + r.differences.join(", ")));
-    box.append(el("p", "", "La CPU est en STOP."));
-    const start = el("button", "btn btn-primary", "Redemarrer la CPU (RUN)");
+    if (r.sauvegarde_avant) box.append(el("p", "hint", "Le programme d'avant est garde dans la liste (note \"avant restauration\")."));
+    box.append(el("p", "", family === "tsx" ? "L'automate est en STOP." : "La CPU est en STOP."));
+    const start = el("button", "btn btn-primary", family === "tsx" ? "Redemarrer l'automate (RUN)" : "Redemarrer la CPU (RUN)");
     start.type = "button";
     start.addEventListener("click", async () => {
-      if (!confirm("Redemarrer la CPU ? La machine repart.\n\nMachine en securite ?")) return;
+      if (!confirm((family === "tsx" ? "Redemarrer l'automate ?" : "Redemarrer la CPU ?") + " La machine repart.\n\nMachine en securite ?")) return;
       try {
         await api("POST", "/api/cpu/demarrer");
         start.disabled = true;
@@ -390,6 +492,117 @@ function restoreDone(b, r) {
     });
     box.append(start);
   });
+}
+
+// ---- data (TSX %MW / %KW) ----
+
+function setDataMsg(text, isError) {
+  const m = $("data-msg");
+  m.textContent = text || "";
+  m.className = "msg" + (isError ? " err" : "");
+}
+
+async function loadData() {
+  try {
+    const r = await api("GET", "/api/donnees/sauvegardes");
+    $("data-dossier").textContent = "Dossier : " + r.dossier;
+    rows($("table-donnees").tBodies[0], r.sauvegardes, (b) => {
+      const tr = el("tr");
+      const actions = el("div", "row-actions");
+      const btn = el("button", "btn small", "Restaurer");
+      btn.type = "button";
+      btn.addEventListener("click", () => planData(b));
+      const dl = el("a", "btn small", "Telecharger");
+      dl.href = "/api/donnees/telecharger?id=" + encodeURIComponent(b.id);
+      actions.append(btn, dl);
+      tr.append(cell(b.date, "mono", "Date"), cell(b.note || "—", "", "Note"), cell(b.modele || "—", "", "Automate"),
+                cell(b.resume || "", "mono", "Contenu"), cell(actions, "", ""));
+      return tr;
+    }, "Aucune copie des donnees : cliquez sur Sauvegarder les donnees de l'automate.", 5);
+  } catch (e) {
+    setDataMsg(e.message, true);
+  }
+}
+
+function saveData(ev) {
+  ev.preventDefault();
+  runJob("/api/donnees/sauvegarder", { note: $("data-note").value }, (r) => {
+    $("data-note").value = "";
+    showResult("ok", (box) => box.append(el("h4", "", "Donnees sauvegardees : " + r.comptes + ".")), "data-resultat");
+  }, DATA);
+}
+
+async function planData(b) {
+  setDataMsg("Lecture des %MW de l'automate...");
+  let plan;
+  try {
+    plan = await api("POST", "/api/donnees/plan", { id: b.id });
+    setDataMsg("");
+  } catch (e) {
+    setDataMsg(e.message, true);
+    return;
+  }
+  showResult("", (box) => {
+    box.append(el("h4", "", "Restaurer les donnees du " + b.date + (b.note ? " — " + b.note : "")));
+    if (plan.automate_fichier && plan.automate_fichier !== plan.automate) {
+      box.append(el("p", "avert", "Copie prise sur " + plan.automate_fichier + ", automate connecte : " + plan.automate + "."));
+    }
+    if (!plan.differents) {
+      box.append(el("p", "", `Rien a restaurer : les ${plan.mots - plan.hors_zone} %MW de l'automate sont deja identiques a la copie.`));
+      return;
+    }
+    box.append(el("p", "", `${plan.differents} %MW differents de la copie (sur ${plan.mots}). Seuls ceux-la seront ecrits :`));
+    const wrap = el("div", "table-wrap");
+    const t = el("table", "table");
+    const head = el("thead");
+    const hr = el("tr");
+    hr.append(...["Adresse", "Automate", "Copie"].map((h) => el("th", "", h)));
+    head.append(hr);
+    const body = el("tbody");
+    body.append(...plan.exemples.map((x) => {
+      const tr = el("tr");
+      tr.append(cell(x.adresse, "mono", "Adresse"), cell(String(x.automate), "mono", "Automate"), cell(String(x.fichier), "mono", "Copie"));
+      return tr;
+    }));
+    t.append(head, body);
+    wrap.append(t);
+    box.append(wrap);
+    if (plan.differents > plan.exemples.length) box.append(el("p", "hint", `... et ${plan.differents - plan.exemples.length} autres.`));
+    if (plan.hors_zone) box.append(el("p", "avert", `${plan.hors_zone} %MW de la copie n'existent pas dans l'automate (il a ${plan.zone_automate} %MW) : ignores.`));
+    if (plan.kw_ignores) box.append(el("p", "hint", `${plan.kw_ignores} %KW de la copie non ecrits (constantes : restauration pas encore validee).`));
+    if (plan.run) box.append(el("p", "avert", "L'automate est en RUN : le programme peut reecrire certains mots aussitot. Mieux vaut le mettre en STOP avant."));
+    const go = el("button", "btn btn-danger", `Ecrire ces ${plan.differents} %MW`);
+    go.type = "button";
+    go.addEventListener("click", () => {
+      if (!confirm(`Ecrire ${plan.differents} %MW dans l'automate ?\n\nMachine en securite ?`)) return;
+      runJob("/api/donnees/restaurer", { id: b.id }, (r) => {
+        const ok = !r.nb_differents_apres;
+        showResult(ok ? "ok" : "bad", (rbox) => {
+          rbox.append(el("h4", "", ok ? `Restauration terminee : ${r.ecrits} %MW ecrits et verifies.`
+                                      : `${r.nb_differents_apres} %MW differents apres ecriture (reecrits par le programme ?)`));
+          if (!ok) rbox.append(chips(r.differents_apres, "warn"));
+        }, "data-resultat");
+      }, DATA);
+    });
+    box.append(go);
+  }, "data-resultat");
+}
+
+async function importData(fileList) {
+  const files = [...fileList].filter((f) => /\.(dat|csv)$/i.test(f.name));
+  if (!files.length) {
+    setDataMsg("Aucun fichier .dat ou .csv dans la selection.", true);
+    return;
+  }
+  try {
+    const fichiers = await Promise.all(files.map(async (f) => ({ nom: f.name, contenu: toBase64(await f.arrayBuffer()) })));
+    const r = await api("POST", "/api/donnees/importer", { fichiers, note: $("data-note").value });
+    $("data-note").value = "";
+    setDataMsg("Donnees importees : " + r.comptes + ".");
+    loadData();
+  } catch (e) {
+    setDataMsg(e.message, true);
+  }
 }
 
 // ---- watch table ----
@@ -407,6 +620,12 @@ const FORMAT_NAMES = { dec: "DEC", ud: "DEC non signe", hex: "HEX", bin: "BIN", 
 function formatsFor(adresse) {
   /** Formats that fit the size of the address ([] for a bit: always 0 / 1). */
   const a = adresse.toUpperCase();
+  if (family === "tsx") {
+    const z = a.replace(/^%/, "").replace(/\d+$/, "");
+    if (z === "MD" || z === "KD") return ["dec", "ud", "hex", "bin", "real"];
+    if (["MW", "KW", "SW"].includes(z)) return ["dec", "ud", "hex", "bin", "char"];
+    return [];
+  }
   if (/^[TZC]\d+$/.test(a)) return a[0] === "T" ? ["s5time", "hex", "dec"] : ["bcd", "hex", "dec"];
   if (/\.\d$/.test(a) && !/DB[BWD]\d+$/.test(a)) return [];
   if (/^([EIAQM]D|DB\d+\.DBD)/.test(a)) return ["dec", "ud", "hex", "bin", "real", "char"];
@@ -425,14 +644,17 @@ function splitAddress(text) {
   return { adresse, format: formats.includes(f) ? f : (formats[0] || "") };
 }
 
+// one watch table per family: S7 and TSX addresses do not mix
+const watchKey = () => (family === "tsx" ? "table-surveillance-tsx" : "table-surveillance");
+
 function loadWatch() {
   try {
-    const rows = JSON.parse(localStorageGet("table-surveillance")) || [];
+    const rows = JSON.parse(localStorageGet(watchKey())) || [];
     return rows.map((w) => ({ ...splitAddress(w.format ? w.adresse + ":" + w.format : w.adresse), libelle: w.libelle || "" }));
   } catch { return []; }
 }
 function saveWatch() {
-  localStorageSet("table-surveillance", JSON.stringify(watch));
+  localStorageSet(watchKey(), JSON.stringify(watch));
 }
 
 function setWatchMsg(text, isError) {
@@ -580,9 +802,9 @@ async function writeValues() {
     let text = bad.length
       ? "Relu different : " + bad.map((b) => `${b.adresse} = ${b.relu ?? "?"}`).join(", ") + " (reecrit par le programme ?)"
       : `${r.resultats.length} valeur(s) ecrite(s) et relue(s).`;
-    const io = items.some((it) => /^[EIAQ]/i.test(it.adresse) && !/^DB/i.test(it.adresse));
+    const io = family === "s7" && items.some((it) => /^[EIAQ]/i.test(it.adresse) && !/^DB/i.test(it.adresse));
     if (r.run && io) text += " CPU en RUN : les entrees / sorties sont reecrites a chaque cycle.";
-    else if (r.run) text += " CPU en RUN : le programme peut reecrire ces valeurs.";
+    else if (r.run) text += " Automate en RUN : le programme peut reecrire ces valeurs.";
     setWatchMsg(text, bad.length > 0);
     if (monitoring) readWatch();
   } catch (e) {
@@ -643,9 +865,22 @@ function rows(tbody, items, render, emptyText, cols) {
 
 function renderDiagnostic(d) {
   $("diag-alertes").replaceChildren(...d.alertes.map((a) => el("div", "alerte", a)));
-  $("diag-info").textContent = d.config_compilee
-    ? "Configuration materielle compilee le " + d.config_compilee + "."
+  $("diag-info").textContent = d.systeme ? "Bits et mots systeme de l'automate."
+    : d.config_compilee ? "Configuration materielle compilee le " + d.config_compilee + "."
     : "Configuration materielle non lue.";
+  $("sec-rack").hidden = !d.modules;
+  $("sec-events").hidden = !d.evenements;
+  $("sec-systeme").hidden = !d.systeme;
+  if (d.systeme) {
+    rows($("table-systeme").tBodies[0], d.systeme, (x) => {
+      const tr = el("tr", x.ok ? "" : "bad");
+      tr.append(cell(x.adresse, "mono", "Adresse"), cell(x.valeur, "mono", "Valeur"), cell(x.texte, "", "Signification"),
+                cell(el("span", "badge " + (x.ok ? "ok" : "bad"), x.ok ? "OK" : "DEFAUT"), "", "Etat"));
+      return tr;
+    }, "Rien lu", 4);
+  }
+  $("params").replaceChildren(...d.parametres_cpu.flatMap(([k, v]) => [el("dt", "", k), el("dd", "", v)]));
+  if (!d.modules) return;
 
   rows($("table-rack").tBodies[0], d.modules, (m) => {
     const tr = el("tr", m.ok ? "" : "bad");
@@ -735,8 +970,8 @@ async function connect(ev) {
   const marque = $("marque").value;
   const reglages = {};
   for (const input of $("reglages").querySelectorAll("input")) {
-    reglages[input.name] = Number(input.value);
-    localStorageSet("reglage-" + input.name, input.value);
+    reglages[input.name] = input.dataset.texte ? input.value.trim() : Number(input.value);
+    localStorageSet("reglage-" + marque + "-" + input.name, input.value);
   }
   localStorageSet("marque", marque);
   const btn = $("btn-connecter");
@@ -745,7 +980,9 @@ async function connect(ev) {
   stopPolling();
   try {
     diagLoaded = false;
-    renderStatus(await api("POST", "/api/connexion", { marque, reglages }));
+    const s = await api("POST", "/api/connexion", { marque, reglages });
+    applyBrand(marque);
+    renderStatus(s);
     setConnected(true);
     setMsg("");
     startPolling();
@@ -811,6 +1048,8 @@ async function init() {
   $("import-fichiers").addEventListener("change", (ev) => { importBackup(ev.target.files); ev.target.value = ""; });
   $("import-dossier").addEventListener("change", (ev) => { importBackup(ev.target.files); ev.target.value = ""; });
   $("btn-exporter").addEventListener("click", exportWatch);
+  $("form-data").addEventListener("submit", saveData);
+  $("data-import").addEventListener("change", (ev) => { importData(ev.target.files); ev.target.value = ""; });
   $("fichier-table").addEventListener("change", (ev) => {
     if (ev.target.files[0]) importWatch(ev.target.files[0]);
     ev.target.value = "";
@@ -826,6 +1065,7 @@ async function init() {
     renderSettings();
   }
   if (s.connecte) {
+    applyBrand(s.connexion ? s.connexion.marque : select.value);
     renderStatus(s);
     setConnected(true);
     startPolling();

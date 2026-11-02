@@ -22,6 +22,13 @@ JSON API:
     POST /api/cpu/demarrer                     CPU to RUN (warm restart)
     POST /api/cpu/arreter                      CPU to STOP
     POST /api/cpu/horloge                      CPU clock set to the PC time
+    GET  /api/ports                            serial ports of the PC (TSX)
+    GET  /api/donnees/sauvegardes              TSX data copies (%MW, %KW)
+    POST /api/donnees/sauvegarder {"note"}     read %MW / %KW to a copy (background)
+    POST /api/donnees/plan {"id"}              how many %MW differ from the copy
+    POST /api/donnees/restaurer {"id"}         write the changed %MW back (background)
+    GET  /api/donnees/telecharger?id=...       one data copy as a .zip
+    POST /api/donnees/importer {"fichiers", "note"}   PL7 .dat or .csv
     POST /api/deconnexion
 Errors: {"erreur": "message for the technician"} with HTTP 400 (bad request), 409 (not
 connected), 502 (the PLC did not answer), 503 (a long operation is running).
@@ -77,10 +84,16 @@ def make_handler(session: Session):
                 return self.send_json(200, session.job_state())
             if path == "/api/programme/sauvegardes":
                 return self.api(lambda: session.list_backups())
-            if path == "/api/programme/telecharger":
+            if path == "/api/ports":
+                from plc_online.web.tsx_web import list_ports
+                return self.send_json(200, {"ports": list_ports()})
+            if path == "/api/donnees/sauvegardes":
+                return self.api(lambda: session.data_list())
+            if path in ("/api/programme/telecharger", "/api/donnees/telecharger"):
                 query = urllib.parse.parse_qs(self.path.partition("?")[2])
+                export = session.export_backup if path.startswith("/api/programme") else session.data_export
                 try:
-                    name, data = session.export_backup((query.get("id") or [""])[0])
+                    name, data = export((query.get("id") or [""])[0])
                 except DriverError as e:
                     return self.send_json(400, {"erreur": str(e)})
                 self.send_response(200)
@@ -139,7 +152,15 @@ def make_handler(session: Session):
                 return self.api(lambda: session.stop_cpu())
             if path == "/api/cpu/horloge":
                 return self.api(lambda: session.set_clock())
-            if path == "/api/programme/importer":
+            if path == "/api/donnees/sauvegarder":
+                return self.api(lambda: session.data_save(str(self.read_json().get("note") or "")))
+            if path == "/api/donnees/plan":
+                return self.api(lambda: session.data_plan(str(self.read_json().get("id") or "")))
+            if path == "/api/donnees/restaurer":
+                return self.api(lambda: session.data_restore(str(self.read_json().get("id") or "")))
+            if path in ("/api/programme/importer", "/api/donnees/importer"):
+                target = session.import_backup if path.startswith("/api/programme") else session.data_import
+
                 def do_import():
                     req = self.read_json()
                     files = []
@@ -148,7 +169,7 @@ def make_handler(session: Session):
                             files.append((str(f.get("nom", "")), base64.b64decode(f.get("contenu", ""), validate=True)))
                         except (ValueError, TypeError):
                             raise DriverError(f"{f.get('nom', '?')} : contenu illisible") from None
-                    return session.import_backup(files, str(req.get("note") or ""))
+                    return target(files, str(req.get("note") or ""))
                 return self.api(do_import)
             if path == "/api/deconnexion":
                 return self.api(lambda: (session.disconnect(), {"ok": True})[1])

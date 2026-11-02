@@ -5,7 +5,7 @@ and restore, from a PC, without the vendor software.
 
 One protocol module per brand, one command-line tool per brand (French prompts), and a local
 web interface on top of the same library (connection, PLC status, diagnostic, watch table, program).
-The web interface covers the S7-300 for now; the other brands are next ([plan](docs/interface.md)).
+The web interface covers the S7-300 and the TSX; Omron and Panasonic are next ([plan](docs/interface.md)).
 
 | Brand | Link | What works (tested on the bench) |
 |---|---|---|
@@ -47,6 +47,7 @@ plc_online/            library used by the tools and the web interface
     s7_modules.py      S7 module type codes -> names   (generated from STEP 7)
     s7_catalogue.py    S7 order numbers -> names        (generated from STEP 7)
     s7_forces.py       S7 force reading (parked: refused by the bench CPU)
+    unitelway.py       TSX Uni-Telway (used by tools/tsx.py and the web interface)
     hostlink.py        Omron Host Link + FINS
     mewtocol.py        Panasonic MEWTOCOL
     modbus.py          Modbus RTU / TCP
@@ -162,7 +163,9 @@ Formats checked against Omron manuals W342 (communication commands) and W393 (CJ
 
 ## TSX tool (Uni-Telway)
 
-Single file, `pip install pyserial`. Close PL7 first.
+`pip install pyserial`. Close PL7 first. Protocol in `plc_online/protocols/unitelway.py`, shared
+with the web interface (brand "Schneider TSX": status, system bits, watch table, program and
+data copies with PL7 `.stx` / `.dat` import; "Demo (TSX simule)" without a PLC).
 
 ```
 python tools/tsx.py etat                  # identification, faults, battery, clock, Flash backup

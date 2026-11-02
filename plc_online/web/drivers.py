@@ -17,6 +17,7 @@ from plc_online.protocols.s7 import BLOCK_TYPES, S7300, S7Error, parse_block, pa
 from plc_online.protocols.s7_catalogue import catalog_name
 from plc_online.protocols.s7_names import address_range, cpu_parameter_lines, module_text
 from plc_online.protocols.s7_vars import AddressError, Var
+from plc_online.protocols.unitelway import UniteError
 
 FAULT_LEDS = {"SF": "Defaut groupe", "BAF": "Defaut pile", "BUS1F": "Defaut bus MPI/DP",
               "BUS2F": "Defaut bus DP", "FRCE": "Forcage actif"}
@@ -396,6 +397,8 @@ class DemoS7:
 
 
 DEFAULT_BACKUPS = Path.home() / "PLC Online" / "sauvegardes" / "s7-300"
+DEFAULT_TSX_BACKUPS = Path.home() / "PLC Online" / "sauvegardes" / "tsx"
+LINK_ERRORS = (S7Error, UniteError, OSError)
 BACKUP_ID = re.compile(r"^[\w\-. ]+$")
 
 
@@ -440,7 +443,7 @@ MAX_PROJECT = 60 * 1024 * 1024                    # STEP 7 project files kept (o
 PROJECT_FILE = re.compile(r"(^|/)(ombstx/offline|hrs)/|\.s7p$", re.IGNORECASE)
 
 
-def export_zip(folder: Path, backup_id: str) -> tuple:
+def export_zip(folder: Path, backup_id: str, prefix: str = "programme_s7") -> tuple:
     """(file name, zip bytes) of one copy, to keep it elsewhere or send it."""
     import io
     import zipfile
@@ -450,7 +453,7 @@ def export_zip(folder: Path, backup_id: str) -> tuple:
         for f in sorted(path.iterdir()):
             if f.is_file():
                 z.write(f, f.name)
-    return f"programme_s7_{backup_id}.zip", buf.getvalue()
+    return f"{prefix}_{backup_id}.zip", buf.getvalue()
 
 
 def _new_folder(folder: Path, prefix: str) -> Path:
@@ -568,26 +571,42 @@ def import_files(folder: Path, files: list, note: str = "") -> dict:
     return {"id": target.name, "comptes": meta["comptes"], "ignores": ignored}
 
 
-BRANDS = {
-    "s7-300": {"nom": "Siemens S7-300", "disponible": True,
-               "reglages": [{"cle": "mpi", "nom": "Adresse MPI", "defaut": 2},
-                            {"cle": "rack", "nom": "Rack", "defaut": 0},
-                            {"cle": "slot", "nom": "Emplacement CPU", "defaut": 2}]},
-    "demo": {"nom": "Demo (S7-300 simule)", "disponible": True, "reglages": []},
-    "omron": {"nom": "Omron CJ1M", "disponible": False, "reglages": []},
-    "tsx": {"nom": "Schneider TSX", "disponible": False, "reglages": []},
-    "panasonic": {"nom": "Panasonic FP0R", "disponible": False, "reglages": []},
-}
+S7_FEATURES = ["horloge", "rack", "evenements", "db", "projet_step7"]
+TSX_FEATURES = ["donnees"]
+
+
+def _brands():
+    from plc_online.web import tsx_web
+    return {
+        "s7-300": {"nom": "Siemens S7-300", "disponible": True, "famille": "s7", "fonctions": S7_FEATURES,
+                   "reglages": [{"cle": "mpi", "nom": "Adresse MPI", "defaut": 2},
+                                {"cle": "rack", "nom": "Rack", "defaut": 0},
+                                {"cle": "slot", "nom": "Emplacement CPU", "defaut": 2}]},
+        "tsx": {"nom": "Schneider TSX Micro / Premium", "disponible": True, "famille": "tsx",
+                "fonctions": TSX_FEATURES, "reglages": tsx_web.SETTINGS},
+        "demo": {"nom": "Demo (S7-300 simule)", "disponible": True, "famille": "s7", "fonctions": S7_FEATURES,
+                 "reglages": []},
+        "demo-tsx": {"nom": "Demo (TSX simule)", "disponible": True, "famille": "tsx", "fonctions": TSX_FEATURES,
+                     "reglages": []},
+        "omron": {"nom": "Omron CJ1M", "disponible": False, "reglages": []},
+        "panasonic": {"nom": "Panasonic FP0R", "disponible": False, "reglages": []},
+    }
+
+
+BRANDS = _brands()
 
 
 class Session:
     """The one PLC the laptop is connected to. Calls are serialized: the link is not shared."""
 
-    def __init__(self, opener=None, backups=None):
+    def __init__(self, opener=None, backups=None, tsx_backups=None):
+        from plc_online.web.tsx_web import TsxOps
         self.lock = threading.Lock()
         self.plc, self.brand, self.settings = None, None, {}
         self.opener = opener or open_plc
         self.backups = Path(backups) if backups else DEFAULT_BACKUPS
+        self.tsx_backups = Path(tsx_backups) if tsx_backups else (Path(backups) / "tsx" if backups else DEFAULT_TSX_BACKUPS)
+        self.tsx = TsxOps(self)
         self.job = None                   # long operation running in the background
         self.last_status = None
 
@@ -606,6 +625,14 @@ class Session:
     def connected(self) -> bool:
         return self.plc is not None
 
+    @property
+    def family(self) -> str:
+        return BRANDS.get(self.brand or "", {}).get("famille", "s7")
+
+    def _ops(self):
+        """TsxOps when a TSX is connected, None for the S7-300 (methods of this class)."""
+        return self.tsx if self.family == "tsx" else None
+
     def busy(self) -> str:
         j = self.job
         return j["nom"] if j and not j["fini"] else ""
@@ -618,8 +645,8 @@ class Session:
             if self.plc is None:
                 raise DriverError("Pas connecte")
             try:
-                out = s7_status(self.plc)
-            except S7Error as e:
+                out = self.tsx.status(self.plc) if self._ops() else s7_status(self.plc)
+            except LINK_ERRORS as e:
                 self._close()
                 raise DriverError(f"Liaison perdue : {e}") from None
         out["connecte"] = True
@@ -628,6 +655,8 @@ class Session:
         return out
 
     def diagnostic(self) -> dict:
+        if self._ops():
+            return self.tsx.diagnostic()
         return self._call(lambda plc: s7_diagnostic(plc, int(self.settings.get("rack", 0) or 0)))
 
     # ---- long operations: one at a time, in the background, with progress ----
@@ -650,7 +679,7 @@ class Session:
                     if self.plc is None:
                         raise DriverError("Pas connecte")
                     job["resultat"] = work(self.plc, progress)
-                except (S7Error, DriverError, OSError) as e:
+                except (DriverError,) + LINK_ERRORS as e:
                     job["erreur"] = str(e)
                 except Exception as e:                    # never leave a job hanging
                     job["erreur"] = f"Erreur interne : {e}"
@@ -663,15 +692,21 @@ class Session:
         return dict(self.job) if self.job else {"nom": "", "fini": True}
 
     def list_backups(self) -> dict:
+        if self._ops():
+            return self.tsx.list_backups()
         return {"dossier": str(self.backups), "sauvegardes": list_backups(self.backups)}
 
     def backup_blocks(self, backup_id) -> dict:
+        if self._ops():
+            return self.tsx.backup_blocks(backup_id)
         try:
             return backup_blocks(self.backups, backup_id)
         except S7Error as e:
             raise DriverError(str(e)) from None
 
     def save_program(self, note: str) -> dict:
+        if self._ops():
+            return self.tsx.save_program(note)
         def work(plc, progress):
             blocks = program.upload_program(plc, lambda k, i, n: progress(f"lecture {k} {i}/{n}", i, n))
             if not blocks:
@@ -692,6 +727,8 @@ class Session:
         return self.start_job("sauvegarde du programme", work)
 
     def compare(self, backup_id) -> dict:
+        if self._ops():
+            return self.tsx.compare(backup_id)
         path = backup_path(self.backups, backup_id)
 
         def work(plc, progress):
@@ -701,6 +738,8 @@ class Session:
         return self.start_job("comparaison avec la CPU", work)
 
     def restore_plan(self, backup_id, with_db: bool) -> dict:
+        if self._ops():
+            return self.tsx.restore_plan(backup_id, with_db)
         path = backup_path(self.backups, backup_id)
 
         def run(plc):
@@ -710,6 +749,8 @@ class Session:
         return self._call(run)
 
     def restore(self, backup_id, with_db: bool, delete_extra: bool) -> dict:
+        if self._ops():
+            return self.tsx.restore(backup_id, with_db, delete_extra)
         path = backup_path(self.backups, backup_id)
 
         def work(plc, progress):
@@ -721,27 +762,37 @@ class Session:
         return self.start_job("restauration du programme", work)
 
     def start_cpu(self) -> dict:
+        if self._ops():
+            return self.tsx.start_cpu()
         def run(plc):
             plc.start()
             return {"ok": True}
         return self._call(run)
 
     def stop_cpu(self) -> dict:
+        if self._ops():
+            return self.tsx.stop_cpu()
         def run(plc):
             plc.stop()
             return {"ok": True}
         return self._call(run)
 
     def set_clock(self) -> dict:
+        if self._ops():
+            raise DriverError("Reglage de l'horloge pas encore disponible pour le TSX")
         def run(plc):
             plc.set_clock()
             return {"horloge": plc.read_clock()}
         return self._call(run)
 
     def export_backup(self, backup_id) -> tuple:
+        if self._ops():
+            return self.tsx.export_backup(backup_id)
         return export_zip(self.backups, backup_id)
 
     def import_backup(self, files, note) -> dict:
+        if self._ops():
+            return self.tsx.import_backup(files, note)
         self.backups.mkdir(parents=True, exist_ok=True)
         return import_files(self.backups, files, note)
 
@@ -753,14 +804,48 @@ class Session:
                 raise DriverError("Pas connecte")
             try:
                 return action(self.plc)
-            except S7Error as e:
+            except UniteError as e:
+                if "delai" in str(e) or "confirme pas" in str(e):
+                    self._close()
+                    raise DriverError(f"Liaison perdue : {e}") from None
+                raise DriverError(f"Refuse par l'automate : {e}") from None
+            except (S7Error, OSError) as e:
                 self._close()
                 raise DriverError(f"Liaison perdue : {e}") from None
 
+    # ---- data (TSX %MW / %KW) ----
+
+    def _tsx_only(self):
+        if not self._ops():
+            raise DriverError("Sauvegarde des donnees : TSX seulement pour l'instant")
+        return self.tsx
+
+    def data_list(self) -> dict:
+        return self.tsx.data_list()
+
+    def data_save(self, note) -> dict:
+        return self._tsx_only().data_save(note)
+
+    def data_plan(self, backup_id) -> dict:
+        return self._tsx_only().data_plan(backup_id)
+
+    def data_restore(self, backup_id) -> dict:
+        return self._tsx_only().data_restore(backup_id)
+
+    def data_export(self, backup_id) -> tuple:
+        return self.tsx.data_export(backup_id)
+
+    def data_import(self, files, note) -> dict:
+        return self.tsx.data_import(files, note)
+
     def values(self, texts) -> dict:
+        if self._ops():
+            return self.tsx.values(texts)
         return self._call(lambda plc: read_values(plc, texts))
 
     def write(self, items) -> dict:
+        if self._ops():
+            return self.tsx.write(items)
         def run(plc):
             out = write_values(plc, items)
             out["run"] = bool(plc.leds().get("RUN", (0, 0))[0])
@@ -785,6 +870,9 @@ class Session:
 def open_plc(brand: str, settings: dict):
     if brand == "demo":
         return DemoS7()
+    if brand in ("tsx", "demo-tsx"):
+        from plc_online.web import tsx_web
+        return tsx_web.DemoTsx() if brand == "demo-tsx" else tsx_web.open_tsx(settings)
     try:
         mpi, rack, slot = (int(settings.get(k, d)) for k, d in (("mpi", 2), ("rack", 0), ("slot", 2)))
     except (TypeError, ValueError):

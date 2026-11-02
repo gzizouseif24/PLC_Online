@@ -29,6 +29,9 @@
       </form>
       <p class="hint" id="hint-s7">S7-300 : STEP 7 installe, interface PG/PC sur <b>USB.S7USB.1</b>,
         SIMATIC Manager ferme.</p>
+      <p class="hint" id="hint-tsx" hidden>TSX : cable <b>TSX PCX 1031</b> sur la prise TER, selecteur
+        dans la meme position qu'avec PL7, <b>PL7 ferme</b>. 9600 bauds, 8 bits, parite impaire.</p>
+      <datalist id="ports"></datalist>
     </section>
 
     <section class="card" id="etat" aria-live="polite">
@@ -42,7 +45,41 @@
         <button type="button" role="tab" class="tab" data-tab="vue-diag" aria-selected="false">Diagnostic</button>
         <button type="button" role="tab" class="tab" data-tab="vue-watch" aria-selected="false">Surveillance</button>
         <button type="button" role="tab" class="tab" data-tab="vue-prog" aria-selected="false">Programme</button>
+        <button type="button" role="tab" class="tab" data-tab="vue-data" aria-selected="false" data-fonction="donnees">Donnees</button>
       </nav>
+
+      <div id="vue-data" class="vue" hidden>
+        <form id="form-data" class="ajout" autocomplete="off">
+          <label class="field grow">
+            <span>Note (facultatif)</span>
+            <input id="data-note" maxlength="200" placeholder="ex. recette client avant reglage">
+          </label>
+          <button type="submit" class="btn btn-primary" id="btn-data-sauver">Sauvegarder les donnees de l'automate</button>
+        </form>
+        <p class="hint">Copie de tous les mots internes %MW et des constantes %KW (recettes, compteurs, reglages),
+          sans le programme.</p>
+        <div class="watch-bar">
+          <span class="hint">Fichier deja sur le PC (transfert de donnees PL7 .dat, ou .csv) :</span>
+          <label class="btn" for="data-import">Importer un .dat ou .csv</label>
+          <input type="file" id="data-import" accept=".dat,.csv" multiple hidden>
+        </div>
+
+        <div id="data-tache" class="tache" hidden>
+          <div class="tache-head"><b id="data-tache-nom"></b><span id="data-tache-texte" class="hint"></span></div>
+          <div class="barre"><div id="data-tache-barre"></div></div>
+        </div>
+        <p id="data-msg" class="msg" role="status"></p>
+        <div id="data-resultat" class="resultat" hidden></div>
+
+        <h3>Donnees sur ce PC</h3>
+        <div class="table-wrap">
+          <table class="table" id="table-donnees">
+            <thead><tr><th>Date</th><th>Note</th><th>Automate</th><th>Contenu</th><th></th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <p class="hint" id="data-dossier"></p>
+      </div>
 
       <div id="vue-prog" class="vue" hidden>
         <form id="form-sauver" class="ajout" autocomplete="off">
@@ -52,13 +89,13 @@
           </label>
           <button type="submit" class="btn btn-primary" id="btn-sauver">Sauvegarder le programme de la CPU</button>
         </form>
-        <p class="hint">Copie de tous les blocs (OB, FB, FC, DB) et de la configuration materielle (SDB).</p>
+        <p class="hint" id="prog-hint">Copie de tous les blocs (OB, FB, FC, DB) et de la configuration materielle (SDB).</p>
         <div class="watch-bar">
-          <span class="hint">Sauvegarde deja sur le PC (autre dossier, cle USB, terminal) ou projet STEP 7 V5
+          <span class="hint" id="import-hint">Sauvegarde deja sur le PC (autre dossier, cle USB, terminal) ou projet STEP 7 V5
             (dossier du .s7p, ou archive .zip) :</span>
-          <label class="btn" for="import-fichiers">Importer un .zip ou des blocs .bin</label>
+          <label class="btn" for="import-fichiers" id="import-fichiers-texte">Importer un .zip ou des blocs .bin</label>
           <input type="file" id="import-fichiers" accept=".zip,.bin" multiple hidden>
-          <label class="btn" for="import-dossier">Importer un dossier</label>
+          <label class="btn" for="import-dossier" data-fonction="projet_step7">Importer un dossier</label>
           <input type="file" id="import-dossier" webkitdirectory hidden>
         </div>
 
@@ -73,7 +110,7 @@
         <h3>Sauvegardes sur ce PC</h3>
         <div class="table-wrap">
           <table class="table" id="table-sauvegardes">
-            <thead><tr><th>Date</th><th>Note</th><th>CPU</th><th>Blocs</th><th></th></tr></thead>
+            <thead><tr><th>Date</th><th>Note</th><th>CPU</th><th id="col-contenu">Blocs</th><th></th></tr></thead>
             <tbody></tbody>
           </table>
         </div>
@@ -92,7 +129,7 @@
           </label>
           <button type="submit" class="btn btn-primary">Ajouter</button>
         </form>
-        <p class="hint">E/I, A/Q, M, DB10.DBW2, T5, Z2. Le format se change sur chaque ligne.</p>
+        <p class="hint" id="watch-hint">E/I, A/Q, M, DB10.DBW2, T5, Z2. Le format se change sur chaque ligne.</p>
 
         <div class="watch-bar">
           <button type="button" class="btn btn-visu" id="btn-visu" aria-pressed="false" title="Visualiser les valeurs (comme les lunettes de TIA Portal / STEP 7)">
@@ -125,6 +162,17 @@
         <p id="diag-msg" class="msg" role="status"></p>
         <div id="diag-alertes" class="alertes"></div>
 
+        <div id="sec-systeme" hidden>
+        <h3>Bits et mots systeme</h3>
+        <div class="table-wrap">
+          <table class="table" id="table-systeme">
+            <thead><tr><th>Adresse</th><th>Valeur</th><th>Signification</th><th>Etat</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        </div>
+
+        <div id="sec-rack">
         <h3>Rack</h3>
         <div class="table-wrap">
           <table class="table" id="table-rack">
@@ -133,6 +181,9 @@
           </table>
         </div>
 
+        </div>
+
+        <div id="sec-events">
         <h3>Tampon de diagnostic <span class="hint">(le plus recent en haut)</span></h3>
         <div class="table-wrap">
           <table class="table" id="table-events">
@@ -141,7 +192,9 @@
           </table>
         </div>
 
-        <h3>Parametres CPU</h3>
+        </div>
+
+        <h3 id="titre-params">Parametres CPU</h3>
         <dl id="params" class="details"></dl>
       </div>
 
@@ -157,7 +210,7 @@
         <div class="cpu-actions">
           <button type="button" class="btn btn-run" id="btn-run">Passer en RUN</button>
           <button type="button" class="btn btn-stop" id="btn-stop">Passer en STOP</button>
-          <button type="button" class="btn" id="btn-horloge">Mettre l'horloge a l'heure du PC</button>
+          <button type="button" class="btn" id="btn-horloge" data-fonction="horloge">Mettre l'horloge a l'heure du PC</button>
         </div>
         <p id="cpu-msg" class="msg" role="status"></p>
 

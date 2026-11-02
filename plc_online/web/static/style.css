@@ -270,3 +270,6 @@ a.btn { text-decoration: none; display: inline-block; }
   .table td.empty::before { content: none; }
   .topbar { padding: 10px 16px; }
 }
+
+/* hidden always wins over display rules (labels styled as buttons, sections per brand) */
+[hidden] { display: none !important; }
