@@ -466,3 +466,13 @@ PL7 online, hardware configuration, modules opened at positions 1 and 5:
   0x2C `6B 93` → `67 93`) **and the program part** (PL7.BIN 96 bytes shorter): not reproducible
   by the tool, left to PL7.
 - Web rack: "En place" from 44 (same type / other type / absent), state named accordingly.
+
+## 5z. Reservation left held (client TSX 3722, 02/11/2026)
+
+- After the PL7 sessions of the day, RESERVE (`1D`) answered FD to the tool although PL7 was
+  closed: a reservation left by an interrupted session. **Switching the PLC off and on freed it**;
+  the rack then read normally.
+- The 92/0A application info answer changes between two reads (`... 3B 3D ...` / `... 7B 3D ...`):
+  not usable as a cache key. The configuration is kept under `92 07 0C 02 00` / `92 07 0C 01 00`
+  (configuration / program checksums), and taken from a matching program copy on the PC when the
+  PLC cannot be reserved.
