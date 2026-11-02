@@ -385,3 +385,26 @@ PC → PLC transfer, as PL7 does it (category 07):
    Unit-tested with the captured frames.
 3. Mirror test (`FA`), like the Omron `TS` echo.
 4. Read %MW, %M, then %I / %Q once the codes are confirmed.
+
+## 5u. PL7 capture of 02/11/2026 (Portmon-style log, full frames; bench TSX 3721)
+
+Sequence: PLC without application → PL7 download of a new (empty-config) application → RUN →
+animation table with %I1.0 → PC ← PLC transfer. Frames decoded with
+`research/tsx` helpers (log parsed with unitelway.Parser on each direction).
+
+- **CPU state confirmed:** READ_CPU `4F 07` → `7F 00 <state> <x> ...`, state **04 = no
+  application** (`04 08`), **01 = STOP** (`01 0A`, after the download), **02 = RUN** (`02 0B`,
+  after `24 07`). The identification answer carries the same byte: `... 08 05 04 30`,
+  `08 06 01 30`, `08 03 02 30`. Used by the web interface (Etat, mode pill).
+- `2D 07 FF FF` → same `7F` answer as `4F` (with the application name and signature once loaded).
+- RESERVE `1D 07 FF FE 32 6B`: last two bytes differ from the earlier captures (`90 36`,
+  `80 0F`): probably a session value, not the operation.
+- `92 07 0C 02 00` → `C2 0C 00 <2 bytes>` (a checksum or signature word?).
+- **Animation table (%I1.0):** PL7 does not read %I directly. It writes a request list into a
+  PLC buffer (`92 07 02 70 00 00 00 09 07 01 F9 03 68 00 94 02 02`: subcode 02 = write, segment
+  70, offset 0000, 9 bytes) and polls `92 07 01 70 00 F9 03 07` (subcode 01 = read, offset 03F9,
+  7 bytes) → `C2 01 00 00 08 00 04 02 01 00`; `93 07 04 70 00 00 00 04` → `C3 04 00` in a loop.
+  Not decodable from this capture: %I1.0 never changed and the application had **no module
+  configured**. Next capture: real modules configured in PL7, an input toggled while animated,
+  and the module debug screens.
+- No clock setting in this capture.

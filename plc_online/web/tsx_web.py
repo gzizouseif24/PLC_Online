@@ -28,9 +28,10 @@ def _drv():
 SETTINGS = [{"cle": "port", "nom": "Port COM", "defaut": "COM6", "type": "port"},
             {"cle": "adresses", "nom": "Adresse(s) du PC", "defaut": "1", "type": "texte"}]
 
-# CPU state from READ_CPU (4F), bytes 1-2 of the answer. Seen on the bench: 01 0A just after a
-# download (the PLC is in STOP then), 04 08 during a download, 02 0B otherwise. To confirm.
-CPU_STATES = {1: "STOP", 2: "RUN", 4: "CHARGEMENT"}
+# CPU state from READ_CPU (4F), byte 1 of the answer. Confirmed by the PL7 capture of 02/11/2026
+# (TSX 3721): 04 08 with no application, 01 0A in STOP after a download, 02 0B after RUN.
+# The identification answer carries the same byte (08 05 04 / 08 06 01 / 08 03 02).
+CPU_STATES = {1: "STOP", 2: "RUN", 4: "VIDE"}
 
 FLASH_ERRORS = ut.BACKUP_ERRORS
 
@@ -251,9 +252,10 @@ def tsx_status(plc) -> dict:
     sw = read_system_words(plc)
     mode, raw = cpu_state(plc)
     out["mode"] = mode
-    out["mode_a_confirmer"] = True
+    if mode == "VIDE":
+        out["alertes"].append("Pas d'application dans l'automate (programme perdu ? verifier la pile : voyant BAT)")
     faults = {n: label for n, (label, bad) in ut.SYSTEM_BITS.items() if bits.get(n) == bad}
-    out["alertes"] = [f"%S{n} : {label}" for n, label in faults.items()]
+    out["alertes"] += [f"%S{n} : {label}" for n, label in faults.items()] if mode != "VIDE" else []
     out["voyants"] = [
         {"nom": "RUN", "texte": "RUN", "allume": mode == "RUN", "clignote": False, "defaut": False},
         {"nom": "I/O", "texte": "Defaut E/S (%S10)", "allume": 10 in faults, "clignote": False, "defaut": True},
@@ -269,7 +271,7 @@ def tsx_status(plc) -> dict:
         out["details"].append(("Cycle (dernier / max / min)", f"{sw[30]} / {sw[31]} / {sw[32]} ms"))
     out["details"] += flash_lines(sw)
     if raw:
-        out["details"].append(("Etat CPU (requete 4F)", f"{raw} -> {mode} (lecture a confirmer)"))
+        out["details"].append(("Etat CPU (requete 4F)", raw))
     return out
 
 
@@ -312,7 +314,7 @@ def tsx_diagnostic(plc) -> dict:
     out["parametres_cpu"] += flash_lines(sw)
     mode, raw = cpu_state(plc)
     if raw:
-        out["parametres_cpu"].append(("Etat CPU (4F)", f"{raw} -> {mode} (a confirmer)"))
+        out["parametres_cpu"].append(("Etat CPU (4F)", f"{raw} -> {mode}"))
     return out
 
 
@@ -650,6 +652,8 @@ class TsxOps:
         return {"dossier": str(self.programs), "sauvegardes": list_copies(self.programs, PROGRAM_FILE)}
 
     def _upload(self, plc, progress, text="lecture"):
+        if cpu_state(plc)[0] == "VIDE":
+            raise UniteError("l'automate n'a pas d'application (rien a copier)")
         step = "reservation de l'automate (1D)"
         try:
             plc.reserve()
