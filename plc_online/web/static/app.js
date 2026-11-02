@@ -116,8 +116,35 @@ let watchBusy = false;
 let watchPaused = false;
 const lastValues = {};
 
+const FORMAT_NAMES = { dec: "DEC", ud: "DEC non signe", hex: "HEX", bin: "BIN", real: "REAL", char: "CHAR",
+                       s5time: "S5TIME", bcd: "BCD" };
+
+function formatsFor(adresse) {
+  /** Formats that fit the size of the address ([] for a bit: always 0 / 1). */
+  const a = adresse.toUpperCase();
+  if (/^[TZC]\d+$/.test(a)) return a[0] === "T" ? ["s5time", "hex", "dec"] : ["bcd", "hex", "dec"];
+  if (/\.\d$/.test(a) && !/DB[BWD]\d+$/.test(a)) return [];
+  if (/^([EIAQM]D|DB\d+\.DBD)/.test(a)) return ["dec", "ud", "hex", "bin", "real", "char"];
+  if (/^([EIAQM]B|DB\d+\.DBB)/.test(a)) return ["dec", "hex", "bin", "char"];      // a byte has no sign
+  return ["dec", "ud", "hex", "bin", "char"];
+}
+
+function fullAddress(w) {
+  return w.adresse + (w.format ? ":" + w.format : "");
+}
+
+function splitAddress(text) {
+  const [adresse, format = ""] = text.trim().split(":");
+  const formats = formatsFor(adresse);
+  const f = format.toLowerCase();
+  return { adresse, format: formats.includes(f) ? f : (formats[0] || "") };
+}
+
 function loadWatch() {
-  try { return JSON.parse(localStorageGet("table-surveillance")) || []; } catch { return []; }
+  try {
+    const rows = JSON.parse(localStorageGet("table-surveillance")) || [];
+    return rows.map((w) => ({ ...splitAddress(w.format ? w.adresse + ":" + w.format : w.adresse), libelle: w.libelle || "" }));
+  } catch { return []; }
 }
 function saveWatch() {
   localStorageSet("table-surveillance", JSON.stringify(watch));
@@ -134,19 +161,39 @@ function renderWatchRows() {
   if (!watch.length) {
     const tr = el("tr");
     const td = cell("Ajoutez une adresse (ex. MW10) ou importez une table.", "empty");
-    td.colSpan = 5;
+    td.colSpan = 6;
     tr.append(td);
     tbody.replaceChildren(tr);
     return;
   }
   tbody.replaceChildren(...watch.map((w, i) => {
     const tr = el("tr");
-    tr.dataset.adresse = w.adresse;
+    tr.dataset.adresse = fullAddress(w);
     const label = el("input", "libelle");
     label.value = w.libelle || "";
     label.placeholder = "libelle";
     label.addEventListener("change", () => { w.libelle = label.value; saveWatch(); });
-    const value = el("span", "valeur", lastValues[w.adresse] ?? "…");
+    const value = el("span", "valeur", lastValues[fullAddress(w)] ?? "…");
+    const formats = formatsFor(w.adresse);
+    let fmt;
+    if (formats.length) {
+      fmt = el("select", "format");
+      fmt.title = "Format d'affichage";
+      for (const f of formats) {
+        const o = el("option", "", FORMAT_NAMES[f]);
+        o.value = f;
+        fmt.append(o);
+      }
+      fmt.value = w.format;
+      fmt.addEventListener("change", () => {
+        w.format = fmt.value;
+        saveWatch();
+        renderWatchRows();
+        readWatch();
+      });
+    } else {
+      fmt = el("span", "sub", "BOOL");
+    }
     const input = el("input", "nouvelle");
     input.placeholder = "—";
     input.addEventListener("keydown", (e) => { if (e.key === "Enter") writeValues(); });
@@ -154,7 +201,7 @@ function renderWatchRows() {
     del.type = "button";
     del.title = "Retirer " + w.adresse;
     del.addEventListener("click", () => { watch.splice(i, 1); saveWatch(); renderWatchRows(); });
-    tr.append(cell(w.adresse, "mono", "Adresse"), cell(label, "", "Libelle"), cell(value, "", "Valeur"),
+    tr.append(cell(w.adresse, "mono", "Adresse"), cell(label, "", "Libelle"), cell(fmt, "", "Format"), cell(value, "", "Valeur"),
               cell(input, "", "Nouvelle"), cell(del, "", ""));
     return tr;
   }));
@@ -184,7 +231,7 @@ async function readWatch() {
   if (watchBusy || !watch.length) return;
   watchBusy = true;
   try {
-    renderWatchValues(await api("POST", "/api/valeurs", { adresses: watch.map((w) => w.adresse) }));
+    renderWatchValues(await api("POST", "/api/valeurs", { adresses: watch.map(fullAddress) }));
   } catch (e) {
     setWatchMsg(e.message, true);
     if (e.status === 409 || e.status === 502) { stopWatch(); stopPolling(); setConnected(false); }
@@ -205,14 +252,14 @@ function stopWatch() {
   watchTimer = null;
 }
 
-function addWatch(adresse, libelle) {
-  adresse = adresse.trim();
-  if (!adresse) return false;
-  if (watch.some((w) => w.adresse.toUpperCase() === adresse.toUpperCase())) {
-    setWatchMsg(adresse + " est deja dans la table.", true);
+function addWatch(text, libelle) {
+  if (!text.trim()) return false;
+  const row = splitAddress(text);
+  if (watch.some((w) => fullAddress(w).toUpperCase() === fullAddress(row).toUpperCase())) {
+    setWatchMsg(row.adresse + " est deja dans la table.", true);
     return false;
   }
-  watch.push({ adresse, libelle: (libelle || "").trim() });
+  watch.push({ ...row, libelle: (libelle || "").trim() });
   return true;
 }
 
@@ -249,7 +296,7 @@ async function writeValues() {
 }
 
 function exportWatch() {
-  const text = "# Table de surveillance PLC Online\n" + watch.map((w) => (w.adresse + " " + (w.libelle || "")).trim()).join("\n") + "\n";
+  const text = "# Table de surveillance PLC Online\n" + watch.map((w) => (fullAddress(w) + " " + (w.libelle || "")).trim()).join("\n") + "\n";
   const a = el("a");
   a.href = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
   a.download = "table_surveillance.txt";
