@@ -295,6 +295,17 @@ MODULE_NAMES = {
 }
 
 
+# Fault byte per position (request 93 07 02 68 ...): 01 seen for an unpowered input module
+# (supply monitoring on). PL7 tells "alimentation ou actionneur" apart from "module absent ou
+# different": the code should differ; collected from the field before naming them.
+FAULT_CODES = {}
+
+
+def fault_text(code: int) -> str:
+    known = FAULT_CODES.get(code)
+    return f"DEFAUT (code {code:02X}{' : ' + known if known else ''})"
+
+
 def module_rows(config, faults) -> list:
     """Rack table rows (same shape as the S7-300 one): configured modules, fault per position."""
     rows = []
@@ -309,15 +320,14 @@ def module_rows(config, faults) -> list:
         rows.append({"emplacement": pos, "type": kind, "adresse": address,
                      "configure": {"code": "", "nom": ref, "references": MODULE_NAMES.get(ref, "")},
                      "en_place": None,
-                     "etat": "ok" if fault == 0 else "DEFAUT MODULE (absent, non alimente ou voie en defaut)"
-                     if fault else "non lu",
+                     "etat": "ok" if fault == 0 else fault_text(fault) if fault else "non lu",
                      "ok": fault != 1 and not (fault and fault > 0)})
     if faults is not None:
         configured = {p for p, _ in config}
         for pos, f in enumerate(faults):
             if f and pos not in configured and pos > 0:
                 rows.append({"emplacement": pos, "type": "?", "adresse": "", "configure": None, "en_place": None,
-                             "etat": "DEFAUT sur une position non configuree", "ok": False})
+                             "etat": f"position non configuree, {fault_text(f)}", "ok": False})
     return sorted(rows, key=lambda r: r["emplacement"])
 
 
