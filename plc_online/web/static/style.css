@@ -67,7 +67,7 @@ body {
 
 .layout {
   display: grid;
-  grid-template-columns: minmax(260px, 340px) 1fr;
+  grid-template-columns: minmax(240px, 300px) 1fr;
   gap: 16px;
   padding: 16px 20px;
   max-width: 1200px;
@@ -168,7 +168,41 @@ h3 { margin: 22px 0 10px; font-size: 13px; text-transform: uppercase; letter-spa
 
 .maj { margin: 22px 0 0; font-size: 12px; color: var(--muted); }
 
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin: -4px 0 16px; }
+.tab {
+  font: inherit; font-weight: 600; color: var(--muted);
+  background: none; border: none; border-bottom: 2px solid transparent;
+  padding: 8px 14px; cursor: pointer; margin-bottom: -1px;
+}
+.tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+.diag-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.diag-head .hint { margin: 0; }
+
+.table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; }
+.table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.table th, .table td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.table th { font-size: 12px; color: var(--muted); font-weight: 600; background: var(--bg); white-space: nowrap; }
+.table tr:last-child td { border-bottom: none; }
+.table .mono { font-family: Consolas, monospace; white-space: nowrap; }
+.table .sub { display: block; color: var(--muted); font-size: 12px; }
+.table .sub.mono { white-space: normal; overflow-wrap: anywhere; }
+.table tr.bad td { background: color-mix(in srgb, var(--fault) 8%, transparent); }
+.table .empty { color: var(--muted); text-align: center; }
+
+.badge { display: inline-block; padding: 2px 8px; border-radius: 6px; font-size: 12px; font-weight: 700; white-space: nowrap; }
+.badge.ok { background: color-mix(in srgb, var(--run) 18%, transparent); color: var(--run); }
+.badge.bad { background: var(--alert-bg); color: var(--alert-text); white-space: normal; }
+
 @media (max-width: 720px) {
   .layout { grid-template-columns: 1fr; padding: 12px 16px; }
+  .table-wrap { border: none; }
+  .table thead { display: none; }
+  .table, .table tbody, .table tr, .table td { display: block; width: 100%; }
+  .table tr { border: 1px solid var(--line); border-radius: 8px; margin-bottom: 8px; padding: 4px 0; }
+  .table td { border: none; padding: 4px 12px; display: grid; grid-template-columns: 90px 1fr; gap: 8px; }
+  .table td::before { content: attr(data-label); color: var(--muted); font-size: 12px; font-family: "Segoe UI", system-ui, sans-serif; }
+  .table td.empty { display: block; }
+  .table td.empty::before { content: none; }
   .topbar { padding: 10px 16px; }
 }

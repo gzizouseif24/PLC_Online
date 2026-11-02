@@ -6,7 +6,7 @@ import urllib.error
 import urllib.request
 
 from plc_online.protocols.s7 import S7Error
-from plc_online.web.drivers import DemoS7, DriverError, Session, s7_status
+from plc_online.web.drivers import DemoS7, DriverError, Session, s7_diagnostic, s7_status
 from plc_online.web.server import serve
 
 
@@ -32,6 +32,33 @@ class StatusTests(unittest.TestCase):
         self.assertIn(("Somme programme", "6647-0600"), s["details"])
         frce = next(v for v in s["voyants"] if v["nom"] == "FRCE")
         self.assertTrue(frce["clignote"] and frce["defaut"])
+
+
+class DiagnosticTests(unittest.TestCase):
+    def test_bench_rack_with_wrong_config(self):
+        d = s7_diagnostic(DemoS7())
+        rows = {r["emplacement"]: r for r in d["modules"]}
+        self.assertTrue(rows[2]["ok"])
+        self.assertEqual((rows[4]["adresse"], rows[4]["configure"]["nom"], rows[4]["en_place"]["nom"], rows[4]["ok"]),
+                         ("AB0..AB3", "SM 322 DO32x...", "SM 321 DI32x...", False))
+        self.assertIn("6ES7 322-1BL00-0AA0", rows[4]["configure"]["references"])
+        self.assertEqual(rows[5]["etat"], "MODULE DIFFERENT DE LA CONFIGURATION")
+        self.assertEqual(d["alertes"], ["2 emplacement(s) en defaut dans le rack 0"])
+        self.assertEqual(d["config_compilee"], "2026-09-30 15:36:16")
+        self.assertEqual([e["id"] for e in d["evenements"]], ["4302", "5961", "5961", "4301"])
+        self.assertEqual(d["parametres_cpu"][1], ("Memento de cadence", "non utilise"))
+
+    def test_one_refused_read_does_not_hide_the_rest(self):
+        plc = DemoS7()
+
+        def refused(*a):
+            raise S7Error("objet inexistant")
+        plc.diagnostic_buffer = refused
+        plc.upload_block = refused
+        d = s7_diagnostic(plc)
+        self.assertEqual(len(d["modules"]), 3)
+        self.assertIn("Tampon de diagnostic non lu : objet inexistant", d["alertes"])
+        self.assertIn("Configuration materielle non lue : objet inexistant", d["alertes"])
 
 
 class ApiTests(unittest.TestCase):
@@ -92,6 +119,12 @@ class ApiTests(unittest.TestCase):
         code, e = self.json("GET", "/api/etat")
         self.assertEqual((code, e["erreur"]), (502, "Liaison perdue : pas de reponse"))
         self.assertEqual(self.json("GET", "/api/etat")[1], {"connecte": False})
+
+    def test_diagnostic(self):
+        self.assertEqual(self.json("GET", "/api/diagnostic"), (409, {"erreur": "Pas connecte"}))
+        self.json("POST", "/api/connexion", {"marque": "s7-300", "reglages": {"mpi": 2}})
+        code, d = self.json("GET", "/api/diagnostic")
+        self.assertEqual((code, len(d["modules"]), len(d["evenements"])), (200, 3, 4))
 
     def test_brands(self):
         code, b = self.json("GET", "/api/marques")

@@ -33,10 +33,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from plc_online.protocols.s7 import (  # noqa: E402
-    AREAS, DEFAULT_DLL, PROGRAM_KINDS, S7300, S7Error, compare_blocks, parse_block, parse_cpu_parameters,
+    AREAS, DEFAULT_DLL, PROGRAM_KINDS, S7300, S7Error, compare_blocks, parse_block,
     parse_sdb1_modules, word_be)
 from plc_online.protocols.s7_catalogue import catalog_name  # noqa: E402
-from plc_online.protocols.s7_modules import MODULES  # noqa: E402
+from plc_online.protocols.s7_names import address_range, cpu_parameter_lines, module_text  # noqa: E402
 from plc_online.protocols.s7_vars import AddressError, Var, load_table  # noqa: E402
 
 BLINK = {0: "", 1: " (clignote)", 2: " (clignote lentement)"}
@@ -108,26 +108,6 @@ def cmd_diagnostic(plc):
         print(f"     {'':23}       {e['classe']}, info {e['info']}")
 
 
-def module_text(code):
-    """'SM 322 DO16x... : 6ES7 322-1BH01, -1BH10' : one code covers a family of modules
-    (same channel count and direction), so give the common name and every order number."""
-    entries = MODULES.get(code)
-    if not entries:
-        return ""
-    names = [n for _, n in entries]
-    common = names[0]
-    for n in names[1:]:
-        while not n.startswith(common):
-            common = common[:-1]
-    if len(names) > 1 and "x" in common:
-        common = common[:common.rindex("x") + 1] + "..."
-    if len(common.strip()) < 4:
-        return f"code partage par {len(entries)} modules differents (ex. {names[0]})"
-    orders = [o for o, _ in entries]
-    shown = ", ".join(o if i == 0 else o[5:] for i, o in enumerate(orders[:4]))
-    return f"{common.strip()} : {shown}" + (", ..." if len(orders) > 4 else "")
-
-
 def cmd_modules(plc, rack=0):
     mods = plc.modules(rack)
     if not mods:
@@ -186,40 +166,10 @@ def cmd_sauvegarder_config(plc, folder=None):
     print(f"\nConfiguration copiee : {folder}/  ({len(numbers)} SDB, {total} octets, + resume.txt)")
 
 
-OB3X_DEFAULT = {30: 5000, 31: 2000, 32: 1000, 33: 500, 34: 200, 35: 100, 36: 50, 37: 20, 38: 10}
-
-
 def print_cpu_parameters(sdb0: bytes):
-    p = parse_cpu_parameters(sdb0)
-    default = "valeur par defaut de la CPU (non modifiee dans HW Config)"
     print("Parametres CPU (SDB 0) :")
-    if "surveillance_cycle_ms" in p:
-        print(f"   Surveillance du cycle  : {p['surveillance_cycle_ms']} ms   "
-              f"(charge communication {p['charge_communication']} %)")
-    else:
-        print(f"   Surveillance du cycle  : {default}")
-    mb = p.get("mem_cadence")
-    print(f"   Memento de cadence     : {f'MB{mb}' if mb is not None else 'non utilise'}")
-    r = p.get("remanence")
-    if r:
-        parts = [f"MB0..MB{r['MB'] - 1}" if r["MB"] else "aucun MB",
-                 f"T0..T{r['T'] - 1}" if r["T"] else "aucune temporisation",
-                 f"Z0..Z{r['Z'] - 1}" if r["Z"] else "aucun compteur"]
-        print(f"   Remanence              : {', '.join(parts)}")
-    else:
-        print(f"   Remanence              : {default}")
-    ob = p.get("alarmes_cycliques")
-    if ob:
-        interval, phase = ob.get(35, (0, 0))
-        print(f"   Alarme cyclique OB35   : toutes les {interval} ms" + (f", decalage {phase} ms" if phase else ""))
-        changed = [f"OB{n} {v[0]} ms" for n, v in sorted(ob.items())
-                   if n != 35 and (v[0] != OB3X_DEFAULT.get(n) or v[1])]
-        if changed:
-            print(f"      autres alarmes cycliques modifiees : {', '.join(changed)}")
-    else:
-        print(f"   Alarme cyclique OB35   : {default} (100 ms)")
-    if p["inconnus"]:
-        print(f"   Autres enregistrements non decodes : {', '.join(f'{k:02X}' for k in p['inconnus'])}")
+    for label, text in cpu_parameter_lines(sdb0):
+        print(f"   {label:<22} : {text}")
     print()
 
 
@@ -240,9 +190,7 @@ def cmd_config(sdb1: bytes, actual=None, sdb0=None):
         if m["type"] == "CPU":
             print(f"   emplacement {m['emplacement']:<2}  CPU   type {m['code']:04X}")
             continue
-        prefix = {"entrees": "EB", "sorties": "AB"}.get(m["type"], "B")
-        end = m["adresse"] + max(m["octets"], 1) - 1
-        addr = f"{prefix}{m['adresse']}" + (f"..{prefix}{end}" if end > m["adresse"] else "")
+        addr = address_range(m["type"], m["adresse"], m["octets"])
         name = module_text(m["code"]) or "module inconnu"
         print(f"   emplacement {m['emplacement']:<2}  {m['type']:<8} {addr:<12} type {m['code']:04X}  {name}")
         if actual is not None:

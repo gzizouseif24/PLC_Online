@@ -6,6 +6,7 @@ JSON API:
     GET  /api/marques       brands and their connection settings
     POST /api/connexion     {"marque": "s7-300", "reglages": {"mpi": 2}}  -> status
     GET  /api/etat          status of the connected PLC ({"connecte": false} if none)
+    GET  /api/diagnostic    diagnostic buffer, rack (configured vs plugged in), CPU parameters
     POST /api/deconnexion
 Errors: {"erreur": "message for the technician"} with HTTP 400 (bad request), 409 (not
 connected), 502 (the PLC did not answer).
@@ -51,6 +52,8 @@ def make_handler(session: Session):
                 if not session.connected:
                     return self.send_json(200, {"connecte": False})
                 return self.api(lambda: session.status())
+            if path == "/api/diagnostic":
+                return self.api(lambda: session.diagnostic())
             if path == "/":
                 path = "/index.html"
             file = (STATIC / path.lstrip("/")).resolve()

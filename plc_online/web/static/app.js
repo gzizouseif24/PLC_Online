@@ -63,7 +63,7 @@ function localStorageSet(key, value) {
 
 function renderStatus(s) {
   $("etat-vide").hidden = true;
-  $("etat-plein").hidden = false;
+  if ($("vue-diag").hidden) $("etat-plein").hidden = false;
   $("modele").textContent = s.modele || s.marque;
   $("reference").textContent = s.reference || "";
 
@@ -92,12 +92,99 @@ function renderStatus(s) {
   setPill(faults ? "err" : "on", `${s.marque} — ${s.mode}${faults ? " — " + faults + " alerte(s)" : ""}`);
 }
 
+function showTab(id) {
+  for (const t of document.querySelectorAll(".tab")) {
+    const on = t.dataset.tab === id;
+    t.classList.toggle("active", on);
+    t.setAttribute("aria-selected", on);
+  }
+  for (const v of document.querySelectorAll(".vue")) v.hidden = v.id !== id;
+  if (id === "vue-diag" && !diagLoaded) loadDiagnostic();
+}
+
+let diagLoaded = false;
+
+function cell(text, cls, label) {
+  const td = el("td", cls);
+  if (label) td.dataset.label = label;
+  if (text instanceof Node) td.append(text); else td.textContent = text ?? "";
+  return td;
+}
+
+function moduleCell(m) {
+  const box = el("div");
+  if (!m) { box.append(el("span", "sub", "—")); return box; }
+  box.append(el("span", "", m.nom), el("span", "sub mono", m.code + (m.references ? " · " + m.references : "")));
+  return box;
+}
+
+function rows(tbody, items, render, emptyText, cols) {
+  if (!items.length) {
+    const tr = el("tr");
+    const td = cell(emptyText, "empty");
+    td.colSpan = cols;
+    tr.append(td);
+    tbody.replaceChildren(tr);
+    return;
+  }
+  tbody.replaceChildren(...items.map(render));
+}
+
+function renderDiagnostic(d) {
+  $("diag-alertes").replaceChildren(...d.alertes.map((a) => el("div", "alerte", a)));
+  $("diag-info").textContent = d.config_compilee
+    ? "Configuration materielle compilee le " + d.config_compilee + "."
+    : "Configuration materielle non lue.";
+
+  rows($("table-rack").tBodies[0], d.modules, (m) => {
+    const tr = el("tr", m.ok ? "" : "bad");
+    const state = el("span", "badge " + (m.ok ? "ok" : "bad"), m.ok ? "OK" : m.etat);
+    tr.append(cell(String(m.emplacement), "mono", "Empl."), cell(m.type, "", "Type"), cell(m.adresse, "mono", "Adresses"),
+              cell(moduleCell(m.configure), "", "Configure"), cell(moduleCell(m.en_place), "", "En place"),
+              cell(state, "", "Etat"));
+    return tr;
+  }, "Aucun module lu", 6);
+
+  rows($("table-events").tBodies[0], d.evenements, (e) => {
+    const tr = el("tr");
+    tr.title = "Info : " + e.info;
+    const text = el("span", "", e.texte);
+    const box = el("div");
+    box.append(text);
+    if (!e.entrant) box.append(el("span", "sub", "evenement sortant"));
+    tr.append(cell(e.date, "mono", "Date"), cell(e.id, "mono", "ID"), cell(box, "", "Evenement"),
+              cell(e.classe, "", "Classe"));
+    return tr;
+  }, "Tampon vide", 4);
+
+  $("params").replaceChildren(...d.parametres_cpu.flatMap(([k, v]) => [el("dt", "", k), el("dd", "", v)]));
+}
+
+async function loadDiagnostic() {
+  const btn = $("btn-diag");
+  btn.disabled = true;
+  $("diag-msg").textContent = "Lecture en cours...";
+  $("diag-msg").className = "msg";
+  try {
+    renderDiagnostic(await api("GET", "/api/diagnostic"));
+    diagLoaded = true;
+    $("diag-msg").textContent = "Lu a " + new Date().toLocaleTimeString("fr-FR");
+  } catch (e) {
+    $("diag-msg").textContent = e.message;
+    $("diag-msg").className = "msg err";
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 function setConnected(connected) {
   $("btn-deconnecter").hidden = !connected;
   $("btn-connecter").textContent = connected ? "Reconnecter" : "Connecter";
+  $("tabs").hidden = !connected;
   if (!connected) {
     $("etat-vide").hidden = false;
-    $("etat-plein").hidden = true;
+    for (const v of document.querySelectorAll(".vue")) v.hidden = true;
+    diagLoaded = false;
     setPill("off", "Non connecte");
   }
 }
@@ -144,8 +231,10 @@ async function connect(ev) {
   setMsg("Connexion...");
   stopPolling();
   try {
+    diagLoaded = false;
     renderStatus(await api("POST", "/api/connexion", { marque, reglages }));
     setConnected(true);
+    showTab("etat-plein");
     setMsg("");
     startPolling();
   } catch (e) {
@@ -179,6 +268,8 @@ async function init() {
   renderSettings();
   $("form-connexion").addEventListener("submit", connect);
   $("btn-deconnecter").addEventListener("click", disconnect);
+  $("btn-diag").addEventListener("click", loadDiagnostic);
+  for (const t of document.querySelectorAll(".tab")) t.addEventListener("click", () => showTab(t.dataset.tab));
 
   // already connected (page reloaded): show the state straight away
   const s = await api("GET", "/api/etat").catch(() => ({ connecte: false }));

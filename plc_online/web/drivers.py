@@ -6,8 +6,11 @@ show without knowing the brand. S7-300 first; Omron, TSX... plug in with the sam
 import random
 import threading
 
-from plc_online.protocols.s7 import S7300, S7Error
+from pathlib import Path
+
+from plc_online.protocols.s7 import S7300, S7Error, parse_block, parse_sdb1_modules
 from plc_online.protocols.s7_catalogue import catalog_name
+from plc_online.protocols.s7_names import address_range, cpu_parameter_lines, module_text
 
 FAULT_LEDS = {"SF": "Defaut groupe", "BAF": "Defaut pile", "BUS1F": "Defaut bus MPI/DP",
               "BUS2F": "Defaut bus DP", "FRCE": "Forcage actif"}
@@ -61,6 +64,76 @@ def s7_status(plc) -> dict:
     return out
 
 
+def module_info(code: int, kind: str) -> dict:
+    """{'code': 'AFD0', 'nom': 'SM 322 DO16x...', 'references': '6ES7 322-1BH01-0AA0, ...'}"""
+    if kind == "CPU":
+        return {"code": f"{code:04X}", "nom": "CPU", "references": ""}
+    name, _, refs = module_text(code).partition(" : ")
+    return {"code": f"{code:04X}", "nom": name or "Module inconnu", "references": refs}
+
+
+def s7_diagnostic(plc, rack: int = 0) -> dict:
+    """Diagnostic buffer, rack (configured vs plugged in) and CPU parameters of an S7-300.
+    Each part is read on its own: one refused read does not hide the others."""
+    out = {"evenements": [], "modules": [], "parametres_cpu": [], "config_compilee": "", "alertes": []}
+    try:
+        for e in plc.diagnostic_buffer():
+            out["evenements"].append({"date": e["date"], "id": f"{e['id']:04X}", "classe": e["classe"],
+                                      "texte": e["texte"] or "Evenement non repertorie", "entrant": e["entrant"],
+                                      "info": e["info"]})
+    except S7Error as e:
+        out["alertes"].append(f"Tampon de diagnostic non lu : {e}")
+
+    actual = {}
+    try:
+        actual = {m["emplacement"]: m for m in plc.modules(rack)}
+    except S7Error as e:
+        out["alertes"].append(f"Modules en place non lus : {e}")
+    configured = {}
+    try:
+        sdb1 = plc.upload_block("SDB", 1)
+        out["config_compilee"] = parse_block(sdb1)["date"]
+        configured = {m["emplacement"]: m for m in parse_sdb1_modules(sdb1)}
+    except S7Error as e:
+        out["alertes"].append(f"Configuration materielle non lue : {e}")
+    try:
+        out["parametres_cpu"] = cpu_parameter_lines(plc.upload_block("SDB", 0))
+    except S7Error as e:
+        out["alertes"].append(f"Parametres CPU non lus : {e}")
+
+    for slot in sorted(set(actual) | set(configured)):
+        c, a = configured.get(slot), actual.get(slot)
+        kind = (c or a)["type"]
+        row = {"emplacement": slot, "type": kind, "adresse": "", "configure": None, "en_place": None,
+               "etat": a["etat"] if a else "absent", "ok": True}
+        if c and kind != "CPU":
+            row["adresse"] = address_range(c["type"], c["adresse"], c["octets"])
+        elif a and kind != "CPU":
+            row["adresse"] = f"{a['adresse']}"
+        conf_code = c["code"] if c else (a["type_config"] if a else 0)
+        real_code = a["type_reel"] if a else 0
+        if conf_code:
+            row["configure"] = module_info(conf_code, kind)
+        if real_code:
+            row["en_place"] = module_info(real_code, kind)
+        if kind != "CPU" and conf_code and real_code and conf_code != real_code:
+            row["ok"] = False
+            row["etat"] = "MODULE DIFFERENT DE LA CONFIGURATION"
+        elif kind != "CPU" and conf_code and not real_code:
+            row["ok"] = False
+            row["etat"] = "AUCUN MODULE EN PLACE"
+        elif a and a["etat"] != "ok":
+            row["ok"] = False
+        out["modules"].append(row)
+    bad = [r for r in out["modules"] if not r["ok"]]
+    if bad:
+        out["alertes"].append(f"{len(bad)} emplacement(s) en defaut dans le rack {rack}")
+    return out
+
+
+SDB_DEMO = Path(__file__).resolve().parents[2] / "research" / "siemens" / "sdb" / "1_config_fausse"
+
+
 class DemoS7:
     """Simulated S7-300 (bench values of 31/10/2026) to show and test the page without a PLC.
     The mode changes now and then, SF lights up in STOP."""
@@ -82,6 +155,30 @@ class DemoS7:
         return {"cle": "RUN-P", "protection_effective": 1, "protection_parametree": 0,
                 "somme_config_materielle": (0x5656, 0x2A00), "somme_programme": (0x6647, 0x0600),
                 "sommes_valides": False}
+
+    def diagnostic_buffer(self):
+        def ev(i, date, info="FF06 C17B 0001 0004 8B07"):
+            from plc_online.protocols.s7_events import EVENT_CLASSES, event_text
+            return {"id": i, "classe": EVENT_CLASSES.get(i >> 12, ""), "texte": event_text(i),
+                    "entrant": bool(i >> 8 & 1), "info": info, "date": date}
+        return [ev(0x4302, "02/11/2026 07:41:03.120", "FF68 C010 0008 0000 0000"),
+                ev(0x5961, "02/11/2026 07:41:02.880"),
+                ev(0x5961, "02/11/2026 07:41:02.870", "FF06 C17B 0001 0000 8B07"),
+                ev(0x4301, "02/11/2026 07:40:55.010", "FF84 4304 0000 0000 0000")]
+
+    def modules(self, rack=0):
+        def m(slot, addr, conf, real, kind, etat):
+            return {"rack": rack, "emplacement": slot, "adresse": addr, "type": kind, "etat": etat,
+                    "type_config": conf, "type_reel": real, "different": conf != real}
+        return [m(2, 0x7FFF, 0x00C0, 0x00C0, "CPU", "ok"),
+                m(4, 0, 0xAFD8, 0x9FC3, "sorties", "TYPE DIFFERENT DE LA CONFIG, non disponible"),
+                m(5, 4, 0xAFC8, 0xAFD0, "sorties", "TYPE DIFFERENT DE LA CONFIG, non disponible")]
+
+    def upload_block(self, kind, number):
+        try:
+            return (SDB_DEMO / f"{kind}{number}.bin").read_bytes()
+        except OSError:
+            raise S7Error(f"{kind}{number} absent de la demo") from None
 
     def close(self):
         pass
@@ -132,6 +229,16 @@ class Session:
         out["connecte"] = True
         out["connexion"] = {"marque": self.brand, **self.settings}
         return out
+
+    def diagnostic(self) -> dict:
+        with self.lock:
+            if self.plc is None:
+                raise DriverError("Pas connecte")
+            try:
+                return s7_diagnostic(self.plc, int(self.settings.get("rack", 0) or 0))
+            except S7Error as e:
+                self._close()
+                raise DriverError(f"Liaison perdue : {e}") from None
 
     def disconnect(self):
         with self.lock:
