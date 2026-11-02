@@ -534,6 +534,13 @@ def config_codes(blob: bytes) -> dict:
     return out
 
 
+def config_checksum(blob: bytes) -> str:
+    """Somme de controle de la configuration d'une image (partie BAC, la derniere qui commence
+    par DD DD 77 77), comme la renvoie 92 07 0C 02 00 : octets 44-45 de l'en-tete."""
+    i = blob.rfind(b"\xdd\xdd\x77\x77")
+    return blob[i + 44:i + 46].hex() if i >= 0 and len(blob) >= i + 46 else ""
+
+
 def parse_config(blob: bytes) -> list:
     """[(position, reference)] des modules configures, lus dans la partie configuration
     (EXE/CONF/BAC.BIN, a la fin de l'image) : 'FF <position> TSX DEZ 32D2'. Un module format

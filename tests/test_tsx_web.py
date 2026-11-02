@@ -58,6 +58,21 @@ class TsxWebTests(unittest.TestCase):
             self.assertEqual(len(self.s.diagnostic()["modules"]), 4)
         self.assertEqual(len(uploads), 1)                          # program read once, then kept
 
+    def test_reserved_by_pl7_uses_a_matching_copy(self):
+        self.s.plc.app = self.s.plc.app[:-100] + b"\xdd\xdd\x77\x77" + bytes(40) + b"\x6b\x93" + bytes(54)
+        self.s.save_program("copie")
+        self.wait()
+        self.s.tsx.configs.clear()
+        self.s.plc.reserved_elsewhere = True                       # PL7 connected on the other port
+        d = self.s.diagnostic()
+        self.assertEqual(len(d["modules"]), 4)
+        self.assertTrue(any("reserve par un autre poste" in a for a in d["alertes"]))
+
+    def test_reserved_and_no_copy(self):
+        self.s.plc.reserved_elsewhere = True
+        d = self.s.diagnostic()
+        self.assertTrue(any("Configuration non lue" in a for a in d["alertes"]))
+
     def test_external_fault_named(self):
         self.s.plc.io_faults[1] = 1
         rows = {m["emplacement"]: m for m in self.s.diagnostic()["modules"]}

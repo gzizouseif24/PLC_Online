@@ -187,8 +187,11 @@ class DemoTsx:
     def read_io_faults(self):
         return list(self.io_faults)
 
+    reserved_elsewhere = False
+
     def reserve(self, params=None):
-        pass
+        if self.reserved_elsewhere:
+            raise UniteError("refuse par l'automate (FD)")
 
     def release(self):
         pass
@@ -197,7 +200,7 @@ class DemoTsx:
         return {"nom": ut.app_name(self.app), "brut": f"{len(self.app)}-{random.randint(0, 9)}"}   # changes, like the PLC
 
     def app_checksums(self):
-        return (f"{sum(self.app[-200:]) & 0xFFFF:04x}", f"{sum(self.app) & 0xFFFF:04x}")
+        return (ut.config_checksum(self.app), f"{sum(self.app) & 0xFFFF:04x}")
 
     def upload(self, progress=None):
         for seg, i in enumerate(range(0, len(self.app), ut.SEGMENT_SIZE), 1):
@@ -425,8 +428,13 @@ def tsx_diagnostic(plc, config=None) -> dict:
                 statuses[pos] = plc.module_status(pos)
             except UniteError:
                 pass
+    if config and config.get("source"):
+        out["alertes"].append("Automate reserve par un autre poste (PL7 connecte ?) : configuration prise dans la "
+                              + config["source"])
     if config and config.get("erreur"):
-        out["alertes"].append(f"Configuration non lue (lecture du programme) : {config['erreur']}")
+        out["alertes"].append(f"Configuration non lue : {config['erreur']}. Fermer PL7 (ou le deconnecter), "
+                              "ou eteindre / rallumer l'automate pour liberer la reservation, puis Relire. "
+                              "Ou importer le .stx de l'application dans l'onglet Programme.")
     if config is not None or faults is not None:
         out["modules"] = module_rows(modules, faults, statuses, names)
         bad = [r for r in out["modules"] if not r["ok"]]
@@ -794,19 +802,28 @@ class TsxOps:
             return {"modules": [], "codes": {}}
         key = None
         try:
-            plc.reserve()
-            try:
-                key = (plc.nom, plc.app_checksums())
-            finally:
-                plc.release()
+            key = (plc.nom, plc.app_checksums())
         except UniteError:
-            key = None
+            try:
+                plc.reserve()
+                try:
+                    key = (plc.nom, plc.app_checksums())
+                finally:
+                    plc.release()
+            except UniteError:
+                key = None
         if key and key in self.configs:
             return self.configs[key]
         try:
             blob = self._upload(plc, lambda *a: None)
         except UniteError as e:
-            return {"modules": [], "codes": {}, "erreur": str(e)}
+            copy = self._matching_copy(key)
+            if copy is None:
+                return {"modules": [], "codes": {}, "erreur": str(e)}
+            blob, copy_id = copy
+            config = {"modules": ut.parse_config(blob), "codes": ut.config_codes(blob),
+                      "source": f"copie {copy_id} (meme configuration que l'automate)"}
+            return config
         config = {"modules": ut.parse_config(blob), "codes": ut.config_codes(blob)}
         if key:
             self.configs[key] = config
@@ -867,6 +884,20 @@ class TsxOps:
             except UniteError:
                 pass
         return blob
+
+    def _matching_copy(self, key):
+        """(image, id) of a program copy on the PC whose configuration checksum is the PLC's."""
+        if not key or not self.programs.is_dir():
+            return None
+        wanted = key[1][0]
+        for b in list_copies(self.programs, PROGRAM_FILE):
+            try:
+                blob = (self.programs / b["id"] / PROGRAM_FILE).read_bytes()
+            except OSError:
+                continue
+            if ut.config_checksum(blob) == wanted:
+                return blob, b["id"]
+        return None
 
     def _image(self, backup_id) -> bytes:
         return (_drv().backup_path(self.programs, backup_id) / PROGRAM_FILE).read_bytes()
