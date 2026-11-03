@@ -61,6 +61,7 @@ function renderSettings() {
   $("hint-s7").hidden = key !== "s7-300";
   $("hint-tsx").hidden = key !== "tsx";
   $("hint-wago").hidden = key !== "wago";
+  if (key === "wago") loadCards();
 }
 
 async function loadPorts() {
@@ -894,32 +895,127 @@ function rows(tbody, items, render, emptyText, cols) {
 
 // ---- WAGO: couplers on the network ----
 
-async function searchWago() {
-  const btn = $("btn-chercher");
-  const msg = $("chercher-msg");
-  btn.disabled = true;
-  msg.className = "msg";
-  msg.textContent = "Recherche sur les reseaux du PC (port 502)...";
-  $("chercher-liste").replaceChildren();
+function wagoMsg(text, isError) {
+  const m = $("chercher-msg");
+  m.textContent = text;
+  m.className = "msg" + (isError ? " err" : "");
+}
+
+function wagoIpInput() {
+  return $("reglages").querySelector("input[name=ip]");
+}
+
+function useIp(ip) {
+  const input = wagoIpInput();
+  if (input) input.value = ip;
+  wagoMsg(`Adresse ${ip} reprise : cliquer sur Connecter.`);
+}
+
+async function loadCards() {
   try {
-    const ip = $("reglages").querySelector("input[name=ip]");
-    const r = await api("POST", "/api/wago/chercher", { ip: ip ? ip.value.trim() : "" });
-    msg.textContent = (r.reseaux.length ? "Reseaux du PC : " + r.reseaux.join(", ") + ". " : "Aucun reseau sur le PC. ")
-      + (r.trouves.length ? r.trouves.length + " appareil(s) Modbus :" : "Aucun appareil Modbus TCP trouve.");
-    $("chercher-liste").replaceChildren(...r.trouves.map((t) => {
-      const b = el("button", "btn" + (t.wago ? " btn-primary" : ""), `${t.ip} — ${t.modele}`);
-      b.type = "button";
-      b.addEventListener("click", () => { if (ip) ip.value = t.ip; });
-      return b;
+    const r = await api("GET", "/api/reseau/cartes");
+    $("wago-carte-box").hidden = !r.windows;
+    const saved = localStorageGet("wago-carte");
+    $("wago-carte").replaceChildren(...r.cartes.map((c) => {
+      const o = el("option");
+      o.value = c.nom;
+      const ips = c.adresses.map((a) => a.ip).join(", ") || "pas d'adresse";
+      o.textContent = `${c.nom} (${c.etat}) — ${ips}`;
+      if (c.nom === saved || (!saved && c.etat === "connecte" && /ethernet/i.test(c.nom + c.description))) o.selected = true;
+      return o;
     }));
-    if (!r.trouves.length) msg.textContent += " Verifier : cable, voyants LINK du coupleur, adresse IP du PC dans le meme reseau "
-      + "que le coupleur (micro-interrupteurs du coupleur = dernier chiffre en 192.168.1.x), pare-feu.";
+  } catch { $("wago-carte-box").hidden = true; }
+}
+
+function card() {
+  const c = $("wago-carte").value;
+  if (c) localStorageSet("wago-carte", c);
+  return c;
+}
+
+async function wagoAction(btn, text, work) {
+  const btns = ["btn-auto", "btn-balayer", "btn-ip-pc", "btn-pc-auto"].map($);
+  for (const b of btns) b.disabled = true;
+  wagoMsg(text);
+  try {
+    await work();
   } catch (e) {
-    msg.textContent = e.message;
-    msg.className = "msg err";
+    wagoMsg(e.message, true);
   } finally {
-    btn.disabled = false;
+    for (const b of btns) b.disabled = false;
+    loadCards();
   }
+}
+
+function deviceRows(found) {
+  return found.map((t) => {
+    const row = el("div", "trouve");
+    const b = el("button", "btn" + (t.wago ? " btn-primary" : ""), "Utiliser");
+    b.type = "button";
+    b.addEventListener("click", () => useIp(t.ip));
+    row.append(el("span", "mono", t.ip), el("span", "grow", t.modele + (t.firmware ? " — firmware " + t.firmware : "")), b);
+    return row;
+  });
+}
+
+function requestRows(requests) {
+  return requests.map((d) => {
+    const row = el("div", "trouve");
+    const ip = el("input");
+    ip.value = localStorageGet("wago-ip-donnee") || "192.168.1.10";
+    ip.setAttribute("aria-label", "Adresse a donner au coupleur");
+    const b = el("button", "btn btn-primary", "Donner cette adresse");
+    b.type = "button";
+    b.addEventListener("click", () => wagoAction(b, "Adresse en cours d'envoi (fenetre administrateur possible, jusqu'a 60 s)...", async () => {
+      localStorageSet("wago-ip-donnee", ip.value.trim());
+      const pcIp = ip.value.trim().split(".").slice(0, 3).join(".") + ".200";
+      const r = await api("POST", "/api/wago/donner", { carte: card(), mac: d.mac, ip: ip.value.trim(), ip_pc: pcIp });
+      wagoMsg(r.texte, !r.ok);
+      if (r.ok) useIp(r.ip);
+    }));
+    row.append(el("span", "mono", d.mac), el("span", "grow", (d.wago ? "Coupleur WAGO" : "Appareil") + " qui demande une adresse (" + d.type + ")"), ip, b);
+    return row;
+  });
+}
+
+async function autoSearch() {
+  await wagoAction($("btn-auto"), "Recherche : table ARP, reseaux du PC, puis ecoute DHCP / BootP (environ 15 s)...", async () => {
+    const r = await api("POST", "/api/wago/auto", {});
+    const wago = r.trouves.filter((t) => t.wago);
+    const rows = deviceRows(r.trouves).concat(requestRows(r.demandes));
+    $("chercher-liste").replaceChildren(...rows);
+    if (wago.length === 1) { useIp(wago[0].ip); return; }
+    if (wago.length) { wagoMsg(`${wago.length} coupleurs WAGO trouves : choisir.`); return; }
+    if (r.demandes.length) {
+      wagoMsg("Le coupleur n'a pas d'adresse IP et en demande une (mode DHCP / BootP) : choisir l'adresse a lui donner. "
+              + "Le PC prendra .200 dans le meme reseau.");
+      return;
+    }
+    let text = "Rien trouve sur les reseaux du PC (" + (r.reseaux.join(", ") || "aucun") + ") et aucune demande d'adresse entendue. ";
+    if (r.arp.length) text += "Carte WAGO vue dans la table ARP : " + r.arp.map((a) => a.ip).join(", ") + ". ";
+    if (r.erreurs.length) text += "Ecoute impossible (" + r.erreurs.join("; ") + "). ";
+    text += "Le coupleur a donc probablement une adresse fixe dans un autre reseau : Balayer les reseaux courants. "
+      + "Ou : eteindre / rallumer le coupleur et relancer (il demande une adresse au demarrage).";
+    wagoMsg(text, true);
+  });
+}
+
+async function sweepNetworks() {
+  if (!confirm("Le PC va prendre une adresse dans chaque reseau courant le temps du balayage "
+               + "(fenetre administrateur Windows). Continuer ?")) return;
+  await wagoAction($("btn-balayer"), "Balayage de 9 reseaux courants (1 minute environ)...", async () => {
+    const r = await api("POST", "/api/wago/balayer", { carte: card() });
+    $("chercher-liste").replaceChildren(...deviceRows(r.trouves));
+    const wago = r.trouves.filter((t) => t.wago);
+    if (wago.length === 1) { useIp(wago[0].ip); wagoMsg(`Coupleur trouve en ${wago[0].ip}, PC garde ${r.pc.join(", ")} : Connecter.`); return; }
+    wagoMsg(r.trouves.length ? "Appareils trouves : choisir." : "Rien dans les reseaux courants ("
+      + r.reseaux.join(", ") + ")." + (r.remis_auto ? " PC remis en automatique." : "")
+      + " Mettre les micro-interrupteurs d'adresse du coupleur sur une valeur (ex. 10) et le redemarrer.", !r.trouves.length);
+  });
+}
+
+async function searchWago() {
+  await autoSearch();
 }
 
 // ---- rack modules offered in the watch table ----
@@ -1131,6 +1227,17 @@ async function init() {
   $("btn-deconnecter").addEventListener("click", disconnect);
   $("btn-diag").addEventListener("click", loadDiagnostic);
   $("btn-chercher").addEventListener("click", searchWago);
+  $("btn-auto").addEventListener("click", autoSearch);
+  $("btn-balayer").addEventListener("click", sweepNetworks);
+  $("btn-ip-pc").addEventListener("click", () => wagoAction($("btn-ip-pc"), "Changement de l'adresse du PC (fenetre administrateur)...", async () => {
+    const ip = $("wago-ip-pc").value.trim();
+    await api("POST", "/api/reseau/adresse", { carte: card(), ip });
+    wagoMsg(`PC en ${ip} sur ${card()}.`);
+  }));
+  $("btn-pc-auto").addEventListener("click", () => wagoAction($("btn-pc-auto"), "Retour en automatique (fenetre administrateur)...", async () => {
+    await api("POST", "/api/reseau/auto", { carte: card() });
+    wagoMsg(`${card()} remis en automatique (DHCP).`);
+  }));
   $("btn-rack-vars").addEventListener("click", async () => {
     const b = $("btn-rack-vars");
     b.disabled = true;

@@ -1,6 +1,7 @@
 """WAGO 750 couplers in the web interface: status, module list, watch table (Modbus TCP)."""
 import ipaddress
 import re
+import time
 
 
 from plc_online.protocols import wago as wg
@@ -37,6 +38,125 @@ def search(extra=()):
         return wg.search(extra)
     except OSError as e:
         raise _drv().DriverError(f"Recherche impossible : {e}") from None
+
+
+# ---- automatic search and PC network settings ----
+
+# networks tried by "balayer": usual factory / plant networks; the PC takes .253 in each
+COMMON_NETWORKS = ["192.168.1", "192.168.0", "192.168.2", "192.168.10", "192.168.100", "192.168.178",
+                   "10.0.0", "10.0.1", "172.16.0"]
+
+
+def _net():
+    from plc_online import netconf
+    return netconf
+
+
+def _net_call(action):
+    netconf = _net()
+    try:
+        return action(netconf)
+    except netconf.NetError as e:
+        raise _drv().DriverError(str(e)) from None
+    except OSError as e:
+        raise _drv().DriverError(f"Reseau : {e}") from None
+
+
+def adapters() -> dict:
+    netconf = _net()
+    try:
+        cards = netconf.adapters()
+    except (netconf.NetError, OSError):
+        cards = []
+    return {"cartes": cards, "windows": netconf.windows(), "admin": netconf.is_admin()}
+
+
+def auto_search(listen_seconds: float = 12.0) -> dict:
+    """1. WAGO cards in the ARP table, 2. Modbus TCP on the PC's networks, 3. if no WAGO found:
+    the coupler asking for an address (DHCP / BootP), heard on UDP 67."""
+    from plc_online.protocols import dhcp
+    netconf = _net()
+    arp = [a for a in netconf.arp_table() if a["wago"]]
+    try:
+        found = wg.search([a["ip"] for a in arp])
+    except OSError as e:
+        found = {"reseaux": [], "trouves": [], "erreur": str(e)}
+    out = {"arp": arp, "reseaux": found["reseaux"], "trouves": found["trouves"], "demandes": [], "erreurs": []}
+    if not any(t["wago"] for t in found["trouves"]):
+        heard = dhcp.listen(["0.0.0.0"], listen_seconds)
+        out["demandes"] = heard["demandes"]
+        out["erreurs"] = heard["erreurs"]
+        for d in out["demandes"]:
+            d["wago"] = d["mac"].startswith(netconf.WAGO_OUI)
+    return out
+
+
+def give_address(card: str, mac: str, ip: str, pc_ip: str) -> dict:
+    """PC gets pc_ip on that card (if needed), then answers the coupler's DHCP / BootP request with ip."""
+    from plc_online.protocols import dhcp
+    for a in (ip, pc_ip):
+        try:
+            ipaddress.ip_address(a)
+        except ValueError:
+            raise _drv().DriverError(f"adresse invalide : {a}") from None
+    if ipaddress.ip_network(ip + "/24", strict=False) != ipaddress.ip_network(pc_ip + "/24", strict=False):
+        raise _drv().DriverError("le coupleur et le PC doivent etre dans le meme reseau (ex. 192.168.1.10 et 192.168.1.200)")
+    netconf = _net()
+    changed = None
+    if netconf.windows():
+        card_info = _net_call(lambda n: n.adapter(card))
+        if pc_ip not in [x["ip"] for x in card_info["adresses"]]:
+            changed = _net_call(lambda n: n.add_addresses(card, [pc_ip]))
+    try:
+        r = dhcp.serve(mac, ip, pc_ip, 24, 60)
+    except OSError as e:
+        raise _drv().DriverError(f"Serveur d'adresse impossible : {e}. Pare-feu Windows : autoriser Python.") from None
+    if not r["ok"]:
+        return {"ok": False, "pc": changed, "texte": "Le coupleur n'a pas redemande d'adresse en 60 s : "
+                "l'eteindre / rallumer pendant l'attente et recommencer."}
+    for _ in range(20):
+        if wg.scan([ip], 0.5):
+            return {"ok": True, "ip": ip, "pc": changed, "texte": f"Coupleur en {ip}, PC en {pc_ip} : Connecter."}
+        time.sleep(0.5)
+    return {"ok": True, "ip": ip, "pc": changed, "texte": f"Adresse {ip} donnee ({', '.join(r['echanges'])}), "
+            "mais le port 502 ne repond pas encore : attendre quelques secondes puis Connecter."}
+
+
+def sweep(card: str) -> dict:
+    """PC temporarily in the common networks (one UAC prompt), Modbus scan of each; the PC keeps
+    the address of the network where a device answered, the others are removed."""
+    pc_ips = [f"{n}.253" for n in COMMON_NETWORKS]
+    before = _net_call(lambda n: n.adapter(card))
+    own = {a["ip"] for a in before["adresses"]}
+    to_add = [ip for ip in pc_ips if ip not in own]
+    if to_add:
+        _net_call(lambda n: n.add_addresses(card, to_add))
+    targets = [f"{n}.{h}" for n in COMMON_NETWORKS for h in range(1, 255) if h != 253]
+    found = wg.scan(targets, 0.4)
+    keep = {".".join(f["ip"].split(".")[:3]) + ".253" for f in found}
+    drop = [ip for ip in to_add if ip not in keep]
+    try:
+        if not found and before["dhcp"]:
+            _net_call(lambda n: n.set_dhcp(card))
+        elif drop:
+            _net_call(lambda n: n.remove_addresses(card, drop))
+    except _drv().DriverError:
+        pass
+    return {"reseaux": [f"{n}.x" for n in COMMON_NETWORKS], "trouves": found,
+            "pc": sorted(keep) if found else [], "remis_auto": not found and before["dhcp"]}
+
+
+def set_pc_address(card: str, ip: str) -> dict:
+    try:
+        ipaddress.ip_address(ip)
+    except ValueError:
+        raise _drv().DriverError(f"adresse invalide : {ip}") from None
+    return _net_call(lambda n: n.add_addresses(card, [ip]))
+
+
+def pc_auto(card: str) -> dict:
+    _net_call(lambda n: n.set_dhcp(card))
+    return {"ok": True}
 
 
 # ---- demo ----

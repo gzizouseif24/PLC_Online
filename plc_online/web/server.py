@@ -25,6 +25,12 @@ JSON API:
     POST /api/cpu/horloge                      CPU clock set to the PC time
     GET  /api/ports                            serial ports of the PC (TSX)
     POST /api/wago/chercher {"ip"}             Modbus TCP devices on the PC's networks (WAGO identified)
+    POST /api/wago/auto                        ARP table + scan + DHCP / BootP requests heard (about 15 s)
+    POST /api/wago/donner {"carte", "mac", "ip", "ip_pc"}   give the coupler an address (DHCP / BootP)
+    POST /api/wago/balayer {"carte"}           PC in the usual networks for a scan (admin prompt)
+    GET  /api/reseau/cartes                    network adapters of the PC
+    POST /api/reseau/adresse {"carte", "ip"}   PC fixed address on that adapter (admin prompt)
+    POST /api/reseau/auto {"carte"}            adapter back to automatic (DHCP)
     GET  /api/donnees/sauvegardes              TSX data copies (%MW, %KW)
     POST /api/donnees/sauvegarder {"note"}     read %MW / %KW to a copy (background)
     POST /api/donnees/plan {"id"}              how many %MW differ from the copy
@@ -86,6 +92,9 @@ def make_handler(session: Session):
                 return self.send_json(200, session.job_state())
             if path == "/api/programme/sauvegardes":
                 return self.api(lambda: session.list_backups())
+            if path == "/api/reseau/cartes":
+                from plc_online.web.wago_web import adapters
+                return self.api(adapters)
             if path == "/api/ports":
                 from plc_online.web.tsx_web import list_ports
                 return self.send_json(200, {"ports": list_ports()})
@@ -154,6 +163,24 @@ def make_handler(session: Session):
                     ip = str(self.read_json().get("ip") or "").strip()
                     return search([ip] if ip else [])
                 return self.api(find)
+            if path in ("/api/wago/auto", "/api/wago/donner", "/api/wago/balayer", "/api/reseau/adresse",
+                        "/api/reseau/auto"):
+                from plc_online.web import wago_web
+
+                def network():
+                    req = self.read_json()
+                    card = str(req.get("carte") or "")
+                    if path == "/api/wago/auto":
+                        return wago_web.auto_search()
+                    if path == "/api/wago/donner":
+                        return wago_web.give_address(card, str(req.get("mac") or ""), str(req.get("ip") or ""),
+                                                     str(req.get("ip_pc") or ""))
+                    if path == "/api/wago/balayer":
+                        return wago_web.sweep(card)
+                    if path == "/api/reseau/adresse":
+                        return wago_web.set_pc_address(card, str(req.get("ip") or ""))
+                    return wago_web.pc_auto(card)
+                return self.api(network)
             if path == "/api/cpu/demarrer":
                 return self.api(lambda: session.start_cpu())
             if path == "/api/cpu/arreter":

@@ -289,3 +289,10 @@ a.btn { text-decoration: none; display: inline-block; }
 
 #chercher-liste { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
 #hint-wago p { margin: 0 0 8px; }
+
+.wago-btns { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 8px 0; }
+.wago-btns input { width: 150px; font-family: Consolas, monospace; }
+.wago-pc summary { cursor: pointer; margin-top: 8px; }
+.trouve { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; padding: 6px 0; border-top: 1px solid var(--line, #2c373c); }
+.trouve input { width: 130px; font-family: Consolas, monospace; }
+#wago-carte { width: 100%; }

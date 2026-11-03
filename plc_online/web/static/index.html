@@ -32,11 +32,28 @@
       <p class="hint" id="hint-tsx" hidden>TSX : cable <b>TSX PCX 1031</b> sur la prise TER, selecteur
         dans la meme position qu'avec PL7, <b>PL7 ferme</b>. 9600 bauds, 8 bits, parite impaire.</p>
       <div class="hint" id="hint-wago" hidden>
-        <p>WAGO : cable Ethernet PC - coupleur. Le PC doit avoir une adresse dans le meme reseau que le
-          coupleur (ex. PC 192.168.1.200 si le coupleur est en 192.168.1.x).</p>
-        <button type="button" class="btn" id="btn-chercher">Chercher sur le reseau</button>
+        <p>WAGO : cable Ethernet entre le PC et le coupleur, puis <b>Recherche automatique</b>.</p>
+        <label class="field" id="wago-carte-box">
+          <span>Carte reseau du PC (cote coupleur)</span>
+          <select id="wago-carte"></select>
+        </label>
+        <div class="wago-btns">
+          <button type="button" class="btn btn-primary" id="btn-auto">Recherche automatique</button>
+          <button type="button" class="btn" id="btn-balayer" title="Le PC prend une adresse dans chaque reseau courant (192.168.0/1/2.x, 10.0.0.x...) le temps du balayage. Demande les droits administrateur.">Balayer les reseaux courants</button>
+        </div>
         <p id="chercher-msg" class="msg" role="status"></p>
         <div id="chercher-liste"></div>
+        <details class="wago-pc">
+          <summary>Adresse IP du PC</summary>
+          <div class="wago-btns">
+            <input id="wago-ip-pc" value="192.168.1.200" aria-label="Adresse IP du PC">
+            <button type="button" class="btn" id="btn-ip-pc">Mettre cette adresse</button>
+            <button type="button" class="btn" id="btn-pc-auto">Remettre en automatique</button>
+          </div>
+          <p class="hint">Fenetre administrateur Windows a accepter. "Remettre en automatique" : a faire en partant, pour
+            que le PC retrouve le reseau de l'usine / internet.</p>
+        </details>
+        <button type="button" class="btn" id="btn-chercher" hidden>Chercher</button>
       </div>
       <datalist id="ports"></datalist>
     </section>

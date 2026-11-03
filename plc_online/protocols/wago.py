@@ -224,14 +224,19 @@ def _probe(ip: str, timeout: float) -> dict:
     return out
 
 
-def search(extra_ips=(), timeout: float = 0.4) -> dict:
-    """Modbus TCP devices (port 502) on the PC's networks; WAGO ones identified."""
-    nets = local_networks()
-    targets = [str(h) for net, own in nets for h in net.hosts() if str(h) != own]
-    targets += [ip for ip in extra_ips if ip not in targets]
+def scan(targets, timeout: float = 0.4) -> list:
     found = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=128) as pool:
         for r in pool.map(lambda ip: _probe(ip, timeout), targets):
             if r:
                 found.append(r)
+    return found
+
+
+def search(extra_ips=(), timeout: float = 0.4) -> dict:
+    """Modbus TCP devices (port 502) on the PC's networks; WAGO ones identified."""
+    nets = local_networks()
+    targets = [str(h) for net, own in nets for h in net.hosts() if str(h) != own]
+    targets += [ip for ip in extra_ips if ip not in targets]
+    found = scan(targets, timeout)
     return {"reseaux": [f"{net} (PC {own})" for net, own in nets], "trouves": found}
