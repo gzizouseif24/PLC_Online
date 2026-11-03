@@ -13,7 +13,7 @@ Modbus address of each device (Delta DVP manual, "communication address"):
   C0..C199      0x0E00          bits = contacts, registers = current values (16-bit)
   C200..C255    0x0EC8          registers are 32-bit (two words, low word first)
   D0..D4095     0x1000          registers
-  D4096..D9999  0x9000          registers
+  D4096..D11999 0x9000          registers (D9999 on the SV, D11999 on the SV2)
 
 Delta answers at most 100 words or 256 bits per request.
 """
@@ -21,6 +21,7 @@ from plc_online.protocols.modbus import (AsciiTransport, Modicon, ModbusError, P
                                          RtuTransport, open_serial, signed16)
 
 MAX_WORDS, MAX_BITS = 100, 256
+MAX_D = 12000          # DVP-SV2: D0..D11999 (DVP-SV: D0..D9999, the read stops where the PLC refuses)
 
 BIT_AREAS = ("X", "Y", "M", "S", "T", "C")
 WORD_AREAS = ("D", "T", "C")
@@ -59,7 +60,7 @@ def bit_address(area: str, n: int) -> int:
 
 def word_address(area: str, n: int) -> int:
     if area == "D":
-        if not 0 <= n < 10000:
+        if not 0 <= n < MAX_D:
             raise DeltaError(f"D{n} hors plage")
         return 0x1000 + n if n < 4096 else 0x9000 + n - 4096
     if area in ("T", "C") and 0 <= n < 256:
@@ -204,13 +205,13 @@ class Delta:
     def read_all_d(self, progress=None) -> list:
         """D0.. until the PLC refuses (end of its D area), 100 words at a time."""
         values = []
-        while len(values) < 10000:
-            n = min(MAX_WORDS, 10000 - len(values))
+        while len(values) < MAX_D:
+            n = min(MAX_WORDS, MAX_D - len(values))
             try:
                 values += self.read_words("D", len(values), n)
             except PlcRefused:
                 try:                                 # last block crosses the end: one word at a time
-                    while len(values) < 10000:
+                    while len(values) < MAX_D:
                         values += self.read_words("D", len(values), 1)
                 except PlcRefused:
                     pass
