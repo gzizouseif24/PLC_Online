@@ -147,7 +147,9 @@ class Wago:
         """Each word read on its own: a refused one shows as '?'."""
         words = [(self.try_regs(FIRMWARE + i, 1) or [None])[0] for i in range(5)]
         index, series, item, major, minor = words
-        fw = f"{major:02d}.{minor:02d}" if major is not None and minor is not None else "?"
+        if item is None:                         # 750-352: 0x2010.. refused, the coupler is first in 0x2030
+            item = (self.try_regs(MODULES, 1) or [None])[0]
+        fw = f"{major:02d}.{minor:02d}" if major is not None and minor is not None else "non lu"
         return {"modele": f"{series or 750}-{item if item is not None else '?'}", "serie": series, "article": item,
                 "firmware": fw + (f" (index {index})" if index is not None else "")}
 
