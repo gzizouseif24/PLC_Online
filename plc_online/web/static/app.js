@@ -60,6 +60,7 @@ function renderSettings() {
   }
   $("hint-s7").hidden = key !== "s7-300";
   $("hint-tsx").hidden = key !== "tsx";
+  $("hint-wago").hidden = key !== "wago";
 }
 
 async function loadPorts() {
@@ -95,15 +96,17 @@ function applyBrand(key) {
   $("import-fichiers").accept = tsx ? ".stx,.tsxbak,.zip" : ".zip,.bin";
   $("btn-sauver").textContent = tsx ? "Sauvegarder le programme de l'automate" : "Sauvegarder le programme de la CPU";
   $("col-contenu").textContent = tsx ? "Contenu" : "Blocs";
-  $("watch-hint").textContent = tsx
+  $("watch-hint").textContent = family === "wago"
+    ? "IW0 (mot d'entree), QW0 (mot de sortie), I0 (bit d'entree), Q0 (bit de sortie). Ecriture : QW et Q. Format Pt100 pour le 750-461."
+    : tsx
     ? "%MW, %MD, %KW, %KD, %SW, %M, %S (le % est facultatif). Ecriture : %MW et %MD. Le format se change sur chaque ligne."
     : "E/I, A/Q, M, DB10.DBW2, T5, Z2. Le format se change sur chaque ligne.";
-  $("ajout-adresse").placeholder = tsx ? "%MW10, %MD4, %M5, %I1.0" : "MW10, E0.0, DB10.DBD4";
-  $("titre-params").textContent = tsx ? "Automate" : "Parametres CPU";
+  $("ajout-adresse").placeholder = family === "wago" ? "IW0, QW0, I0, Q0" : tsx ? "%MW10, %MD4, %M5, %I1.0" : "MW10, E0.0, DB10.DBD4";
+  $("titre-params").textContent = family === "wago" ? "Image process" : tsx ? "Automate" : "Parametres CPU";
   const head = $("table-rack").tHead.rows[0].cells;
-  head[0].textContent = tsx ? "Position" : "Empl.";
-  head[3].textContent = tsx ? "Configure (PL7)" : "Configure (HW Config)";
-  head[4].textContent = "En place";
+  head[0].textContent = tsx || family === "wago" ? "Position" : "Empl.";
+  head[3].textContent = family === "wago" ? "Module" : tsx ? "Configure (PL7)" : "Configure (HW Config)";
+  head[4].textContent = family === "wago" ? "Valeurs" : "En place";
   watch = loadWatch();
   for (const k of Object.keys(lastValues)) delete lastValues[k];
   diagLoaded = false;
@@ -639,11 +642,12 @@ let monitoring = localStorageGet("visualiser") === "1";      // off by default, 
 const lastValues = {};
 
 const FORMAT_NAMES = { dec: "DEC", ud: "DEC non signe", hex: "HEX", bin: "BIN", real: "REAL", char: "CHAR",
-                       s5time: "S5TIME", bcd: "BCD" };
+                       s5time: "S5TIME", bcd: "BCD", pt100: "Pt100 (°C)" };
 
 function formatsFor(adresse) {
   /** Formats that fit the size of the address ([] for a bit: always 0 / 1). */
   const a = adresse.toUpperCase();
+  if (family === "wago") return /^[IQ]W\d+$/.test(a) ? ["dec", "pt100", "ud", "hex", "bin"] : [];
   if (family === "tsx") {
     const z = a.replace(/^%/, "").replace(/\d+$/, "");
     if (/^[IQ]W\d+\.\d+$/.test(a.replace(/^%/, ""))) return ["dec", "ud", "hex", "bin"];
@@ -670,7 +674,7 @@ function splitAddress(text) {
 }
 
 // one watch table per family: S7 and TSX addresses do not mix
-const watchKey = () => (family === "tsx" ? "table-surveillance-tsx" : "table-surveillance");
+const watchKey = () => (family === "s7" ? "table-surveillance" : "table-surveillance-" + family);
 
 function loadWatch() {
   try {
@@ -888,6 +892,36 @@ function rows(tbody, items, render, emptyText, cols) {
   tbody.replaceChildren(...items.map(render));
 }
 
+// ---- WAGO: couplers on the network ----
+
+async function searchWago() {
+  const btn = $("btn-chercher");
+  const msg = $("chercher-msg");
+  btn.disabled = true;
+  msg.className = "msg";
+  msg.textContent = "Recherche sur les reseaux du PC (port 502)...";
+  $("chercher-liste").replaceChildren();
+  try {
+    const ip = $("reglages").querySelector("input[name=ip]");
+    const r = await api("POST", "/api/wago/chercher", { ip: ip ? ip.value.trim() : "" });
+    msg.textContent = (r.reseaux.length ? "Reseaux du PC : " + r.reseaux.join(", ") + ". " : "Aucun reseau sur le PC. ")
+      + (r.trouves.length ? r.trouves.length + " appareil(s) Modbus :" : "Aucun appareil Modbus TCP trouve.");
+    $("chercher-liste").replaceChildren(...r.trouves.map((t) => {
+      const b = el("button", "btn" + (t.wago ? " btn-primary" : ""), `${t.ip} — ${t.modele}`);
+      b.type = "button";
+      b.addEventListener("click", () => { if (ip) ip.value = t.ip; });
+      return b;
+    }));
+    if (!r.trouves.length) msg.textContent += " Verifier : cable, voyants LINK du coupleur, adresse IP du PC dans le meme reseau "
+      + "que le coupleur (micro-interrupteurs du coupleur = dernier chiffre en 192.168.1.x), pare-feu.";
+  } catch (e) {
+    msg.textContent = e.message;
+    msg.className = "msg err";
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 // ---- rack modules offered in the watch table ----
 
 let rackModules = null;          // rack rows of the last diagnostic read
@@ -904,14 +938,15 @@ function renderRackVars() {
     ? "Cliquer sur Ajouter pour mettre les voies du module dans la table."
     : "Aucun module d'entrees / sorties en place.";
   const rows = mods.map((m) => {
-    const name = (m.en_place && m.en_place.nom) || (m.configure && m.configure.nom) || m.type;
+    const name = family === "wago" ? `${m.configure.nom} ${m.type}`
+      : (m.en_place && m.en_place.nom) || (m.configure && m.configure.nom) || m.type;
     const first = m.variables[0].adresse, last = m.variables[m.variables.length - 1].adresse;
     const strip = (a) => a.split(":")[0];
     const btn = el("button", "btn", "Ajouter");
     btn.type = "button";
     btn.addEventListener("click", () => addRackVars([m]));
     const row = el("div", "rack-var");
-    row.append(el("span", "mono", (family === "tsx" ? "Pos " : "Empl. ") + m.emplacement),
+    row.append(el("span", "mono", (family === "s7" ? "Empl. " : "Pos ") + m.emplacement),
                el("span", "grow", name + (m.ok ? "" : "  (en defaut)")),
                el("span", "mono", strip(first) + (first === last ? "" : " ... " + strip(last))), btn);
     return row;
@@ -940,7 +975,8 @@ function renderDiagnostic(d) {
   rackModules = d.modules || null;
   renderRackVars();
   $("diag-alertes").replaceChildren(...d.alertes.map((a) => el("div", "alerte", a)));
-  $("diag-info").textContent = d.systeme ? "Bits et mots systeme de l'automate."
+  $("diag-info").textContent = family === "wago" ? "Modules lus dans le coupleur, valeurs de l'image process."
+    : d.systeme ? "Bits et mots systeme de l'automate."
     : d.config_compilee ? "Configuration materielle compilee le " + d.config_compilee + "."
     : "Configuration materielle non lue.";
   $("sec-rack").hidden = !d.modules;
@@ -1094,6 +1130,7 @@ async function init() {
   $("form-connexion").addEventListener("submit", connect);
   $("btn-deconnecter").addEventListener("click", disconnect);
   $("btn-diag").addEventListener("click", loadDiagnostic);
+  $("btn-chercher").addEventListener("click", searchWago);
   $("btn-rack-vars").addEventListener("click", async () => {
     const b = $("btn-rack-vars");
     b.disabled = true;

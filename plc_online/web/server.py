@@ -24,6 +24,7 @@ JSON API:
     POST /api/cpu/arreter                      CPU to STOP
     POST /api/cpu/horloge                      CPU clock set to the PC time
     GET  /api/ports                            serial ports of the PC (TSX)
+    POST /api/wago/chercher {"ip"}             Modbus TCP devices on the PC's networks (WAGO identified)
     GET  /api/donnees/sauvegardes              TSX data copies (%MW, %KW)
     POST /api/donnees/sauvegarder {"note"}     read %MW / %KW to a copy (background)
     POST /api/donnees/plan {"id"}              how many %MW differ from the copy
@@ -147,6 +148,12 @@ def make_handler(session: Session):
                     return session.restore(str(req.get("id") or ""), bool(req.get("avec_db")),
                                            bool(req.get("supprimer_en_trop")))
                 return self.api(restore)
+            if path == "/api/wago/chercher":
+                def find():
+                    from plc_online.web.wago_web import search
+                    ip = str(self.read_json().get("ip") or "").strip()
+                    return search([ip] if ip else [])
+                return self.api(find)
             if path == "/api/cpu/demarrer":
                 return self.api(lambda: session.start_cpu())
             if path == "/api/cpu/arreter":

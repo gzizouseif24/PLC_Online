@@ -286,3 +286,6 @@ a.btn { text-decoration: none; display: inline-block; }
 .rack-var:first-child { margin-top: 8px; }
 .rack-var .mono { font-family: Consolas, monospace; }
 .rack-var .grow { flex: 1; min-width: 140px; }
+
+#chercher-liste { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+#hint-wago p { margin: 0 0 8px; }

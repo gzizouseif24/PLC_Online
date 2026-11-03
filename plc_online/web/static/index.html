@@ -31,6 +31,13 @@
         SIMATIC Manager ferme.</p>
       <p class="hint" id="hint-tsx" hidden>TSX : cable <b>TSX PCX 1031</b> sur la prise TER, selecteur
         dans la meme position qu'avec PL7, <b>PL7 ferme</b>. 9600 bauds, 8 bits, parite impaire.</p>
+      <div class="hint" id="hint-wago" hidden>
+        <p>WAGO : cable Ethernet PC - coupleur. Le PC doit avoir une adresse dans le meme reseau que le
+          coupleur (ex. PC 192.168.1.200 si le coupleur est en 192.168.1.x).</p>
+        <button type="button" class="btn" id="btn-chercher">Chercher sur le reseau</button>
+        <p id="chercher-msg" class="msg" role="status"></p>
+        <div id="chercher-liste"></div>
+      </div>
       <datalist id="ports"></datalist>
     </section>
 
@@ -44,7 +51,7 @@
         <button type="button" role="tab" class="tab active" data-tab="etat-plein" aria-selected="true">Etat</button>
         <button type="button" role="tab" class="tab" data-tab="vue-diag" aria-selected="false">Diagnostic</button>
         <button type="button" role="tab" class="tab" data-tab="vue-watch" aria-selected="false">Surveillance</button>
-        <button type="button" role="tab" class="tab" data-tab="vue-prog" aria-selected="false">Programme</button>
+        <button type="button" role="tab" class="tab" data-tab="vue-prog" aria-selected="false" data-fonction="programme">Programme</button>
         <button type="button" role="tab" class="tab" data-tab="vue-data" aria-selected="false" data-fonction="donnees">Donnees</button>
       </nav>
 
@@ -217,8 +224,8 @@
         </div>
 
         <div class="cpu-actions">
-          <button type="button" class="btn btn-run" id="btn-run">Passer en RUN</button>
-          <button type="button" class="btn btn-stop" id="btn-stop">Passer en STOP</button>
+          <button type="button" class="btn btn-run" id="btn-run" data-fonction="runstop">Passer en RUN</button>
+          <button type="button" class="btn btn-stop" id="btn-stop" data-fonction="runstop">Passer en STOP</button>
           <button type="button" class="btn" id="btn-horloge" data-fonction="horloge">Mettre l'horloge a l'heure du PC</button>
         </div>
         <p id="cpu-msg" class="msg" role="status"></p>

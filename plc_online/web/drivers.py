@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 
 from plc_online.protocols import s7_program as program
+from plc_online.protocols.modbus import ModbusError, PlcRefused
 from plc_online.protocols.s7 import BLOCK_TYPES, S7300, S7Error, parse_block, parse_sdb1_modules
 from plc_online.protocols.s7_catalogue import catalog_name
 from plc_online.protocols.s7_names import address_range, cpu_parameter_lines, module_text
@@ -410,7 +411,7 @@ class DemoS7:
 
 DEFAULT_BACKUPS = Path.home() / "PLC Online" / "sauvegardes" / "s7-300"
 DEFAULT_TSX_BACKUPS = Path.home() / "PLC Online" / "sauvegardes" / "tsx"
-LINK_ERRORS = (S7Error, UniteError, OSError)
+LINK_ERRORS = (S7Error, UniteError, OSError, ModbusError)
 BACKUP_ID = re.compile(r"^[\w\-. ]+$")
 
 
@@ -593,12 +594,13 @@ def import_files(folder: Path, files: list, note: str = "") -> dict:
     return {"id": target.name, "comptes": meta["comptes"], "ignores": ignored}
 
 
-S7_FEATURES = ["horloge", "rack", "evenements", "db", "projet_step7"]
-TSX_FEATURES = ["donnees", "horloge"]
+S7_FEATURES = ["horloge", "rack", "evenements", "db", "projet_step7", "programme", "runstop"]
+TSX_FEATURES = ["donnees", "horloge", "programme", "runstop"]
+WAGO_FEATURES = ["chercher"]
 
 
 def _brands():
-    from plc_online.web import tsx_web
+    from plc_online.web import tsx_web, wago_web
     return {
         "s7-300": {"nom": "Siemens S7-300", "disponible": True, "famille": "s7", "fonctions": S7_FEATURES,
                    "reglages": [{"cle": "mpi", "nom": "Adresse MPI", "defaut": 2},
@@ -610,6 +612,10 @@ def _brands():
                  "reglages": []},
         "demo-tsx": {"nom": "Demo (TSX simule)", "disponible": True, "famille": "tsx", "fonctions": TSX_FEATURES,
                      "reglages": []},
+        "wago": {"nom": "WAGO 750 (coupleur Ethernet)", "disponible": True, "famille": "wago",
+                 "fonctions": WAGO_FEATURES, "reglages": wago_web.SETTINGS},
+        "demo-wago": {"nom": "Demo (WAGO 750-352 simule)", "disponible": True, "famille": "wago",
+                      "fonctions": WAGO_FEATURES, "reglages": []},
         "omron": {"nom": "Omron CJ1M", "disponible": False, "reglages": []},
         "panasonic": {"nom": "Panasonic FP0R", "disponible": False, "reglages": []},
     }
@@ -623,12 +629,14 @@ class Session:
 
     def __init__(self, opener=None, backups=None, tsx_backups=None):
         from plc_online.web.tsx_web import TsxOps
+        from plc_online.web.wago_web import WagoOps
         self.lock = threading.Lock()
         self.plc, self.brand, self.settings = None, None, {}
         self.opener = opener or open_plc
         self.backups = Path(backups) if backups else DEFAULT_BACKUPS
         self.tsx_backups = Path(tsx_backups) if tsx_backups else (Path(backups) / "tsx" if backups else DEFAULT_TSX_BACKUPS)
         self.tsx = TsxOps(self)
+        self.wago = WagoOps(self)
         self.job = None                   # long operation running in the background
         self.last_status = None
 
@@ -653,7 +661,7 @@ class Session:
 
     def _ops(self):
         """TsxOps when a TSX is connected, None for the S7-300 (methods of this class)."""
-        return self.tsx if self.family == "tsx" else None
+        return {"tsx": self.tsx, "wago": self.wago}.get(self.family)
 
     def busy(self) -> str:
         j = self.job
@@ -667,7 +675,7 @@ class Session:
             if self.plc is None:
                 raise DriverError("Pas connecte")
             try:
-                out = self.tsx.status(self.plc) if self._ops() else s7_status(self.plc)
+                out = self._ops().status(self.plc) if self._ops() else s7_status(self.plc)
             except LINK_ERRORS as e:
                 self._close()
                 raise DriverError(f"Liaison perdue : {e}") from None
@@ -678,7 +686,7 @@ class Session:
 
     def diagnostic(self) -> dict:
         if self._ops():
-            return self.tsx.diagnostic()
+            return self._ops().diagnostic()
         return self._call(lambda plc: s7_diagnostic(plc, int(self.settings.get("rack", 0) or 0)))
 
     # ---- long operations: one at a time, in the background, with progress ----
@@ -841,7 +849,9 @@ class Session:
                     self._close()
                     raise DriverError(f"Liaison perdue : {e}") from None
                 raise DriverError(f"Refuse par l'automate : {e}") from None
-            except (S7Error, OSError) as e:
+            except PlcRefused as e:
+                raise DriverError(f"Refuse : {e}") from None
+            except (S7Error, OSError, ModbusError) as e:
                 self._close()
                 raise DriverError(f"Liaison perdue : {e}") from None
 
@@ -872,12 +882,12 @@ class Session:
 
     def values(self, texts) -> dict:
         if self._ops():
-            return self.tsx.values(texts)
+            return self._ops().values(texts)
         return self._call(lambda plc: read_values(plc, texts))
 
     def write(self, items) -> dict:
         if self._ops():
-            return self.tsx.write(items)
+            return self._ops().write(items)
         def run(plc):
             out = write_values(plc, items)
             out["run"] = bool(plc.leds().get("RUN", (0, 0))[0])
@@ -902,6 +912,9 @@ class Session:
 def open_plc(brand: str, settings: dict):
     if brand == "demo":
         return DemoS7()
+    if brand in ("wago", "demo-wago"):
+        from plc_online.web import wago_web
+        return wago_web.DemoWago() if brand == "demo-wago" else wago_web.open_wago(settings)
     if brand in ("tsx", "demo-tsx"):
         from plc_online.web import tsx_web
         return tsx_web.DemoTsx() if brand == "demo-tsx" else tsx_web.open_tsx(settings)
