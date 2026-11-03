@@ -275,3 +275,37 @@ def open_delta(port, mode="ascii", baud=9600, parity="E", stopbits=1, station=1,
 SEARCH = [("ascii", 9600, "E", 1), ("rtu", 9600, "E", 1), ("ascii", 19200, "E", 1), ("rtu", 19200, "E", 1),
           ("ascii", 38400, "E", 1), ("rtu", 38400, "E", 1), ("rtu", 9600, "N", 2), ("rtu", 19200, "N", 2),
           ("ascii", 115200, "E", 1), ("rtu", 115200, "E", 1), ("rtu", 9600, "N", 1), ("rtu", 19200, "N", 1)]
+
+
+# ---- listening to a master (HMI) on the RS-485 line ----
+
+LISTEN_SETTINGS = [(mode, baud, bits, parity, stop)
+                   for baud in (9600, 19200, 38400, 57600, 115200, 4800)
+                   for mode, bits, parity, stop in (("ascii", 7, "E", 1), ("rtu", 8, "E", 1), ("rtu", 8, "N", 2),
+                                                    ("rtu", 8, "N", 1), ("ascii", 7, "O", 1), ("rtu", 8, "O", 1),
+                                                    ("ascii", 7, "N", 2), ("ascii", 8, "N", 1))]
+
+
+def ascii_frames(buf: bytes) -> list:
+    """Valid Modbus ASCII frames (LRC checked) in what was heard: [(station, function)]."""
+    import re
+    out = []
+    for m in re.finditer(rb":([0-9A-Fa-f]{6,})\r\n", buf):
+        try:
+            data = bytes.fromhex(m.group(1).decode())
+        except ValueError:
+            continue
+        if len(data) >= 3 and (-sum(data[:-1]) & 0xFF) == data[-1]:
+            out.append((data[0], data[1]))
+    return out
+
+
+def rtu_frames(buf: bytes) -> list:
+    """Modbus RTU requests 01..06 (8 bytes, CRC checked) in what was heard: [(station, function)]."""
+    from plc_online.protocols.modbus import crc16
+    out = []
+    for i in range(len(buf) - 7):
+        f = buf[i:i + 8]
+        if 1 <= f[0] <= 247 and f[1] in (1, 2, 3, 4, 5, 6) and crc16(f[:6]) == f[6] | f[7] << 8:
+            out.append((f[0], f[1]))
+    return out

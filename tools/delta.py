@@ -2,6 +2,7 @@
 """Delta DVP (DVP28SV...) par COM1 (RS-232) ou COM2 (RS-485), Modbus, sans WPLSoft / ISPSoft.
 
     python tools/delta.py chercher                 trouver vitesse / format / station
+    python tools/delta.py ecouter-ihm --port COM5  ecouter l'IHM sur le RS-485 : ses reglages et la station
     python tools/delta.py etat                     RUN, erreurs (codes et pas), cycle, horloge
     python tools/delta.py lire D100 20             lire (D, T, C : mots ; X, Y, M, S : bits)
     python tools/delta.py surveiller X0 16         afficher en direct (Ctrl+C)
@@ -115,6 +116,43 @@ def cmd_chercher(port, station):
                 print(f"REPOND : --mode {mode} --baud 9600 --parite E --stop 1 --station {st}")
                 return
     print("Aucune station ne repond.")
+
+
+# ---- ecouter-ihm ----
+
+def cmd_ecouter_ihm(port, seconds=1.5):
+    from plc_online.protocols.delta import LISTEN_SETTINGS, ascii_frames, com_word, rtu_frames
+    from plc_online.protocols.modbus import open_serial
+    print(f"Ecoute de la ligne RS-485 sur {port} (l'IHM doit etre allumee et interroger l'automate)...")
+    for mode, baud, bits, parity, stop in LISTEN_SETTINGS:
+        print(f"   {mode.upper():5} {baud:6} {bits}{parity}{stop} ... ", end="", flush=True)
+        try:
+            ser = open_serial(port, baud, parity, stop, 0.1, bytesize=bits)
+        except Exception as e:
+            raise SystemExit(f"ECHEC : port {port} : {e}")
+        buf, end = b"", time.time() + seconds
+        try:
+            ser.reset_input_buffer()
+            while time.time() < end:
+                buf += ser.read(256)
+        finally:
+            ser.close()
+        frames = ascii_frames(buf) if mode == "ascii" else rtu_frames(buf)
+        if not frames:
+            print("rien" if not buf else f"{len(buf)} octets illisibles")
+            continue
+        stations = sorted({st for st, _ in frames})
+        print(f"TROUVE : {len(frames)} trames, station(s) {stations}")
+        try:
+            code = com_word(baud, bits, parity, stop)
+            print(f"\nL'IHM parle en {mode.upper()} {baud} {bits}{parity}{stop} a la station {stations[0]}.")
+            print("Reglages a mettre dans l'automate (onglet Surveillance, ou au demarrage du programme sous M1002) :")
+            print(f"   D1120 = 16#{code:02X}   M1143 = {1 if mode == 'rtu' else 0}   D1121 = {stations[0]}   M1120 = 1")
+        except KeyError:
+            print("Vitesse non prise en charge par le DVP.")
+        return
+    print("\nAucune trame lue. Verifier : adaptateur branche en parallele sur D+ / D- de l'IHM (essayer d'inverser),"
+          " IHM allumee et en erreur de communication (elle interroge toujours).")
 
 
 # ---- etat ----
@@ -285,7 +323,7 @@ def cmd_restaurer_donnees(plc, filename):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("commande", choices=["chercher", "etat", "lire", "surveiller", "ecrire", "horloge",
+    p.add_argument("commande", choices=["chercher", "ecouter-ihm", "etat", "lire", "surveiller", "ecrire", "horloge",
                                         "sauvegarder-donnees", "restaurer-donnees"])
     p.add_argument("args", nargs="*")
     p.add_argument("--port", default="COM6")
@@ -299,6 +337,9 @@ def main():
 
     if a.commande == "chercher":
         cmd_chercher(a.port, a.station)
+        return
+    if a.commande == "ecouter-ihm":
+        cmd_ecouter_ihm(a.port)
         return
     try:
         if a.commande in ("lire", "surveiller", "ecrire"):
