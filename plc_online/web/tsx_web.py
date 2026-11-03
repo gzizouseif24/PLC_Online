@@ -49,7 +49,7 @@ class TsxLink(ut.Tsx):
         try:
             self.ser = serial.Serial(port, 9600, bytesize=8, parity="O", stopbits=1, timeout=0.02)
         except (serial.SerialException, OSError, ValueError) as e:
-            raise _drv().DriverError(f"Port {port} : {e}") from None
+            raise _drv().DriverError(port_error(port, e)) from None
         super().__init__(ut.Slave(self.ser, addrs))
         self.nom = ""
 
@@ -71,6 +71,20 @@ def open_tsx(settings: dict):
         raise _drv().DriverError(f"L'automate ne repond pas sur {port} ({e}). PL7 ferme ? Cable TSX PCX 1031 "
                                  "branche sur la prise TER, meme position du selecteur qu'avec PL7 ?") from None
     return link
+
+
+def port_error(port: str, e) -> str:
+    """Plain French message for a port that will not open, with the ports the PC has."""
+    text = str(e)
+    if "FileNotFound" in text or "introuvable" in text or "cannot find" in text.lower():
+        found = list_ports()
+        if found:
+            names = ", ".join(f"{p['port']} ({p['description']})" if p["description"] else p["port"] for p in found)
+            return f"{port} n'existe pas sur ce PC. Ports presents : {names}. Choisir le bon dans la liste."
+        return f"{port} n'existe pas sur ce PC et aucun port COM n'est detecte : cable branche ? pilote installe ?"
+    if "PermissionError" in text or "Acces refuse" in text or "Accès refusé" in text or "denied" in text.lower():
+        return f"{port} est deja utilise par un autre logiciel (PL7, WPLSoft, autre onglet...) : le fermer."
+    return f"Port {port} : {text}"
 
 
 def list_ports() -> list:
