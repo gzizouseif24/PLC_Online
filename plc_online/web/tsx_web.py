@@ -340,41 +340,99 @@ def code_name(code, names) -> str:
     return names.get(code) or ut.MODULE_CODES.get(code) or f"module type {code:04X}"
 
 
+def module_parts(config) -> dict:
+    """{position: (reference, part)}: part 1 = second position of a standard-format module that
+    the configuration lists twice (DEZ 32D2 at 1 and 2), else 0. Pairs are taken in order, so
+    two identical modules side by side (1-2 and 3-4) stay apart."""
+    parts, prev = {}, None
+    for pos, ref in sorted(config):
+        if prev and prev[0] == pos - 1 and prev[1] == ref and parts[prev[0]][1] == 0 and is_standard(ref):
+            parts[pos] = (ref, 1)
+        else:
+            parts[pos] = (ref, 0)
+        prev = (pos, ref)
+    return parts
+
+
+def _family_code(ref: str) -> tuple:
+    """'TSX DEZ 32D2' -> ('DEZ', '32D2')."""
+    words = ref.upper().replace("TSX", "").split()
+    if len(words) >= 2:
+        return words[0], words[1]
+    w = words[0] if words else ""
+    return w[:3], w[3:]
+
+
+def is_standard(ref: str) -> bool:
+    """Standard-format module (two positions): 28 channels or more on discrete modules."""
+    fam, code = _family_code(ref)
+    m = re.match(r"\d\d", code)
+    return fam in ("DEZ", "DEY", "DSZ", "DSY", "DMZ", "DMY") and bool(m) and int(m.group()) >= 28
+
+
+def module_vars(ref: str, pos: int, part: int = 0) -> list:
+    """Channels of the module at that position, as watch-table rows {'adresse', 'libelle'}.
+    Discrete: one %I / %Q bit per channel; standard-format modules (two positions) split their
+    channels: DEZ 32D2 at 1-2 -> %I1.0..15 and %I2.0..15, DMZ 28DR -> 16 %I then 12 %Q.
+    Analog: %IW / %QW per channel."""
+    fam, code = _family_code(ref)
+    short = f"{fam} {code}".strip()
+    m2, m1 = re.match(r"\d\d", code), re.match(r"\d", code)
+    if fam in ("DMZ", "DMY") and m2:
+        total = int(m2.group())
+        n_in = 32 if total >= 64 else 16
+        prefix, n = ("%Q", total - n_in) if part else ("%I", n_in)
+    elif fam in ("DEZ", "DEY", "DSZ", "DSY") and m2:
+        total = int(m2.group())
+        n = total // 2 if total >= 28 else total
+        prefix = "%I" if fam in ("DEZ", "DEY") else "%Q"
+    elif fam in ("AEZ", "AEY", "ASZ", "ASY") and m1:
+        n = 16 if code.startswith("16") else int(m1.group())
+        prefix = "%IW" if fam in ("AEZ", "AEY") else "%QW"
+    else:
+        return []
+    first = n if part and fam not in ("DMZ", "DMY") else 0
+    return [{"adresse": f"{prefix}{pos}.{i}", "libelle": f"{short} voie {first + i}"} for i in range(n)]
+
+
 def module_rows(config, faults, statuses=None, names=None) -> list:
     """Rack table rows (same shape as the S7-300 one): configured modules, module in place
-    (READ_STATUS_MODULE: same type, other type or nothing) and fault per position."""
+    (READ_STATUS_MODULE: same type, other type or nothing) and fault per position. 'variables':
+    the channels of the module in place, offered in the watch table."""
     statuses, names = statuses or {}, names or {}
+    parts = module_parts(config)
     rows = []
     for pos, ref in config:
         kind, first, second = next(((k[1], k[2], k[3]) for k in MODULE_KINDS if ref.split()[-2:][0].startswith(k[0])),
                                    ("module", "", None))
-        prefix = first
-        if second and any(p == pos - 1 and r == ref for p, r in config):
-            prefix = second                     # second position of a mixed module: its outputs
+        part = parts.get(pos, (ref, 0))[1]
+        prefix = second if (second and part) else first
         address = f"{prefix}{pos}.0 ..." if prefix else ""
         fault = faults[pos] if faults is not None and pos < len(faults) else None
         st = statuses.get(pos)
         en_place, etat, ok = None, ("ok" if fault == 0 else fault_text(fault) if fault else "non lu"), not fault
+        variables = module_vars(ref, pos, part)
         if st:
             if st["en_place"] is None:
-                etat, ok = "MODULE ABSENT (rien a cette position)", False
+                etat, ok, variables = "MODULE ABSENT (rien a cette position)", False, []
             elif st["en_place"] != st["configure"]:
                 found = code_name(st["en_place"], names)
                 en_place = {"code": "", "nom": found, "references": MODULE_NAMES.get(found, "")}
                 etat, ok = f"MODULE DIFFERENT DE LA CONFIGURATION ({found} en place)", False
+                variables = module_vars(found, pos, part) if found.upper().startswith("TSX") else []
             else:
                 en_place = {"code": "", "nom": ref, "references": "meme type que configure"}
                 if fault:
                     etat = "DEFAUT EXTERNE : alimentation capteurs / actionneurs ou voie en defaut"
         rows.append({"emplacement": pos, "type": kind, "adresse": address,
                      "configure": {"code": "", "nom": ref, "references": MODULE_NAMES.get(ref, "")},
-                     "en_place": en_place, "etat": etat, "ok": ok})
+                     "en_place": en_place, "etat": etat, "ok": ok, "variables": variables})
     if faults is not None:
         configured = {p for p, _ in config}
         for pos, f in enumerate(faults):
             if f and pos not in configured and pos > 0:
                 rows.append({"emplacement": pos, "type": "?", "adresse": "", "configure": None, "en_place": None,
-                             "etat": f"position non configuree, {fault_text(f)}", "ok": False})
+                             "etat": f"position non configuree, {fault_text(f)}", "ok": False, "variables": []})
     return sorted(rows, key=lambda r: r["emplacement"])
 
 
@@ -498,6 +556,7 @@ def tsx_diagnostic(plc, config=None) -> dict:
 # ---- watch table ----
 
 ADDRESS = re.compile(r"^%?(MW|MD|KW|KD|SW|M|S)(\d+)$", re.IGNORECASE)
+IO_ADDRESS = re.compile(r"^%?(I|Q|IW|QW)\d+\.\d+$", re.IGNORECASE)
 WORD_FORMATS = ["dec", "ud", "hex", "bin", "char"]
 DWORD_FORMATS = ["dec", "ud", "hex", "bin", "real"]
 MAX_RUN = {2: 60, 4: 30}
@@ -510,6 +569,9 @@ class TsxVar:
         self.text = text.strip()
         address, _, fmt = self.text.partition(":")
         m = ADDRESS.match(address.strip())
+        if not m and IO_ADDRESS.match(address.strip()):
+            raise ValueError("lecture des %I / %Q pas encore possible sur TSX : lancer une fois "
+                             "python tools/tsx.py chercher-es (voir la doc)")
         if not m:
             raise ValueError("adresse TSX non reconnue (ex. %MW10, %MD4, %KW0, %SW30, %M5, %S10)")
         self.zone, self.addr = m.group(1).upper(), int(m.group(2))

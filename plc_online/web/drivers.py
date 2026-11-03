@@ -100,6 +100,16 @@ def module_info(code: int, kind: str) -> dict:
     return {"code": f"{code:04X}", "nom": name or "Module inconnu", "references": refs}
 
 
+def s7_module_vars(c: dict, slot: int) -> list:
+    """Watch-table rows for a configured module: each input / output byte in binary. Only
+    process-image bytes (below 128): analog modules sit at 256 and up, outside the image."""
+    prefix = {"entrees": "EB", "sorties": "AB"}.get(c["type"])
+    start, size = c["adresse"], max(c["octets"], 1)
+    if not prefix or start + size > 128:
+        return []
+    return [{"adresse": f"{prefix}{b}:bin", "libelle": f"empl. {slot} octet {i}"} for i, b in enumerate(range(start, start + size))]
+
+
 def s7_diagnostic(plc, rack: int = 0) -> dict:
     """Diagnostic buffer, rack (configured vs plugged in) and CPU parameters of an S7-300.
     Each part is read on its own: one refused read does not hide the others."""
@@ -144,6 +154,7 @@ def s7_diagnostic(plc, rack: int = 0) -> dict:
                "etat": a["etat"] if a else "absent", "ok": True}
         if c and kind != "CPU":
             row["adresse"] = address_range(c["type"], c["adresse"], c["octets"])
+            row["variables"] = s7_module_vars(c, slot)
         elif a and kind != "CPU":
             row["adresse"] = f"{a['adresse']}"
         conf_code = c["code"] if c else (a["type_config"] if a else 0)
@@ -165,6 +176,7 @@ def s7_diagnostic(plc, rack: int = 0) -> dict:
         elif kind != "CPU" and conf_code and not real_code:
             row["ok"] = False
             row["etat"] = "AUCUN MODULE EN PLACE"
+            row["variables"] = []
         elif a and a["etat"] != "ok":
             row["ok"] = False
         out["modules"].append(row)

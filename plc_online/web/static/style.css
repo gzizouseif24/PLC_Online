@@ -277,3 +277,12 @@ a.btn { text-decoration: none; display: inline-block; }
 /* delete a copy: quiet until hovered */
 .btn-suppr { color: var(--fault); }
 .btn-suppr:hover { border-color: var(--fault); }
+
+.rack-vars { border: 1px solid var(--line, #2c373c); border-radius: 6px; padding: 10px 12px; margin: 12px 0; }
+.rack-vars-head { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.rack-vars-head .spacer { flex: 1; }
+.rack-vars-head .hint { margin: 0; }
+.rack-var { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 6px 0; border-top: 1px solid var(--line, #2c373c); }
+.rack-var:first-child { margin-top: 8px; }
+.rack-var .mono { font-family: Consolas, monospace; }
+.rack-var .grow { flex: 1; min-width: 140px; }

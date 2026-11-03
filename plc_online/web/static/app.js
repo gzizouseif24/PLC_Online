@@ -98,7 +98,7 @@ function applyBrand(key) {
   $("watch-hint").textContent = tsx
     ? "%MW, %MD, %KW, %KD, %SW, %M, %S (le % est facultatif). Ecriture : %MW et %MD. Le format se change sur chaque ligne."
     : "E/I, A/Q, M, DB10.DBW2, T5, Z2. Le format se change sur chaque ligne.";
-  $("ajout-adresse").placeholder = tsx ? "%MW10, %MD4, %M5, %S10" : "MW10, E0.0, DB10.DBD4";
+  $("ajout-adresse").placeholder = tsx ? "%MW10, %MD4, %M5, %I1.0" : "MW10, E0.0, DB10.DBD4";
   $("titre-params").textContent = tsx ? "Automate" : "Parametres CPU";
   const head = $("table-rack").tHead.rows[0].cells;
   head[0].textContent = tsx ? "Position" : "Empl.";
@@ -107,6 +107,7 @@ function applyBrand(key) {
   watch = loadWatch();
   for (const k of Object.keys(lastValues)) delete lastValues[k];
   diagLoaded = false;
+  rackModules = null;
 }
 
 function localStorageGet(key) {
@@ -188,7 +189,7 @@ function showTab(id) {
   }
   for (const v of document.querySelectorAll(".vue")) v.hidden = v.id !== id;
   if (id === "vue-diag" && !diagLoaded) loadDiagnostic();
-  if (id === "vue-watch") startWatch(); else stopWatch();
+  if (id === "vue-watch") { renderRackVars(); startWatch(); } else stopWatch();
   if (id === "vue-prog") loadBackups();
   if (id === "vue-data") loadData();
 }
@@ -645,6 +646,7 @@ function formatsFor(adresse) {
   const a = adresse.toUpperCase();
   if (family === "tsx") {
     const z = a.replace(/^%/, "").replace(/\d+$/, "");
+    if (/^[IQ]W\d+\.\d+$/.test(a.replace(/^%/, ""))) return ["dec", "ud", "hex", "bin"];
     if (z === "MD" || z === "KD") return ["dec", "ud", "hex", "bin", "real"];
     if (["MW", "KW", "SW"].includes(z)) return ["dec", "ud", "hex", "bin", "char"];
     return [];
@@ -886,7 +888,57 @@ function rows(tbody, items, render, emptyText, cols) {
   tbody.replaceChildren(...items.map(render));
 }
 
+// ---- rack modules offered in the watch table ----
+
+let rackModules = null;          // rack rows of the last diagnostic read
+
+function renderRackVars() {
+  const list = $("rack-vars-list");
+  if (!rackModules) {
+    $("rack-vars-info").textContent = "Lire le rack pour proposer les entrees / sorties des modules en place.";
+    list.replaceChildren();
+    return;
+  }
+  const mods = rackModules.filter((m) => m.variables && m.variables.length);
+  $("rack-vars-info").textContent = mods.length
+    ? "Cliquer sur Ajouter pour mettre les voies du module dans la table."
+    : "Aucun module d'entrees / sorties en place.";
+  const rows = mods.map((m) => {
+    const name = (m.en_place && m.en_place.nom) || (m.configure && m.configure.nom) || m.type;
+    const first = m.variables[0].adresse, last = m.variables[m.variables.length - 1].adresse;
+    const strip = (a) => a.split(":")[0];
+    const btn = el("button", "btn", "Ajouter");
+    btn.type = "button";
+    btn.addEventListener("click", () => addRackVars([m]));
+    const row = el("div", "rack-var");
+    row.append(el("span", "mono", (family === "tsx" ? "Pos " : "Empl. ") + m.emplacement),
+               el("span", "grow", name + (m.ok ? "" : "  (en defaut)")),
+               el("span", "mono", strip(first) + (first === last ? "" : " ... " + strip(last))), btn);
+    return row;
+  });
+  if (mods.length > 1) {
+    const all = el("button", "btn btn-primary", "Tout ajouter");
+    all.type = "button";
+    all.addEventListener("click", () => addRackVars(mods));
+    const row = el("div", "rack-var");
+    row.append(el("span", "grow", ""), all);
+    rows.push(row);
+  }
+  list.replaceChildren(...rows);
+}
+
+function addRackVars(mods) {
+  let added = 0;
+  for (const m of mods) for (const v of m.variables) if (addWatch(v.adresse, v.libelle)) added++;
+  saveWatch();
+  renderWatchRows();
+  setWatchMsg(added ? `${added} adresse(s) ajoutee(s).` : "Deja dans la table.");
+  if (monitoring) readWatch();
+}
+
 function renderDiagnostic(d) {
+  rackModules = d.modules || null;
+  renderRackVars();
   $("diag-alertes").replaceChildren(...d.alertes.map((a) => el("div", "alerte", a)));
   $("diag-info").textContent = d.systeme ? "Bits et mots systeme de l'automate."
     : d.config_compilee ? "Configuration materielle compilee le " + d.config_compilee + "."
@@ -1042,6 +1094,14 @@ async function init() {
   $("form-connexion").addEventListener("submit", connect);
   $("btn-deconnecter").addEventListener("click", disconnect);
   $("btn-diag").addEventListener("click", loadDiagnostic);
+  $("btn-rack-vars").addEventListener("click", async () => {
+    const b = $("btn-rack-vars");
+    b.disabled = true;
+    $("rack-vars-info").textContent = "Lecture du rack...";
+    await loadDiagnostic();
+    b.disabled = false;
+    if (!rackModules) $("rack-vars-info").textContent = $("diag-msg").textContent || "Rack non lu.";
+  });
   for (const t of document.querySelectorAll(".tab")) t.addEventListener("click", () => showTab(t.dataset.tab));
   $("form-ajout").addEventListener("submit", (ev) => {
     ev.preventDefault();

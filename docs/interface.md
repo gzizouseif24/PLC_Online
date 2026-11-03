@@ -40,7 +40,11 @@ the program. Same list, download and import as the Programme tab, CSV files.
   import .stx / .tsxbak, delete), Donnees (%MW / %KW to CSV, restore changed %MW, import PL7
   .dat, delete). Confirmed on the client PLC: diagnostic and rack, clock, data save and restore,
   program restore. Demo TSX.
-- **TSX still missing:** live %I / %Q (PL7 reads them through its debug buffer: needs a capture
+- **Surveillance, modules en place (03/11):** "Lire le rack" lists the I/O modules found in the
+  rack with their channels (TSX %I / %Q / %IW per position, S7 input / output bytes in binary) and
+  adds them to the table in one click. Absent modules are left out.
+- **TSX still missing:** live %I / %Q (`python tools/tsx.py chercher-es`: read-only probe, one
+  input toggled 0 -> 1 -> 0, prints the answers that follow it and writes a log) (PL7 reads them through its debug buffer: needs a capture
   with an input toggled), changing module parameters (supply monitoring: needs two .stx that
   differ only by that tick).
 

@@ -189,3 +189,25 @@ class TsxWebTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ModuleVarsTest(unittest.TestCase):
+    def test_rack_channels(self):
+        from plc_online.web.tsx_web import module_rows, module_vars
+        cfg = [(1, "TSX DEZ 32D2"), (2, "TSX DEZ 32D2"), (3, "TSX DEZ 32D2"), (4, "TSX DEZ 32D2"),
+               (5, "TSX DSZ 08T2"), (6, "TSX DMZ 28DR"), (7, "TSX DMZ 28DR"), (8, "TSX AEZ 414")]
+        rows = {r["emplacement"]: r for r in module_rows(cfg, [0] * 16, {5: {"configure": 0x101B, "en_place": None}})}
+        self.assertEqual(rows[1]["variables"][0]["adresse"], "%I1.0")
+        self.assertEqual(rows[2]["variables"][-1], {"adresse": "%I2.15", "libelle": "DEZ 32D2 voie 31"})
+        self.assertEqual(rows[3]["variables"][-1]["libelle"], "DEZ 32D2 voie 15")   # second module, not a pair with 2
+        self.assertEqual(rows[5]["variables"], [])                                   # absent
+        self.assertEqual(len(rows[6]["variables"]), 16)
+        self.assertEqual(rows[7]["variables"][-1]["adresse"], "%Q7.11")
+        self.assertEqual(rows[8]["variables"][3]["adresse"], "%IW8.3")
+        self.assertEqual(module_vars("TSX DSZ 08T2", 5)[-1]["adresse"], "%Q5.7")
+
+    def test_io_address_message(self):
+        from plc_online.web.tsx_web import TsxVar
+        with self.assertRaises(ValueError) as e:
+            TsxVar("%I1.0")
+        self.assertIn("chercher-es", str(e.exception))
