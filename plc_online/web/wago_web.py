@@ -281,7 +281,7 @@ def wago_diagnostic(plc) -> dict:
     if code is None:
         out["alertes"].append("Code d'erreur du voyant I/O (0x1020) non lu")
     if code:
-        out["parametres_cpu"].append(("Dernier code I/O (0x1020)", f"{code} / {arg} : {wg.LED_ERRORS.get(code, 'code inconnu')}"
+        out["parametres_cpu"].append(("Dernier code I/O (0x1020)", f"{code} / {arg} : {wg.led_text(code, arg)}"
                                       + (f" (module {arg})" if code in (4, 5) and arg else "")
                                       + " — en defaut seulement si le voyant I/O clignote rouge"))
     try:
@@ -328,7 +328,7 @@ def wago_status(plc) -> dict:
     out = {"marque": "WAGO", "modele": f"WAGO {ident['modele']}", "reference": f"firmware {ident['firmware']}",
            "mode": "OK", "alertes": [], "voyants": [], "details": []}
     if code:
-        out["details"].append(("Dernier code I/O", f"{code} / {arg} : {wg.LED_ERRORS.get(code, 'code inconnu')} "
+        out["details"].append(("Dernier code I/O", f"{code} / {arg} : {wg.led_text(code, arg)} "
                                "(en defaut seulement si le voyant I/O clignote rouge)"))
     out["details"].append(("Adresse IP", plc.host))
     try:

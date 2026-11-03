@@ -43,6 +43,26 @@ LED_ERRORS = {
     9: "erreur de programme (coupleur programmable)",
 }
 
+# error code 6 "fieldbus specific errors": arguments (750-352 manual 1.4.0, table 48)
+LED6_ARGS = {
+    1: "MAC ID invalide (remplacer le coupleur)",
+    2: "erreur d'initialisation du materiel Ethernet",
+    3: "erreur d'initialisation TCP/IP",
+    4: "pas d'adresse IP (configuration reseau / serveur BootP)",
+    5: "erreur d'initialisation du protocole applicatif",
+    6: "image process trop grande (trop de modules)",
+    7: "adresse IP en double sur le reseau",
+    8: "erreur de construction de l'image process",
+    9: "erreur de correspondance modules / bus de terrain : verifier le fichier EA-config.xml du coupleur",
+}
+
+
+def led_text(code, arg) -> str:
+    if code == 6 and arg in LED6_ARGS:
+        return f"erreur bus de terrain : {LED6_ARGS[arg]}"
+    return LED_ERRORS.get(code, "code inconnu")
+
+
 # words per channel group in the input / output image, by item number (no status byte)
 ANALOG_IN = {
     "452": 2, "453": 4, "454": 2, "455": 4, "456": 2, "457": 4, "459": 4, "460": 4, "461": 2, "462": 2,
