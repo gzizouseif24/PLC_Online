@@ -76,6 +76,10 @@ STATUS_BITS = {
     1067: "erreur d'execution (code dans D1067)",
     1068: "erreur d'execution verrouillee (pas dans D1068)",
 }
+# right-side modules and expansion I/O (DVP-SV): read when present, ignored if refused
+EXPANSION = {1140: "modules speciaux a droite", 1142: "entrees X d'extension", 1143: "sorties Y d'extension"}
+MODULE_IDS = 1320          # D1320..D1327 : code des modules speciaux 1..8
+
 STATUS_WORDS = {
     1000: "chien de garde (ms)",
     1001: "version firmware",
@@ -153,8 +157,72 @@ class Delta:
     def clock(self) -> list:
         return self.read_words("D", CLOCK, 7)
 
+    def set_clock(self, when) -> None:
+        """D1313..D1319 from a datetime (Delta: seconds, minutes, hours, day, month, weekday 0 = Sunday,
+        year - 2000)."""
+        self.write_words("D", CLOCK, [when.second, when.minute, when.hour, when.day, when.month,
+                                      (when.weekday() + 1) % 7, when.year % 100])
+
+    def read_all_d(self, progress=None) -> list:
+        """D0.. until the PLC refuses (end of its D area), 100 words at a time."""
+        values = []
+        while len(values) < 10000:
+            n = min(MAX_WORDS, 10000 - len(values))
+            try:
+                values += self.read_words("D", len(values), n)
+            except PlcRefused:
+                try:                                 # last block crosses the end: one word at a time
+                    while len(values) < 10000:
+                        values += self.read_words("D", len(values), 1)
+                except PlcRefused:
+                    pass
+                break
+            if progress:
+                progress(len(values))
+        return values
+
     def close(self):
         self.mb.close()
+
+
+def changed_runs(addrs) -> list:
+    """Sorted addresses -> [start, length] runs, cut at D4096 (address jump)."""
+    runs = []
+    for a in sorted(addrs):
+        if runs and runs[-1][0] + runs[-1][1] == a and a != 4096 and runs[-1][1] < MAX_WORDS:
+            runs[-1][1] += 1
+        else:
+            runs.append([a, 1])
+    return runs
+
+
+def data_csv(values, plc: str, stamp: str) -> str:
+    """values: list (D0..) or {address: value} (sparse, from an imported file)."""
+    items = sorted(values.items()) if isinstance(values, dict) else enumerate(values)
+    lines = [f"# date;{stamp}", f"# automate;{plc}", "zone;adresse;valeur;signe;hex"]
+    lines += [f"D;{i};{v};{signed16(v)};{v:04X}" for i, v in items]
+    return "\n".join(lines) + "\n"
+
+
+def parse_data_csv(text: str) -> tuple:
+    """CSV of data_csv (or of tools/delta.py) -> ({address: value} of the D, PLC name or '')."""
+    out, plc = {}, ""
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("# automate;"):
+            plc = line.split(";", 1)[1]
+        if not line or line.startswith("#") or line.lower().startswith("zone;"):
+            continue
+        parts = line.split(";")
+        if len(parts) < 3 or parts[0].strip().upper() != "D":
+            continue
+        try:
+            out[int(parts[1])] = int(parts[2]) & 0xFFFF
+        except ValueError:
+            raise DeltaError(f"ligne illisible : {line}") from None
+    if not out:
+        raise DeltaError("aucun mot D dans le fichier")
+    return out, plc
 
 
 def open_delta(port, mode="ascii", baud=9600, parity="E", stopbits=1, station=1, timeout=0.6, trace=False):

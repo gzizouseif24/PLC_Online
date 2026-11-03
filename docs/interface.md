@@ -48,6 +48,13 @@ the program. Same list, download and import as the Programme tab, CSV files.
   with an input toggled), changing module parameters (supply monitoring: needs two .stx that
   differ only by that tick).
 
+- **Delta DVP (03/11), demo only so far:** connection (COM port, ASCII / RTU, speed, parity,
+  station), Etat (RUN from M1000, faults from M1004 / M1008 / M1009 / M1067 with codes and program
+  step, cycle, clock + set clock), Diagnostic (special M / D explained, built-in X / Y, expansion
+  I/O and right-side modules from D1140..D1143 / D1320..), Surveillance (D M X Y T C S, write D M Y
+  T C S), Donnees (all D to CSV, restore the changed D, import .csv). **Program save missing:** the
+  WPLSoft upload uses Delta commands outside Modbus; needs one capture of WPLSoft PLC -> PC.
+
 ## Order
 
 1. **Shared serial connection** (COM port list, settings per brand, one port open at a time,

@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 
 from plc_online.protocols import s7_program as program
+from plc_online.protocols.delta import DeltaError
 from plc_online.protocols.modbus import ModbusError, PlcRefused
 from plc_online.protocols.s7 import BLOCK_TYPES, S7300, S7Error, parse_block, parse_sdb1_modules
 from plc_online.protocols.s7_catalogue import catalog_name
@@ -597,10 +598,11 @@ def import_files(folder: Path, files: list, note: str = "") -> dict:
 S7_FEATURES = ["horloge", "rack", "evenements", "db", "projet_step7", "programme", "runstop"]
 TSX_FEATURES = ["donnees", "horloge", "programme", "runstop"]
 WAGO_FEATURES = ["chercher"]
+DELTA_FEATURES = ["donnees", "horloge"]
 
 
 def _brands():
-    from plc_online.web import tsx_web, wago_web
+    from plc_online.web import delta_web, tsx_web, wago_web
     return {
         "s7-300": {"nom": "Siemens S7-300", "disponible": True, "famille": "s7", "fonctions": S7_FEATURES,
                    "reglages": [{"cle": "mpi", "nom": "Adresse MPI", "defaut": 2},
@@ -616,6 +618,10 @@ def _brands():
                  "fonctions": WAGO_FEATURES, "reglages": wago_web.SETTINGS},
         "demo-wago": {"nom": "Demo (WAGO 750-352 simule)", "disponible": True, "famille": "wago",
                       "fonctions": WAGO_FEATURES, "reglages": []},
+        "delta": {"nom": "Delta DVP (SV, SS, SA...)", "disponible": True, "famille": "delta",
+                  "fonctions": DELTA_FEATURES, "reglages": delta_web.SETTINGS},
+        "demo-delta": {"nom": "Demo (Delta DVP28SV simule)", "disponible": True, "famille": "delta",
+                       "fonctions": DELTA_FEATURES, "reglages": []},
         "omron": {"nom": "Omron CJ1M", "disponible": False, "reglages": []},
         "panasonic": {"nom": "Panasonic FP0R", "disponible": False, "reglages": []},
     }
@@ -630,6 +636,7 @@ class Session:
     def __init__(self, opener=None, backups=None, tsx_backups=None):
         from plc_online.web.tsx_web import TsxOps
         from plc_online.web.wago_web import WagoOps
+        from plc_online.web.delta_web import DeltaOps
         self.lock = threading.Lock()
         self.plc, self.brand, self.settings = None, None, {}
         self.opener = opener or open_plc
@@ -637,6 +644,7 @@ class Session:
         self.tsx_backups = Path(tsx_backups) if tsx_backups else (Path(backups) / "tsx" if backups else DEFAULT_TSX_BACKUPS)
         self.tsx = TsxOps(self)
         self.wago = WagoOps(self)
+        self.delta = DeltaOps(self)
         self.job = None                   # long operation running in the background
         self.last_status = None
 
@@ -661,7 +669,7 @@ class Session:
 
     def _ops(self):
         """TsxOps when a TSX is connected, None for the S7-300 (methods of this class)."""
-        return {"tsx": self.tsx, "wago": self.wago}.get(self.family)
+        return {"tsx": self.tsx, "wago": self.wago, "delta": self.delta}.get(self.family)
 
     def busy(self) -> str:
         j = self.job
@@ -723,12 +731,12 @@ class Session:
 
     def list_backups(self) -> dict:
         if self._ops():
-            return self.tsx.list_backups()
+            return self._ops().list_backups()
         return {"dossier": str(self.backups), "sauvegardes": list_backups(self.backups)}
 
     def backup_blocks(self, backup_id) -> dict:
         if self._ops():
-            return self.tsx.backup_blocks(backup_id)
+            return self._ops().backup_blocks(backup_id)
         try:
             return backup_blocks(self.backups, backup_id)
         except S7Error as e:
@@ -736,7 +744,7 @@ class Session:
 
     def save_program(self, note: str) -> dict:
         if self._ops():
-            return self.tsx.save_program(note)
+            return self._ops().save_program(note)
         def work(plc, progress):
             blocks = program.upload_program(plc, lambda k, i, n: progress(f"lecture {k} {i}/{n}", i, n))
             if not blocks:
@@ -758,7 +766,7 @@ class Session:
 
     def compare(self, backup_id) -> dict:
         if self._ops():
-            return self.tsx.compare(backup_id)
+            return self._ops().compare(backup_id)
         path = backup_path(self.backups, backup_id)
 
         def work(plc, progress):
@@ -769,7 +777,7 @@ class Session:
 
     def restore_plan(self, backup_id, with_db: bool) -> dict:
         if self._ops():
-            return self.tsx.restore_plan(backup_id, with_db)
+            return self._ops().restore_plan(backup_id, with_db)
         path = backup_path(self.backups, backup_id)
 
         def run(plc):
@@ -780,7 +788,7 @@ class Session:
 
     def restore(self, backup_id, with_db: bool, delete_extra: bool) -> dict:
         if self._ops():
-            return self.tsx.restore(backup_id, with_db, delete_extra)
+            return self._ops().restore(backup_id, with_db, delete_extra)
         path = backup_path(self.backups, backup_id)
 
         def work(plc, progress):
@@ -793,7 +801,7 @@ class Session:
 
     def start_cpu(self) -> dict:
         if self._ops():
-            return self.tsx.start_cpu()
+            return self._ops().start_cpu()
         def run(plc):
             plc.start()
             return {"ok": True}
@@ -801,7 +809,7 @@ class Session:
 
     def stop_cpu(self) -> dict:
         if self._ops():
-            return self.tsx.stop_cpu()
+            return self._ops().stop_cpu()
         def run(plc):
             plc.stop()
             return {"ok": True}
@@ -809,7 +817,7 @@ class Session:
 
     def set_clock(self) -> dict:
         if self._ops():
-            return self.tsx.set_clock()
+            return self._ops().set_clock()
         def run(plc):
             plc.set_clock()
             return {"horloge": plc.read_clock()}
@@ -823,16 +831,16 @@ class Session:
     def data_delete(self, backup_id) -> dict:
         if self.busy():
             raise DriverError(f"Operation en cours : {self.busy()}")
-        return delete_copy(self.tsx.data, backup_id)
+        return delete_copy((self.delta if self.family == "delta" else self.tsx).data, backup_id)
 
     def export_backup(self, backup_id) -> tuple:
         if self._ops():
-            return self.tsx.export_backup(backup_id)
+            return self._ops().export_backup(backup_id)
         return export_zip(self.backups, backup_id)
 
     def import_backup(self, files, note) -> dict:
         if self._ops():
-            return self.tsx.import_backup(files, note)
+            return self._ops().import_backup(files, note)
         self.backups.mkdir(parents=True, exist_ok=True)
         return import_files(self.backups, files, note)
 
@@ -851,6 +859,8 @@ class Session:
                 raise DriverError(f"Refuse par l'automate : {e}") from None
             except PlcRefused as e:
                 raise DriverError(f"Refuse : {e}") from None
+            except DeltaError as e:
+                raise DriverError(str(e)) from None
             except (S7Error, OSError, ModbusError) as e:
                 self._close()
                 raise DriverError(f"Liaison perdue : {e}") from None
@@ -858,12 +868,13 @@ class Session:
     # ---- data (TSX %MW / %KW) ----
 
     def _tsx_only(self):
-        if not self._ops():
-            raise DriverError("Sauvegarde des donnees : TSX seulement pour l'instant")
-        return self.tsx
+        """Ops of the brands with a Donnees tab (TSX, Delta)."""
+        if self.family not in ("tsx", "delta"):
+            raise DriverError("Sauvegarde des donnees : TSX et Delta seulement pour l'instant")
+        return self._ops()
 
     def data_list(self) -> dict:
-        return self.tsx.data_list()
+        return (self.delta if self.family == "delta" else self.tsx).data_list()
 
     def data_save(self, note) -> dict:
         return self._tsx_only().data_save(note)
@@ -875,10 +886,10 @@ class Session:
         return self._tsx_only().data_restore(backup_id)
 
     def data_export(self, backup_id) -> tuple:
-        return self.tsx.data_export(backup_id)
+        return (self.delta if self.family == "delta" else self.tsx).data_export(backup_id)
 
     def data_import(self, files, note) -> dict:
-        return self.tsx.data_import(files, note)
+        return (self.delta if self.family == "delta" else self.tsx).data_import(files, note)
 
     def values(self, texts) -> dict:
         if self._ops():
@@ -912,6 +923,9 @@ class Session:
 def open_plc(brand: str, settings: dict):
     if brand == "demo":
         return DemoS7()
+    if brand in ("delta", "demo-delta"):
+        from plc_online.web import delta_web
+        return delta_web.demo_delta() if brand == "demo-delta" else delta_web.open_delta(settings)
     if brand in ("wago", "demo-wago"):
         from plc_online.web import wago_web
         return wago_web.DemoWago() if brand == "demo-wago" else wago_web.open_wago(settings)

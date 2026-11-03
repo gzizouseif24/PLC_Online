@@ -61,6 +61,7 @@ function renderSettings() {
   $("hint-s7").hidden = key !== "s7-300";
   $("hint-tsx").hidden = key !== "tsx";
   $("hint-wago").hidden = key !== "wago";
+  $("hint-delta").hidden = key !== "delta";
   if (key === "wago") loadCards();
 }
 
@@ -97,17 +98,26 @@ function applyBrand(key) {
   $("import-fichiers").accept = tsx ? ".stx,.tsxbak,.zip" : ".zip,.bin";
   $("btn-sauver").textContent = tsx ? "Sauvegarder le programme de l'automate" : "Sauvegarder le programme de la CPU";
   $("col-contenu").textContent = tsx ? "Contenu" : "Blocs";
-  $("watch-hint").textContent = family === "wago"
+  $("watch-hint").textContent = family === "delta"
+    ? "D100, M10, X17 et Y0 (en octal), T5 / C2 (valeur), S0. Ecriture : D, M, Y, T, C, S. Le format se change sur chaque ligne."
+    : family === "wago"
     ? "IW0 (mot d'entree), QW0 (mot de sortie), I0 (bit d'entree), Q0 (bit de sortie). Ecriture : QW et Q. Format Pt100 pour le 750-461."
     : tsx
     ? "%MW, %MD, %KW, %KD, %SW, %M, %S (le % est facultatif). Ecriture : %MW et %MD. Le format se change sur chaque ligne."
     : "E/I, A/Q, M, DB10.DBW2, T5, Z2. Le format se change sur chaque ligne.";
-  $("ajout-adresse").placeholder = family === "wago" ? "IW0, QW0, I0, Q0" : tsx ? "%MW10, %MD4, %M5, %I1.0" : "MW10, E0.0, DB10.DBD4";
-  $("titre-params").textContent = family === "wago" ? "Image process" : tsx ? "Automate" : "Parametres CPU";
+  $("ajout-adresse").placeholder = family === "delta" ? "D100, M10, X0, Y0" : family === "wago" ? "IW0, QW0, I0, Q0" : tsx ? "%MW10, %MD4, %M5, %I1.0" : "MW10, E0.0, DB10.DBD4";
+  $("titre-params").textContent = family === "delta" ? "Automate" : family === "wago" ? "Image process" : tsx ? "Automate" : "Parametres CPU";
   const head = $("table-rack").tHead.rows[0].cells;
-  head[0].textContent = tsx || family === "wago" ? "Position" : "Empl.";
-  head[3].textContent = family === "wago" ? "Module" : tsx ? "Configure (PL7)" : "Configure (HW Config)";
-  head[4].textContent = family === "wago" ? "Valeurs" : "En place";
+  head[0].textContent = tsx || family === "wago" ? "Position" : family === "delta" ? "" : "Empl.";
+  head[3].textContent = family === "wago" || family === "delta" ? "Module" : tsx ? "Configure (PL7)" : "Configure (HW Config)";
+  head[4].textContent = family === "wago" || family === "delta" ? "Valeurs" : "En place";
+  $("data-hint").textContent = family === "delta"
+    ? "Copie de tous les registres D (recettes, compteurs, reglages), sans le programme."
+    : "Copie de tous les mots internes %MW et des constantes %KW (recettes, compteurs, reglages), sans le programme.";
+  $("data-import-texte").textContent = family === "delta" ? "Importer un .csv" : "Importer un .dat ou .csv";
+  $("data-import-hint").textContent = family === "delta" ? "Fichier deja sur le PC (.csv de cet outil) :"
+    : "Fichier deja sur le PC (transfert de donnees PL7 .dat, ou .csv) :";
+  $("data-import").accept = family === "delta" ? ".csv" : ".dat,.csv";
   watch = loadWatch();
   for (const k of Object.keys(lastValues)) delete lastValues[k];
   diagLoaded = false;
@@ -561,7 +571,8 @@ function saveData(ev) {
 }
 
 async function planData(b) {
-  setDataMsg("Lecture des %MW de l'automate...");
+  const zn = family === "delta" ? "D" : "%MW";
+  setDataMsg(`Lecture des ${zn} de l'automate...`);
   let plan;
   try {
     plan = await api("POST", "/api/donnees/plan", { id: b.id });
@@ -576,10 +587,10 @@ async function planData(b) {
       box.append(el("p", "avert", "Copie prise sur " + plan.automate_fichier + ", automate connecte : " + plan.automate + "."));
     }
     if (!plan.differents) {
-      box.append(el("p", "", `Rien a restaurer : les ${plan.mots - plan.hors_zone} %MW de l'automate sont deja identiques a la copie.`));
+      box.append(el("p", "", `Rien a restaurer : les ${plan.mots - plan.hors_zone} ${zn} de l'automate sont deja identiques a la copie.`));
       return;
     }
-    box.append(el("p", "", `${plan.differents} %MW differents de la copie (sur ${plan.mots}). Seuls ceux-la seront ecrits :`));
+    box.append(el("p", "", `${plan.differents} ${zn} differents de la copie (sur ${plan.mots}). Seuls ceux-la seront ecrits :`));
     const wrap = el("div", "table-wrap");
     const t = el("table", "table");
     const head = el("thead");
@@ -596,18 +607,18 @@ async function planData(b) {
     wrap.append(t);
     box.append(wrap);
     if (plan.differents > plan.exemples.length) box.append(el("p", "hint", `... et ${plan.differents - plan.exemples.length} autres.`));
-    if (plan.hors_zone) box.append(el("p", "avert", `${plan.hors_zone} %MW de la copie n'existent pas dans l'automate (il a ${plan.zone_automate} %MW) : ignores.`));
+    if (plan.hors_zone) box.append(el("p", "avert", `${plan.hors_zone} ${zn} de la copie n'existent pas dans l'automate (il a ${plan.zone_automate} ${zn}) : ignores.`));
     if (plan.kw_ignores) box.append(el("p", "hint", `${plan.kw_ignores} %KW de la copie non ecrits (constantes : restauration pas encore validee).`));
     if (plan.run) box.append(el("p", "avert", "L'automate est en RUN : le programme peut reecrire certains mots aussitot. Mieux vaut le mettre en STOP avant."));
-    const go = el("button", "btn btn-danger", `Ecrire ces ${plan.differents} %MW`);
+    const go = el("button", "btn btn-danger", `Ecrire ces ${plan.differents} ${zn}`);
     go.type = "button";
     go.addEventListener("click", () => {
-      if (!confirm(`Ecrire ${plan.differents} %MW dans l'automate ?\n\nMachine en securite ?`)) return;
+      if (!confirm(`Ecrire ${plan.differents} ${zn} dans l'automate ?\n\nMachine en securite ?`)) return;
       runJob("/api/donnees/restaurer", { id: b.id }, (r) => {
         const ok = !r.nb_differents_apres;
         showResult(ok ? "ok" : "bad", (rbox) => {
-          rbox.append(el("h4", "", ok ? `Restauration terminee : ${r.ecrits} %MW ecrits et verifies.`
-                                      : `${r.nb_differents_apres} %MW differents apres ecriture (reecrits par le programme ?)`));
+          rbox.append(el("h4", "", ok ? `Restauration terminee : ${r.ecrits} ${zn} ecrits et verifies.`
+                                      : `${r.nb_differents_apres} ${zn} differents apres ecriture (reecrits par le programme ?)`));
           if (!ok) rbox.append(chips(r.differents_apres, "warn"));
         }, "data-resultat");
       }, DATA);
@@ -617,7 +628,7 @@ async function planData(b) {
 }
 
 async function importData(fileList) {
-  const files = [...fileList].filter((f) => /\.(dat|csv)$/i.test(f.name));
+  const files = [...fileList].filter((f) => (family === "delta" ? /\.csv$/i : /\.(dat|csv)$/i).test(f.name));
   if (!files.length) {
     setDataMsg("Aucun fichier .dat ou .csv dans la selection.", true);
     return;
@@ -649,6 +660,7 @@ function formatsFor(adresse) {
   /** Formats that fit the size of the address ([] for a bit: always 0 / 1). */
   const a = adresse.toUpperCase();
   if (family === "wago") return /^[IQ]W\d+$/.test(a) ? ["dec", "pt100", "ud", "hex", "bin"] : [];
+  if (family === "delta") return /^[DTC]\d+$/.test(a) ? ["dec", "ud", "hex", "bin"] : [];
   if (family === "tsx") {
     const z = a.replace(/^%/, "").replace(/\d+$/, "");
     if (/^[IQ]W\d+\.\d+$/.test(a.replace(/^%/, ""))) return ["dec", "ud", "hex", "bin"];
@@ -1072,7 +1084,8 @@ function renderDiagnostic(d) {
   rackModules = d.modules || null;
   renderRackVars();
   $("diag-alertes").replaceChildren(...d.alertes.map((a) => el("div", "alerte", a)));
-  $("diag-info").textContent = family === "wago" ? "Modules lus dans le coupleur, valeurs de l'image process."
+  $("diag-info").textContent = family === "delta" ? "Relais et registres speciaux (M1000.., D1000..), entrees / sorties."
+    : family === "wago" ? "Modules lus dans le coupleur, valeurs de l'image process."
     : d.systeme ? "Bits et mots systeme de l'automate."
     : d.config_compilee ? "Configuration materielle compilee le " + d.config_compilee + "."
     : "Configuration materielle non lue.";

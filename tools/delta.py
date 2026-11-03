@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from plc_online.protocols.delta import (  # noqa: E402
     BIT_AREAS, CLOCK, SEARCH, STATUS_BITS, STATUS_WORDS, DeltaError, ModbusError, PlcRefused,
     error_text, name, open_delta, parse_address, signed16)
+from plc_online.protocols.delta import changed_runs as delta_changed_runs  # noqa: E402
 
 DAYS = ["dimanche", "lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi"]
 
@@ -228,35 +229,10 @@ def cmd_horloge(plc):
 # ---- donnees ----
 
 def read_all_d(plc, show=True):
-    """D0.. until the PLC refuses (end of its D area), 100 words at a time."""
-    values = []
-    while len(values) < 10000:
-        n = min(100, 10000 - len(values))
-        try:
-            values += plc.read_words("D", len(values), n)
-        except PlcRefused:
-            if n > 1:                   # last block may cross the end: one word at a time
-                try:
-                    while len(values) < 10000:
-                        values += plc.read_words("D", len(values), 1)
-                except PlcRefused:
-                    pass
-            break
-        if show:
-            print(f"\rLecture D... {len(values)} mots", end="", flush=True)
+    values = plc.read_all_d((lambda n: print(f"\rLecture D... {n} mots", end="", flush=True)) if show else None)
     if show:
         print()
     return values
-
-
-def changed_runs(addrs):
-    runs = []
-    for a in sorted(addrs):
-        if runs and runs[-1][0] + runs[-1][1] == a and a != 4096:
-            runs[-1][1] += 1
-        else:
-            runs.append([a, 1])
-    return runs
 
 
 def cmd_sauvegarder_donnees(plc, filename=None):
@@ -297,7 +273,7 @@ def cmd_restaurer_donnees(plc, filename):
     if not confirm(f"Ecrire ces {len(diff)} mots ? Machine en securite ?"):
         print("Annule, rien n'a ete ecrit.")
         return
-    for start, length in changed_runs(diff):
+    for start, length in delta_changed_runs(diff):
         plc.write_words("D", start, [diff[a] for a in range(start, start + length)])
     after = read_all_d(plc, show=False)
     wrong = [a for a in diff if after[a] != diff[a]]
