@@ -979,7 +979,7 @@ function requestRows(requests) {
 }
 
 async function autoSearch() {
-  await wagoAction($("btn-auto"), "Recherche : table ARP, reseaux du PC, puis ecoute DHCP / BootP (environ 15 s)...", async () => {
+  await wagoAction($("btn-auto"), "Recherche en cours (35 s) : ETEINDRE PUIS RALLUMER LE COUPLEUR MAINTENANT (il demande son adresse au demarrage)...", async () => {
     const r = await api("POST", "/api/wago/auto", {});
     const wago = r.trouves.filter((t) => t.wago);
     const rows = deviceRows(r.trouves).concat(requestRows(r.demandes));
@@ -993,7 +993,8 @@ async function autoSearch() {
     }
     let text = "Rien trouve sur les reseaux du PC (" + (r.reseaux.join(", ") || "aucun") + ") et aucune demande d'adresse entendue. ";
     if (r.arp.length) text += "Carte WAGO vue dans la table ARP : " + r.arp.map((a) => a.ip).join(", ") + ". ";
-    if (r.erreurs.length) text += "Ecoute impossible (" + r.erreurs.join("; ") + "). ";
+    if (r.erreurs.length) text += "Ecoute en partie impossible (" + r.erreurs.join("; ") + "). ";
+    text += "Pare-feu Windows : autoriser Python (reseaux prives ET publics), sinon la demande d'adresse n'arrive pas. ";
     text += "Le coupleur a donc probablement une adresse fixe dans un autre reseau : Balayer les reseaux courants. "
       + "Ou : eteindre / rallumer le coupleur et relancer (il demande une adresse au demarrage).";
     wagoMsg(text, true);

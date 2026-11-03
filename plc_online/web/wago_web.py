@@ -13,7 +13,7 @@ def _drv():
     return drivers
 
 
-SETTINGS = [{"cle": "ip", "nom": "Adresse IP du coupleur", "defaut": "192.168.1.1", "type": "texte"}]
+SETTINGS = [{"cle": "ip", "nom": "Adresse IP du coupleur", "defaut": "", "type": "texte"}]
 
 
 def open_wago(settings: dict):
@@ -21,7 +21,7 @@ def open_wago(settings: dict):
     try:
         ipaddress.ip_address(ip)
     except ValueError:
-        raise _drv().DriverError("Adresse IP du coupleur : ex. 192.168.1.10 (ou bouton Chercher)") from None
+        raise _drv().DriverError("Adresse IP du coupleur inconnue : Recherche automatique d'abord") from None
     try:
         plc = wg.Wago(ip)
     except OSError as e:
@@ -71,7 +71,7 @@ def adapters() -> dict:
     return {"cartes": cards, "windows": netconf.windows(), "admin": netconf.is_admin()}
 
 
-def auto_search(listen_seconds: float = 12.0) -> dict:
+def auto_search(listen_seconds: float = 30.0) -> dict:
     """1. WAGO cards in the ARP table, 2. Modbus TCP on the PC's networks, 3. if no WAGO found:
     the coupler asking for an address (DHCP / BootP), heard on UDP 67."""
     from plc_online.protocols import dhcp
@@ -83,7 +83,14 @@ def auto_search(listen_seconds: float = 12.0) -> dict:
         found = {"reseaux": [], "trouves": [], "erreur": str(e)}
     out = {"arp": arp, "reseaux": found["reseaux"], "trouves": found["trouves"], "demandes": [], "erreurs": []}
     if not any(t["wago"] for t in found["trouves"]):
-        heard = dhcp.listen(["0.0.0.0"], listen_seconds)
+        # any address, plus each PC address (Windows delivers a broadcast to the socket bound to
+        # the card that received it)
+        own = []
+        try:
+            own = [a["ip"] for c in netconf.adapters() for a in c["adresses"]]
+        except (netconf.NetError, OSError):
+            pass
+        heard = dhcp.listen(["0.0.0.0"] + own, listen_seconds)
         out["demandes"] = heard["demandes"]
         out["erreurs"] = heard["erreurs"]
         for d in out["demandes"]:
