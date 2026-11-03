@@ -281,8 +281,9 @@ def wago_diagnostic(plc) -> dict:
     if code is None:
         out["alertes"].append("Code d'erreur du voyant I/O (0x1020) non lu")
     if code:
-        out["alertes"].append(f"Voyant I/O : code {code}, argument {arg} : {wg.LED_ERRORS.get(code, 'code inconnu')}"
-                              + (f" (module {arg})" if code in (4, 5) and arg else ""))
+        out["parametres_cpu"].append(("Dernier code I/O (0x1020)", f"{code} / {arg} : {wg.LED_ERRORS.get(code, 'code inconnu')}"
+                                      + (f" (module {arg})" if code in (4, 5) and arg else "")
+                                      + " — en defaut seulement si le voyant I/O clignote rouge"))
     try:
         mods = plc.modules()
     except ModbusError as e:
@@ -292,7 +293,7 @@ def wago_diagnostic(plc) -> dict:
     out["modules"].append({"emplacement": 0, "type": "coupleur", "adresse": "",
                            "configure": {"code": "", "nom": f"750-{coupler}", "references": "coupleur Modbus TCP"},
                            "en_place": {"code": "", "nom": plc.host, "references": ""},
-                           "etat": f"code {code}" if code else "ok", "ok": not code, "variables": []})
+                           "etat": "ok", "ok": True, "variables": []})
     unknown = False
     for i, m in enumerate(mods, 1):
         values = module_values(plc, m)
@@ -310,7 +311,7 @@ def wago_diagnostic(plc) -> dict:
         out["alertes"].append("Un module de taille inconnue : adresses des modules suivants non calculees")
     sizes = plc.image_sizes()
     words = lambda b: "non lu" if b is None else f"{b // 16} mots"
-    out["parametres_cpu"] = [
+    out["parametres_cpu"] += [
         ("Entrees analogiques / complexes", words(sizes["analog_in_bits"])),
         ("Sorties analogiques / complexes", words(sizes["analog_out_bits"])),
         ("Entrees TOR", f"{_bits(sizes['digital_in_bits'])} bits"),
@@ -322,12 +323,13 @@ def wago_diagnostic(plc) -> dict:
 def wago_status(plc) -> dict:
     ident = plc.identity()
     code, arg = plc.led_error()
+    # 0x1020 keeps the last error code even when the I/O LED is back to green (750-352, 03/11/2026):
+    # shown as a note, the mode does not go to DEFAUT for it
     out = {"marque": "WAGO", "modele": f"WAGO {ident['modele']}", "reference": f"firmware {ident['firmware']}",
-           "mode": "DEFAUT" if code else "OK", "alertes": [], "voyants": [], "details": []}
+           "mode": "OK", "alertes": [], "voyants": [], "details": []}
     if code:
-        out["alertes"].append(f"Voyant I/O en defaut : code {code} / {arg} : {wg.LED_ERRORS.get(code, 'code inconnu')}")
-    out["voyants"].append({"nom": "I/O", "texte": "bus interne et modules" if code is not None else "code non lu",
-                           "allume": True, "clignote": bool(code), "defaut": bool(code)})
+        out["details"].append(("Dernier code I/O", f"{code} / {arg} : {wg.LED_ERRORS.get(code, 'code inconnu')} "
+                               "(en defaut seulement si le voyant I/O clignote rouge)"))
     out["details"].append(("Adresse IP", plc.host))
     try:
         mods = plc.modules()[1:]
