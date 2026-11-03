@@ -126,28 +126,58 @@ class Wago:
     def regs(self, start, count):
         return self.mb.read_holding(start, count)
 
+    def try_regs(self, start, count):
+        """Words or None if the coupler refuses: function 03, then 04 (some firmwares give the
+        0x1000 / 0x2000 registers only one way)."""
+        for read in (self.mb.read_holding, self.mb.read_input_registers):
+            try:
+                return read(start, count)
+            except PlcRefused:
+                continue
+        return None
+
     def is_wago(self) -> bool:
         try:
-            return self.regs(CONSTANT_CHECK[0], 1)[0] == CONSTANT_CHECK[1]
+            got = self.try_regs(CONSTANT_CHECK[0], 1)
         except ModbusError:
             return False
+        return bool(got) and got[0] == CONSTANT_CHECK[1]
 
     def identity(self) -> dict:
-        index, series, item, major, minor = self.regs(FIRMWARE, 5)
-        return {"modele": f"{series}-{item}", "serie": series, "article": item,
-                "firmware": f"{major:02d}.{minor:02d} (index {index})"}
+        """Each word read on its own: a refused one shows as '?'."""
+        words = [(self.try_regs(FIRMWARE + i, 1) or [None])[0] for i in range(5)]
+        index, series, item, major, minor = words
+        fw = f"{major:02d}.{minor:02d}" if major is not None and minor is not None else "?"
+        return {"modele": f"{series or 750}-{item if item is not None else '?'}", "serie": series, "article": item,
+                "firmware": fw + (f" (index {index})" if index is not None else "")}
 
     def led_error(self) -> tuple:
-        code, arg = self.regs(LED_ERROR, 2)
-        return code, arg
+        """(code, argument), (None, None) if not readable."""
+        got = self.try_regs(LED_ERROR, 2)
+        if got is None:
+            got = [(self.try_regs(LED_ERROR, 1) or [None])[0], (self.try_regs(LED_ERROR + 1, 1) or [0])[0]]
+        return got[0], got[1]
 
     def image_sizes(self) -> dict:
-        ao, ai, do, di = self.regs(IMAGE_SIZES, 4)
+        got = self.try_regs(IMAGE_SIZES, 4) or [(self.try_regs(IMAGE_SIZES + i, 1) or [None])[0] for i in range(4)]
+        ao, ai, do, di = got
         return {"analog_out_bits": ao, "analog_in_bits": ai, "digital_out_bits": do, "digital_in_bits": di}
 
     def modules(self) -> list:
-        """[coupler item, then one description per module], from 0x2030."""
-        words = self.regs(MODULES, 65)
+        """[coupler item, then one description per module], from 0x2030 (65 words, or word by word
+        until 0 / refused if the coupler does not give the whole block)."""
+        words = self.try_regs(MODULES, 65)
+        if words is None:
+            words = []
+            for i in range(65):
+                w = self.try_regs(MODULES + i, 1)
+                if not w:
+                    break
+                words.append(w[0])
+                if w[0] == 0 and i:
+                    break
+        if not words:
+            raise ModbusError("liste des modules (0x2030) refusee par le coupleur")
         coupler, rest = words[0], words[1:]
         mods = []
         for w in rest:

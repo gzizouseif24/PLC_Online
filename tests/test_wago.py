@@ -78,3 +78,26 @@ class WagoTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PickyCoupler(FakeCoupler):
+    """Refuses the firmware words 0x2013/14, 0x1020 and blocks of more than 4 words on 0x2030."""
+
+    def exchange(self, unit, pdu):
+        func, addr, n = struct.unpack(">BHH", pdu[:5])
+        if func in (3, 4) and (addr <= 0x2013 < addr + n or addr <= 0x1020 < addr + n
+                               or (addr == 0x2030 and n > 4)):
+            return bytes([func | 0x80, 2])
+        return super().exchange(unit, pdu)
+
+
+class PickyTest(unittest.TestCase):
+    def test_partial_answers(self):
+        plc = wg.Wago("10.0.0.5", transport=PickyCoupler())
+        self.assertEqual(plc.identity()["modele"], "750-352")
+        self.assertEqual(plc.led_error()[0], None)
+        self.assertEqual([m["code"] for m in plc.modules()[1:]], ["461", "8801"])
+        st = wago_web.wago_status(plc)
+        self.assertIn("Modules", [k for k, _ in st["details"]])
+        d = wago_web.wago_diagnostic(plc)
+        self.assertIn("0x1020", d["alertes"][0])

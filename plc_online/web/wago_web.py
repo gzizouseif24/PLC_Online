@@ -271,13 +271,23 @@ def module_vars(m) -> list:
     return []
 
 
+def _bits(n):
+    return "non lu" if n is None else n
+
+
 def wago_diagnostic(plc) -> dict:
     out = {"alertes": [], "parametres_cpu": [], "config_compilee": "", "modules": []}
     code, arg = plc.led_error()
+    if code is None:
+        out["alertes"].append("Code d'erreur du voyant I/O (0x1020) non lu")
     if code:
         out["alertes"].append(f"Voyant I/O : code {code}, argument {arg} : {wg.LED_ERRORS.get(code, 'code inconnu')}"
                               + (f" (module {arg})" if code in (4, 5) and arg else ""))
-    mods = plc.modules()
+    try:
+        mods = plc.modules()
+    except ModbusError as e:
+        out["alertes"].append(f"Modules non lus : {e}")
+        mods = [0]
     coupler, mods = mods[0], mods[1:]
     out["modules"].append({"emplacement": 0, "type": "coupleur", "adresse": "",
                            "configure": {"code": "", "nom": f"750-{coupler}", "references": "coupleur Modbus TCP"},
@@ -299,11 +309,12 @@ def wago_diagnostic(plc) -> dict:
     if unknown:
         out["alertes"].append("Un module de taille inconnue : adresses des modules suivants non calculees")
     sizes = plc.image_sizes()
+    words = lambda b: "non lu" if b is None else f"{b // 16} mots"
     out["parametres_cpu"] = [
-        ("Entrees analogiques / complexes", f"{sizes['analog_in_bits'] // 16} mots"),
-        ("Sorties analogiques / complexes", f"{sizes['analog_out_bits'] // 16} mots"),
-        ("Entrees TOR", f"{sizes['digital_in_bits']} bits"),
-        ("Sorties TOR", f"{sizes['digital_out_bits']} bits"),
+        ("Entrees analogiques / complexes", words(sizes["analog_in_bits"])),
+        ("Sorties analogiques / complexes", words(sizes["analog_out_bits"])),
+        ("Entrees TOR", f"{_bits(sizes['digital_in_bits'])} bits"),
+        ("Sorties TOR", f"{_bits(sizes['digital_out_bits'])} bits"),
     ]
     return out
 
@@ -315,14 +326,16 @@ def wago_status(plc) -> dict:
            "mode": "DEFAUT" if code else "OK", "alertes": [], "voyants": [], "details": []}
     if code:
         out["alertes"].append(f"Voyant I/O en defaut : code {code} / {arg} : {wg.LED_ERRORS.get(code, 'code inconnu')}")
-    out["voyants"].append({"nom": "I/O", "texte": "bus interne et modules", "allume": True, "clignote": bool(code),
-                           "defaut": bool(code)})
+    out["voyants"].append({"nom": "I/O", "texte": "bus interne et modules" if code is not None else "code non lu",
+                           "allume": True, "clignote": bool(code), "defaut": bool(code)})
+    out["details"].append(("Adresse IP", plc.host))
     try:
         mods = plc.modules()[1:]
         sizes = plc.image_sizes()
-        out["details"] += [("Adresse IP", plc.host), ("Modules", str(len(mods))),
-                           ("Image entrees", f"{sizes['analog_in_bits'] // 16} mots + {sizes['digital_in_bits']} bits"),
-                           ("Image sorties", f"{sizes['analog_out_bits'] // 16} mots + {sizes['digital_out_bits']} bits")]
+        words = lambda b: "?" if b is None else b // 16
+        out["details"] += [("Modules", str(len(mods))),
+                           ("Image entrees", f"{words(sizes['analog_in_bits'])} mots + {_bits(sizes['digital_in_bits'])} bits"),
+                           ("Image sorties", f"{words(sizes['analog_out_bits'])} mots + {_bits(sizes['digital_out_bits'])} bits")]
         for i, m in enumerate(mods, 1):
             if m["code"] == "461" and m.get("iw") is not None:
                 for t, ok in module_values(plc, m):

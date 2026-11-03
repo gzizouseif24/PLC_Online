@@ -4,6 +4,7 @@
     python tools/wago.py chercher                   coupleurs Modbus sur les reseaux du PC
     python tools/wago.py etat --ip 192.168.1.10     identite, voyant I/O, modules et valeurs
     python tools/wago.py surveiller --ip ...        valeurs des modules en direct (Ctrl+C)
+    python tools/wago.py registres --ip ...         ce que le coupleur repond, registre par registre
 
 Le PC doit etre dans le meme reseau que le coupleur (ex. PC 192.168.1.200).
 """
@@ -47,9 +48,20 @@ def cmd_surveiller(plc):
         time.sleep(1)
 
 
+def cmd_registres(plc):
+    for name, start, n in (("constantes", 0x2000, 9), ("firmware", 0x2010, 5), ("voyant I/O", 0x1020, 2),
+                           ("taille image", 0x1022, 4), ("modules", 0x2030, 8), ("entrees (mots)", 0x0000, 4)):
+        for fc, read in (("03", plc.mb.read_holding), ("04", plc.mb.read_input_registers)):
+            try:
+                v = read(start, n)
+                print(f"{name:15} 0x{start:04X} x{n} fonction {fc} : " + " ".join(f"{x:04X}" for x in v))
+            except wg.ModbusError as e:
+                print(f"{name:15} 0x{start:04X} x{n} fonction {fc} : {e}")
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("commande", choices=["chercher", "etat", "surveiller"])
+    p.add_argument("commande", choices=["chercher", "etat", "surveiller", "registres"])
     p.add_argument("--ip", default="")
     a = p.parse_args()
     if a.commande == "chercher":
@@ -63,6 +75,8 @@ def main():
     try:
         if a.commande == "etat":
             cmd_etat(plc)
+        elif a.commande == "registres":
+            cmd_registres(plc)
         else:
             cmd_surveiller(plc)
     except wg.ModbusError as e:
