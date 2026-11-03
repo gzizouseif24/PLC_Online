@@ -158,12 +158,25 @@ def clock_text(plc) -> str:
     return f"{d:02d}/{mo:02d}/{2000 + y if y < 100 else y} {h:02d}:{mi:02d}:{s:02d}"
 
 
+def com_lines(plc) -> list:
+    out = []
+    try:
+        for port, text, kept in plc.com_settings():
+            out.append((port, text + ("" if kept else "  (non conserve : defaut au redemarrage)")))
+        station = _get(lambda: plc.read_words("D", dl.STATION, 1)[0])
+        if station is not None:
+            out.append(("Station (D1121)", str(station)))
+    except (ModbusError, dl.DeltaError):
+        pass
+    return out
+
+
 def delta_status(plc) -> dict:
     st = plc.status()
     b, w = st["bits"], st["mots"]
     errs = faults(st)
     run = bool(b[1000])
-    out = {"marque": "Delta", "modele": plc.nom, "reference": f"firmware {w[1001] >> 8}.{w[1001] & 0xFF:02X}",
+    out = {"marque": "Delta", "modele": plc.nom, "reference": f"firmware 16#{w[1001]:04X}",
            "mode": "RUN" if run else "STOP", "alertes": errs, "voyants": [], "details": []}
     out["voyants"] = [
         {"nom": "RUN", "texte": "RUN", "allume": run, "clignote": False, "defaut": False},
@@ -176,6 +189,7 @@ def delta_status(plc) -> dict:
     clock = clock_text(plc)
     if clock:
         out["details"].append(("Horloge", clock))
+    out["details"] += com_lines(plc)
     return out
 
 
@@ -225,8 +239,9 @@ def delta_diagnostic(plc) -> dict:
             out["modules"].append({"emplacement": 1 + i, "type": "module special", "adresse": f"CR (FROM/TO {i - 1})",
                                    "configure": {"code": f"{code:04X}", "nom": f"module {i}", "references": f"code 16#{code:04X}"},
                                    "en_place": None, "etat": "ok", "ok": True, "variables": []})
-    out["parametres_cpu"] = [("Firmware", f"{w[1001] >> 8}.{w[1001] & 0xFF:02X}"), ("Capacite", f"{w[1002]} pas"),
+    out["parametres_cpu"] = [("Firmware", f"16#{w[1001]:04X}"), ("Capacite", f"{w[1002]} pas"),
                              ("Chien de garde", f"{w[1000]} ms"), ("Horloge", clock_text(plc) or "non lue")]
+    out["parametres_cpu"] += com_lines(plc)
     return out
 
 

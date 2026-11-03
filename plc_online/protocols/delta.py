@@ -97,7 +97,33 @@ CLOCK = 1313          # D1313..D1319 : seconde, minute, heure, jour, mois, jour 
 
 SYNTAX_ERRORS = {
     0xC4EE: "pas d'instruction END dans le programme",
+    # runtime errors (D1067), DVP manual list
+    0x0E18: "erreur de conversion BCD",
+    0x0E19: "division par zero",
+    0x0E1A: "operande hors plage (adresse indexee E / F trop grande ?)",
+    0x0E1B: "racine carree d'un nombre negatif",
+    0x0E1C: "erreur FROM / TO : le module special adresse ne repond pas (absent, en defaut, ou numero de module faux)",
 }
+
+# COM settings word (D1036 for COM1, D1120 for COM2), DVP manual:
+#   b0 data bits (0 = 7, 1 = 8), b2..b1 parity (00 none, 01 odd, 11 even), b3 stop bits (0 = 1, 1 = 2),
+#   b7..b4 speed. Default H86 = 9600 7E1.
+SPEEDS = {1: 110, 2: 150, 3: 300, 4: 600, 5: 1200, 6: 2400, 7: 4800, 8: 9600, 9: 19200, 10: 38400,
+          11: 57600, 12: 115200}
+COM_REGS = {"COM1 (RS-232)": (1036, 1138, 1139), "COM2 (RS-485)": (1120, 1120, 1143)}
+STATION = 1121
+
+
+def com_text(word: int, rtu: bool) -> str:
+    """D1120 / D1036 + RTU flag -> '9600 7E1 ASCII'."""
+    speed = SPEEDS.get(word >> 4 & 0x0F, f"? (code {word >> 4 & 0x0F})")
+    parity = {0: "N", 1: "O", 3: "E"}.get(word >> 1 & 3, "?")
+    return f"{speed} {8 if word & 1 else 7}{parity}{2 if word & 8 else 1} {'RTU' if rtu else 'ASCII'}"
+
+
+def com_word(speed: int, bits: int, parity: str, stop: int) -> int:
+    code = {v: k for k, v in SPEEDS.items()}[speed]
+    return code << 4 | (8 if stop == 2 else 0) | {"N": 0, "O": 2, "E": 6}[parity] | (1 if bits == 8 else 0)
 
 
 def error_text(code: int) -> str:
@@ -153,6 +179,18 @@ class Delta:
         bits = {n: get(lambda k: self.read_bits("M", k, 1)[0], n) for n in STATUS_BITS}
         words = {n: get(lambda k: self.read_words("D", k, 1)[0], n) for n in STATUS_WORDS}
         return {"bits": bits, "mots": words}
+
+    def com_settings(self) -> list:
+        """[(port, text, kept)] of COM1 / COM2, and the station number."""
+        out = []
+        for port, (reg, keep, rtu) in COM_REGS.items():
+            try:
+                word = self.read_words("D", reg, 1)[0]
+                flags = {n: self.read_bits("M", n, 1)[0] for n in {keep, rtu}}
+                out.append((port, com_text(word, flags[rtu]) + f"  (D{reg} = 16#{word:04X})", bool(flags[keep])))
+            except PlcRefused:
+                pass
+        return out
 
     def clock(self) -> list:
         return self.read_words("D", CLOCK, 7)
