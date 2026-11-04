@@ -515,7 +515,13 @@ def write_values(plc, items) -> dict:
         except ValueError as e:
             raise _drv().DriverError(f"{text} : {e}") from None
         old = v.read(plc)
-        v.write(plc, value)
+        try:
+            v.write(plc, value)
+        except mw.PlcRefused as e:
+            if v.area == "DT" and v.n >= 90000:
+                raise _drv().DriverError(f"{text} : registre special, rempli par l'automate (lecture seule). "
+                                         "Le cycle maxi DT90024 repart de zero au passage PROG -> RUN.") from None
+            raise
         back = v.read(plc)
         if v.fmt == "dint":
             ok = (back & 0xFFFFFFFF) == (value & 0xFFFFFFFF)

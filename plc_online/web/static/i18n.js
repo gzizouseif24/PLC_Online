@@ -432,7 +432,13 @@ const I18N = (() => {
     // Panasonic FP0R
     "Passer l'automate en PROG ? La machine s'arrete, les sorties sont coupees.": "Put the PLC in PROG? The machine stops, the outputs are switched off.",
     "Arret demande (PROG).": "Stop requested (PROG).",
-    "Chercher les reglages": "Find the settings",
+    "Chercher les reglages": "Find the settings", "Visualisation en cours": "Monitoring", "libelle": "label",
+    "registre special, rempli par l'automate (lecture seule). Le cycle maxi DT90024 repart de zero au passage PROG -> RUN.":
+      "special register, filled in by the PLC (read only). The max cycle DT90024 restarts from zero on PROG -> RUN.",
+    "BCC faux": "wrong BCC", "format de commande": "command format", "commande non supportee": "command not supported",
+    "trames multiples": "multiple frames", "parametre invalide": "invalid parameter", "donnee invalide": "invalid data",
+    "enregistrement (trop de contacts / registres)": "registration (too many contacts / registers)",
+    "donnee manquante": "missing data",
     "Bits de stop (1 ou 2)": "Stop bits (1 or 2)", "2 bits de stop.": "2 stop bits.",
     "Bits de donnees : 7 ou 8, bits de stop : 1 ou 2": "Data bits: 7 or 8, stop bits: 1 or 2", "Bits de donnees (7 ou 8)": "Data bits (7 or 8)",
     "Bits de donnees : 7 ou 8": "Data bits: 7 or 8", "Vitesse, bits et station : des nombres": "Baud rate, bits and station: numbers",

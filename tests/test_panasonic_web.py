@@ -112,6 +112,13 @@ class Fp0rWebTests(unittest.TestCase):
         with self.assertRaises(DriverError):
             self.s.write([{"adresse": "X0", "valeur": "1"}])
 
+    def test_special_register_read_only(self):
+        orig = self.s.plc.ser._answer
+        self.s.plc.ser._answer = lambda cmd: "!61" if cmd.startswith("WDD9") else orig(cmd)
+        with self.assertRaises(DriverError) as e:
+            self.s.write([{"adresse": "DT90024", "valeur": "0"}])
+        self.assertIn("lecture seule", str(e.exception))
+
     def test_data_save_plan_restore(self):
         self.s.data_save("avant")
         saved = self.wait()
