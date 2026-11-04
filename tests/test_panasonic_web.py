@@ -176,7 +176,7 @@ class SearchTests(unittest.TestCase):
             return (reply + pw.xor_checksum(reply) + "\r").encode()
         r = pw.search("COM3", opener=self.opener(fp0r))
         self.assertTrue(r["trouve"])
-        self.assertEqual(r["reglages"], {"port": "COM3", "baud": 19200, "bits": 7, "parite": "E", "station": 5})
+        self.assertEqual(r["reglages"], {"port": "COM3", "baud": 19200, "bits": 7, "parite": "E", "stop": 1, "station": 5})
 
     def test_error_reply_counts(self):
         def fp0r(baud, bits, parity, frame):

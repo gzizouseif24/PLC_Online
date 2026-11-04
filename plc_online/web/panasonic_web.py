@@ -22,6 +22,7 @@ SETTINGS = [{"cle": "port", "nom": "Port COM", "defaut": "COM3", "type": "port"}
             {"cle": "baud", "nom": "Vitesse", "defaut": 9600},
             {"cle": "parite", "nom": "Parite (E, O ou N)", "defaut": "O", "type": "texte"},
             {"cle": "bits", "nom": "Bits de donnees (7 ou 8)", "defaut": 8},
+            {"cle": "stop", "nom": "Bits de stop (1 ou 2)", "defaut": 1},
             {"cle": "station", "nom": "Station", "defaut": 1}]
 
 # special relays (WR900 / WR901 / WR902) and registers read for the status
@@ -85,13 +86,13 @@ def open_fp0r(settings: dict):
         raise _drv().DriverError("Parite : E, O ou N")
     try:
         baud, station = int(settings.get("baud") or 9600), int(settings.get("station") or 1)
-        bits = int(settings.get("bits") or 8)
+        bits, stop = int(settings.get("bits") or 8), int(settings.get("stop") or 1)
     except (TypeError, ValueError):
         raise _drv().DriverError("Vitesse, bits et station : des nombres") from None
-    if bits not in (7, 8):
-        raise _drv().DriverError("Bits de donnees : 7 ou 8")
+    if bits not in (7, 8) or stop not in (1, 2):
+        raise _drv().DriverError("Bits de donnees : 7 ou 8, bits de stop : 1 ou 2")
     try:
-        ser = mw.open_port(port, baud, parity, timeout=0.6, bytesize=bits)
+        ser = mw.open_port(port, baud, parity, timeout=0.6, bytesize=bits, stopbits=stop)
     except Exception as e:                     # serial errors: port missing or busy
         raise _drv().DriverError(tsx_web.port_error(port, e)) from None
     plc = mw.Fp0r(ser, station)
@@ -101,7 +102,7 @@ def open_fp0r(settings: dict):
         pass
     except mw.MewtocolError as e:
         ser.close()
-        raise _drv().DriverError(f"L'automate ne repond pas sur {port} ({baud} {bits}{parity}1, station {station}) : {e}. "
+        raise _drv().DriverError(f"L'automate ne repond pas sur {port} ({baud} {bits}{parity}{stop}, station {station}) : {e}. "
                                  "Cable sur le port outil (mini-DIN 5) ? FPWIN ferme ? Reglages du port changes : "
                                  "bouton Chercher les reglages.") from None
     plc.nom = "Panasonic FP0R"
@@ -184,9 +185,9 @@ def search(port: str, progress=None, opener=_serial) -> dict:
                     if station is not None:
                         return {"trouve": True, "protocole": "MEWTOCOL",
                                 "reglages": {"port": port, "baud": baud, "bits": bits, "parite": parity,
-                                             "station": station},
+                                             "stop": stop, "station": station},
                                 "texte": f"FP0R trouve : {baud} bauds, {bits} bits, parite {parity}, station {station}."
-                                         + (" (2 bits de stop : l'outil se connecte quand meme avec 1)" if stop == 2 else "")}
+                                         + (" 2 bits de stop." if stop == 2 else "")}
                     if got and got.startswith(frame.strip()):
                         echo.append(f"{baud} {bits}{parity}{stop}")
                     elif got:

@@ -144,8 +144,8 @@ def main():
         print("\n" + r["texte"])
         if r["trouve"]:
             g = r["reglages"]
-            print(f"A utiliser : --port {a.port} --baud {g['baud']} --parite {g['parite']} --station {g['station']}"
-                  + ("  (7 bits : regler aussi Bits = 7 dans l'interface web)" if g["bits"] == 7 else ""))
+            print(f"Dans l'interface web : vitesse {g['baud']}, parite {g['parite']}, bits {g['bits']}, stop {g['stop']}, "
+                  f"station {g['station']}")
         return
 
     baud = a.baud or (115200 if a.commande == "programme" else 9600)
