@@ -126,6 +126,16 @@
           <input type="file" id="import-dossier" webkitdirectory hidden>
         </div>
 
+        <details class="ob-erreur" data-fonction="ob_erreur">
+          <summary>OB d'erreur vides (banc d'essai sans les modules)</summary>
+          <p class="hint">Sans OB122, la CPU passe en STOP au premier acces a un module absent. Ces OB vides la gardent en
+            RUN (le voyant SF reste allume). Seuls les OB absents de la CPU sont charges ; cle de la CPU sur RUN-P ou STOP.</p>
+          <div class="ob-liste" id="ob-liste"></div>
+          <button type="button" class="btn" id="btn-ob-erreur">Charger les OB coches</button>
+          <p class="hint avert">A retirer (ou a valider avec le client) avant de remettre la CPU sur la machine : elle ne
+            s'arretera plus sur un module absent ou une erreur d'execution.</p>
+        </details>
+
         <div id="tache" class="tache" hidden>
           <div class="tache-head"><b id="tache-nom"></b><span id="tache-texte" class="hint"></span></div>
           <div class="barre"><div id="tache-barre"></div></div>

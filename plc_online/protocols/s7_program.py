@@ -5,6 +5,7 @@ A copy is a folder with one file per block as uploaded (OB1.bin, FC5.bin, DB10.b
 and programme.txt (date, CPU, one line per block).
 """
 import re
+import struct
 from pathlib import Path
 
 from plc_online.protocols.s7 import BLOCK_TYPES, PROGRAM_KINDS, S7Error, compare_blocks, parse_block
@@ -139,3 +140,68 @@ def comparison(ref: dict, now: dict) -> dict:
                for k, n, v, d in diffs if v != "valeurs"]
     return {"identique": not changes, "differences": changes,
             "valeurs_db": [f"DB{n}" for _, n, v, _ in diffs if v == "valeurs"]}
+
+
+# ---- empty error OBs (bench test without the modules: the CPU stays in RUN) ----
+
+ERROR_OBS = {80: "erreur de temps (cycle depasse)", 82: "alarme de diagnostic (module)",
+             85: "erreur d'execution (bloc / peripherie absent a la mise a jour)",
+             86: "defaillance de rack / station DP", 121: "erreur de programmation",
+             122: "erreur d'acces a la peripherie"}
+
+# interface (SSB) of an OB with 20 bytes of TEMP start information, as STEP 7 writes it
+# (bench OB1 of 31/10/2026); the CPU uses only the local data length
+OB_INTERFACE = bytes.fromhex("0100001400000002" "0502050205020502" "0502050505050505" "050e0500")
+
+
+def s7_timestamp(when=None) -> bytes:
+    """6-byte block time stamp: ms since midnight, days since 1984-01-01."""
+    import datetime
+    when = when or datetime.datetime.now()
+    midnight = when.replace(hour=0, minute=0, second=0, microsecond=0)
+    ms = int((when - midnight).total_seconds() * 1000)
+    days = (when.date() - datetime.date(1984, 1, 1)).days
+    return struct.pack(">IH", ms, days)
+
+
+def empty_ob(number: int, when=None) -> bytes:
+    """OB with only BE (block end) and 20 bytes of local data, laid out like the STEP 7 OB1
+    uploaded on the bench. Checksum 0: the CPU computes it on download."""
+    code = b"\x65\x00"                                     # BE
+    iface = OB_INTERFACE
+    nets = b"\x01\x00\x00\x00\x00\x00"        # network table: 1 empty network (OB1 bench: 02 00, 04 00, 04 00, 00 00)
+    total = 36 + len(code) + len(iface) + len(nets) + 36
+    stamp = s7_timestamp(when)
+    # same flags / language byte as the bench OB1
+    header = (b"\x70\x70\x01\x01\x02\x08" + struct.pack(">HII", number, total, 0) + stamp + stamp
+              + struct.pack(">HHHH", len(iface), len(nets), 20, len(code)))
+    footer = b"PLCONL".ljust(8, b"\0") + b"ERREUR".ljust(8, b"\0") + f"OB{number}".encode().ljust(8, b"\0") \
+        + b"\x01\x00" + b"\x00\x00" + bytes(8)
+    return header + code + iface + nets + footer
+
+
+def load_error_obs(plc, numbers, progress=None, max_pdu=240) -> dict:
+    """Download the empty OBs of numbers that the CPU does not have yet; never replaces an
+    existing OB. Key switch on RUN refuses downloads: said before trying."""
+    from plc_online.protocols.s7_download import DownloadError
+    try:
+        key = plc.protection().get("cle")
+    except Exception:
+        key = None
+    if key == "RUN":
+        return {"charges": [], "deja": [], "erreur": "cle de la CPU sur RUN : la mettre sur RUN-P (ou STOP) "
+                "pour autoriser le chargement"}
+    present = set(plc.list_blocks("OB"))
+    out = {"charges": [], "deja": sorted(f"OB{n}" for n in numbers if n in present), "erreur": ""}
+    todo = [n for n in sorted(numbers) if n not in present]
+    seq = plc.download_sequence() if todo else None
+    for i, n in enumerate(todo, 1):
+        if progress:
+            progress(f"chargement OB{n}", i, len(todo))
+        try:
+            seq.download(BLOCK_TYPES["OB"], n, empty_ob(n), max_pdu)
+        except DownloadError as e:
+            out["erreur"] = f"OB{n} : {e}"
+            return out
+        out["charges"].append(f"OB{n}")
+    return out

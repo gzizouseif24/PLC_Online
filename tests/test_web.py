@@ -46,7 +46,7 @@ class DiagnosticTests(unittest.TestCase):
         self.assertEqual(rows[5]["etat"], "MODULE DIFFERENT DE LA CONFIGURATION")
         self.assertEqual(d["alertes"], ["2 emplacement(s) en defaut dans le rack 0"])
         self.assertEqual(d["config_compilee"], "2026-09-30 15:36:16")
-        self.assertEqual([e["id"] for e in d["evenements"]], ["4302", "5961", "5961", "4301"])
+        self.assertEqual([e["id"] for e in d["evenements"]], ["2942", "4302", "5961", "5961", "4301"])
         self.assertEqual(d["parametres_cpu"][1], ("Memento de cadence", "non utilise"))
 
     def test_one_refused_read_does_not_hide_the_rest(self):
@@ -147,7 +147,7 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(self.json("GET", "/api/diagnostic"), (409, {"erreur": "Pas connecte"}))
         self.json("POST", "/api/connexion", {"marque": "s7-300", "reglages": {"mpi": 2}})
         code, d = self.json("GET", "/api/diagnostic")
-        self.assertEqual((code, len(d["modules"]), len(d["evenements"])), (200, 3, 4))
+        self.assertEqual((code, len(d["modules"]), len(d["evenements"])), (200, 3, 5))
 
     def test_watch_api(self):
         self.json("POST", "/api/connexion", {"marque": "s7-300", "reglages": {"mpi": 2}})

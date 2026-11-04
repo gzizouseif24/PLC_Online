@@ -241,6 +241,40 @@ function setProgButtons(disabled, view = "vue-prog") {
 const PROG = { prefix: "", view: "vue-prog", msg: (t, e) => setProgMsg(t, e), reload: () => loadBackups() };
 const DATA = { prefix: "data-", view: "vue-data", msg: (t, e) => setDataMsg(t, e), reload: () => loadData() };
 
+// ---- empty error OBs (S7-300 bench test) ----
+
+const ERROR_OBS = [[122, "erreur d'acces a la peripherie", true], [85, "erreur d'execution", true],
+                   [86, "defaillance de rack / station DP", true], [82, "alarme de diagnostic", true],
+                   [121, "erreur de programmation", false], [80, "erreur de temps (cycle)", false]];
+
+function renderErrorObs() {
+  $("ob-liste").replaceChildren(...ERROR_OBS.map(([n, text, on]) => {
+    const label = el("label");
+    const box = el("input");
+    box.type = "checkbox";
+    box.value = n;
+    box.checked = on;
+    label.append(box, el("span", "mono", "OB" + n), el("span", "", text));
+    return label;
+  }));
+}
+
+function loadErrorObs() {
+  const obs = [...$("ob-liste").querySelectorAll("input:checked")].map((b) => Number(b.value));
+  if (!obs.length) { setProgMsg("Cocher au moins un OB.", true); return; }
+  if (!confirm(`Charger les OB vides ${obs.map((n) => "OB" + n).join(", ")} dans la CPU ?\n\n`
+               + "Seuls ceux qui n'existent pas encore sont charges. La CPU ne s'arretera plus sur ces erreurs.")) return;
+  runJob("/api/programme/ob-erreur", { ob: obs }, (r) => {
+    const ok = !r.erreur;
+    showResult(ok ? "ok" : "bad", (box) => {
+      box.append(el("h4", "", ok ? (r.charges.length ? "OB charges : " + r.charges.join(", ") : "Rien a charger")
+                                 : "Chargement arrete : " + r.erreur));
+      if (r.deja.length) box.append(el("p", "hint", "Deja dans la CPU (non remplaces) : " + r.deja.join(", ")));
+      if (ok && r.charges.length) box.append(el("p", "hint", "Passer la CPU de STOP a RUN si elle est arretee."));
+    });
+  });
+}
+
 function runJob(path, body, onDone, ctx = PROG) {
   ctx.msg("");
   setProgButtons(true, ctx.view);
@@ -1119,7 +1153,9 @@ function renderDiagnostic(d) {
     const text = el("span", "", e.texte);
     const box = el("div");
     box.append(text);
-    if (!e.entrant) box.append(el("span", "sub", "evenement sortant"));
+    if (e.details && e.details.length) {
+      for (const [k, v] of e.details) box.append(el("span", "sub", `${k} : ${v}`));
+    } else if (!e.entrant) box.append(el("span", "sub", "evenement sortant"));
     tr.append(cell(e.date, "mono", "Date"), cell(e.id, "mono", "ID"), cell(box, "", "Evenement"),
               cell(e.classe, "", "Classe"));
     return tr;
@@ -1241,6 +1277,8 @@ async function init() {
   $("btn-deconnecter").addEventListener("click", disconnect);
   $("btn-diag").addEventListener("click", loadDiagnostic);
   $("btn-chercher").addEventListener("click", searchWago);
+  renderErrorObs();
+  $("btn-ob-erreur").addEventListener("click", loadErrorObs);
   $("btn-auto").addEventListener("click", autoSearch);
   $("btn-balayer").addEventListener("click", sweepNetworks);
   $("btn-ip-pc").addEventListener("click", () => wagoAction($("btn-ip-pc"), "Changement de l'adresse du PC (fenetre administrateur)...", async () => {

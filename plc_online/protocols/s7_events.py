@@ -570,3 +570,50 @@ def event_text(event_id: int) -> str:
     if event_id >> 12 == 0x8:
         return EVENTS.get(f"8x{event_id & 0xFF:02X}", "")
     return ""
+
+
+# ---- details of an entry, as STEP 7 shows them ----
+# An entry is laid out like the start information of the OB it calls (System Software for
+# S7-300/400, OB121 / OB122 start information): event ID (2), priority class (1), OB number (1),
+# then OB-specific bytes; date and time follow (not part of the info here).
+
+BLOCK_KINDS = {0x88: "OB", 0x8A: "DB", 0x8B: "SDB", 0x8C: "FC", 0x8D: "SFC", 0x8E: "FB", 0x8F: "SFB"}
+ACCESS = {0: "acces bit", 1: "acces octet", 2: "acces mot", 3: "acces double mot"}
+AREAS = {0: "zone P (peripherie)", 1: "memoire image des entrees", 2: "memoire image des sorties"}
+# classes whose entries carry priority class + OB number (OB-related events)
+OB_CLASSES = (0x1, 0x2, 0x3)
+
+
+def event_flags(event_id: int) -> list:
+    """Identifier nibble (bits 8..11): incoming / outgoing, internal / external error."""
+    out = ["evenement entrant" if event_id >> 8 & 1 else "evenement sortant"]
+    if event_id >> 11 & 1:
+        out.insert(0, "erreur externe")
+    elif event_id >> 10 & 1:
+        out.insert(0, "erreur interne")
+    return out
+
+
+def event_details(event_id: int, info: bytes) -> list:
+    """[(label, value)] for an entry: what STEP 7 lists under the event text."""
+    out = [("Type", ", ".join(event_flags(event_id)))]
+    if len(info) < 10 or event_id >> 12 not in OB_CLASSES:
+        return out
+    priority, ob = info[0], info[1]
+    out.append(("OB demande", f"OB{ob}"))
+    out.append(("Classe de priorite", str(priority)))
+    kind = BLOCK_KINDS.get(info[2])
+    number = int.from_bytes(info[6:8], "big")
+    rel = int.from_bytes(info[8:10], "big")
+    if event_id in (0x2942, 0x2943):           # OB122: block type, area / access, address, block, rel. address
+        area, access = info[3] & 0x0F, info[3] >> 4
+        out.append(("Acces", f"{AREAS.get(area, f'zone {area}')}, {ACCESS.get(access, f'acces {access}')}"))
+        out.append(("Adresse accedee", str(int.from_bytes(info[4:6], "big"))))
+    elif event_id >> 8 == 0x25:                # OB121: block type, fault register, block, rel. address
+        out.append(("Registre en defaut", str(int.from_bytes(info[4:6], "big"))))
+    else:
+        return out
+    if kind:
+        out.append(("Bloc", f"{kind}{number}"))
+        out.append(("Adresse relative", f"{rel} (16#{rel:04X})"))
+    return out

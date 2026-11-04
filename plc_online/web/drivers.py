@@ -120,7 +120,7 @@ def s7_diagnostic(plc, rack: int = 0) -> dict:
         for e in plc.diagnostic_buffer():
             out["evenements"].append({"date": e["date"], "id": f"{e['id']:04X}", "classe": e["classe"],
                                       "texte": e["texte"] or "Evenement non repertorie", "entrant": e["entrant"],
-                                      "info": e["info"]})
+                                      "info": e["info"], "details": [list(x) for x in e.get("details", [])]})
     except S7Error as e:
         out["alertes"].append(f"Tampon de diagnostic non lu : {e}")
 
@@ -353,10 +353,12 @@ class DemoS7:
 
     def diagnostic_buffer(self):
         def ev(i, date, info="FF06 C17B 0001 0004 8B07"):
-            from plc_online.protocols.s7_events import EVENT_CLASSES, event_text
+            from plc_online.protocols.s7_events import EVENT_CLASSES, event_details, event_text
             return {"id": i, "classe": EVENT_CLASSES.get(i >> 12, ""), "texte": event_text(i),
-                    "entrant": bool(i >> 8 & 1), "info": info, "date": date}
-        return [ev(0x4302, "02/11/2026 07:41:03.120", "FF68 C010 0008 0000 0000"),
+                    "entrant": bool(i >> 8 & 1), "info": info, "date": date,
+                    "details": event_details(i, bytes.fromhex(info.replace(" ", "")))}
+        return [ev(0x2942, "02/11/2026 07:41:04.200", "017A 8C20 00CA 0069 001E"),
+                ev(0x4302, "02/11/2026 07:41:03.120", "FF68 C010 0008 0000 0000"),
                 ev(0x5961, "02/11/2026 07:41:02.880"),
                 ev(0x5961, "02/11/2026 07:41:02.870", "FF06 C17B 0001 0000 8B07"),
                 ev(0x4301, "02/11/2026 07:40:55.010", "FF84 4304 0000 0000 0000")]
@@ -595,7 +597,7 @@ def import_files(folder: Path, files: list, note: str = "") -> dict:
     return {"id": target.name, "comptes": meta["comptes"], "ignores": ignored}
 
 
-S7_FEATURES = ["horloge", "rack", "evenements", "db", "projet_step7", "programme", "runstop"]
+S7_FEATURES = ["horloge", "rack", "evenements", "db", "projet_step7", "programme", "runstop", "ob_erreur"]
 TSX_FEATURES = ["donnees", "horloge", "programme", "runstop"]
 WAGO_FEATURES = ["chercher"]
 DELTA_FEATURES = ["donnees", "horloge"]
@@ -798,6 +800,19 @@ class Session:
                 raise DriverError("Rien a charger")
             return program.restore(plc, backup, plan, delete_extra, progress)
         return self.start_job("restauration du programme", work)
+
+    def load_error_obs(self, numbers) -> dict:
+        """S7-300: empty error OBs (OB80 / 82 / 85 / 86 / 121 / 122) the CPU does not have yet."""
+        if self.family != "s7":
+            raise DriverError("OB d'erreur : S7-300 seulement")
+        try:
+            numbers = sorted({int(n) for n in numbers} & set(program.ERROR_OBS))
+        except (TypeError, ValueError):
+            raise DriverError("numeros d'OB invalides") from None
+        if not numbers:
+            raise DriverError("Choisir au moins un OB")
+        return self.start_job("chargement des OB d'erreur",
+                              lambda plc, progress: program.load_error_obs(plc, numbers, progress))
 
     def start_cpu(self) -> dict:
         if self._ops():

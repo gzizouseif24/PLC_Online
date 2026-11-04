@@ -20,6 +20,7 @@ JSON API:
     POST /api/programme/supprimer {"id"}       delete one copy from the PC (/api/donnees/supprimer too)
     POST /api/programme/importer {"fichiers": [{"nom", "contenu" (base64)}], "note"}   .bin files, a .zip,
                                                or a STEP 7 V5 project (nom = path inside the folder)
+    POST /api/programme/ob-erreur {"ob": [122, 85]}   empty error OBs the CPU lacks (background)
     POST /api/cpu/demarrer                     CPU to RUN (warm restart)
     POST /api/cpu/arreter                      CPU to STOP
     POST /api/cpu/horloge                      CPU clock set to the PC time
@@ -181,6 +182,8 @@ def make_handler(session: Session):
                         return wago_web.set_pc_address(card, str(req.get("ip") or ""))
                     return wago_web.pc_auto(card)
                 return self.api(network)
+            if path == "/api/programme/ob-erreur":
+                return self.api(lambda: session.load_error_obs(list(self.read_json().get("ob") or [])))
             if path == "/api/cpu/demarrer":
                 return self.api(lambda: session.start_cpu())
             if path == "/api/cpu/arreter":

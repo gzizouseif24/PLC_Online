@@ -128,9 +128,10 @@ def clock_bytes(when=None) -> bytes:
 
 def parse_diag_entry(r: bytes) -> dict:
     """Diagnostic buffer entry, SZL 0x00A0 (§34.29): event ID, 5 words of info, DATE_AND_TIME."""
-    from .s7_events import EVENT_CLASSES, event_text
+    from .s7_events import EVENT_CLASSES, event_details, event_text
     event = word_be(r, 0)
     return {
+        "details": event_details(event, bytes(r[2:12])),
         "id": event,
         "classe": EVENT_CLASSES.get(event >> 12, f"classe {event >> 12:X}"),
         "texte": event_text(event),
