@@ -163,8 +163,8 @@ class SearchTests(unittest.TestCase):
     def opener(self, answer_at):
         self.tries = []
 
-        def open_(port, baud, bits, parity):
-            self.tries.append((baud, bits, parity))
+        def open_(port, baud, bits, parity, stop=1):
+            self.tries.append((baud, bits, parity, stop))
             return self.Port(lambda frame: answer_at(baud, bits, parity, frame))
         return open_
 

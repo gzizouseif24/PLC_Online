@@ -1080,7 +1080,7 @@ async function searchFp0r() {
   const port = (document.querySelector('#reglages input[name="port"]') || {}).value || "";
   btn.disabled = true;
   msg.className = "msg";
-  msg.textContent = "Recherche sur " + port + " : toutes les vitesses, parites et stations (environ 40 s)...";
+  msg.textContent = "Recherche sur " + port + " : toutes les vitesses, parites et stations (environ 1 min 30)...";
   try {
     const r = await api("POST", "/api/panasonic/chercher", { port });
     msg.textContent = r.texte + (r.trouve ? " Reglages remplis : cliquer sur Connecter." : "");

@@ -432,7 +432,8 @@ const I18N = (() => {
     // Panasonic FP0R
     "Passer l'automate en PROG ? La machine s'arrete, les sorties sont coupees.": "Put the PLC in PROG? The machine stops, the outputs are switched off.",
     "Arret demande (PROG).": "Stop requested (PROG).",
-    "Chercher les reglages": "Find the settings", "Bits de donnees (7 ou 8)": "Data bits (7 or 8)",
+    "Chercher les reglages": "Find the settings",
+    "(2 bits de stop : l'outil se connecte quand meme avec 1)": "(2 stop bits: the tool still connects with 1)", "Bits de donnees (7 ou 8)": "Data bits (7 or 8)",
     "Bits de donnees : 7 ou 8": "Data bits: 7 or 8", "Vitesse, bits et station : des nombres": "Baud rate, bits and station: numbers",
     "Reglages remplis : cliquer sur Connecter.": "Settings filled in: click Connect.",
     "Deconnecter d'abord : le port COM est utilise par la connexion en cours": "Disconnect first: the COM port is used by the current connection",
@@ -553,7 +554,7 @@ const I18N = (() => {
     [/^Supprimer (.+) \?$/, "Delete $1?"],
     [/^Erreur d'operation \(R9007 \/ R9008\) au pas (\d+) \(DT90017 \/ DT90018\)$/, "Operation error (R9007 / R9008) at step $1 (DT90017 / DT90018)"],
     [/^(\d+)k pas$/, "$1k steps"],
-    [/^Recherche sur (\S*) : toutes les vitesses, parites et stations \(environ 40 s\)\.\.\.$/, "Searching on $1: every speed, parity and station (about 40 s)..."],
+    [/^Recherche sur (\S*) : toutes les vitesses, parites et stations \(environ 1 min 30\)\.\.\.$/, "Searching on $1: every speed, parity and station (about 1.5 min)..."],
     [/^FP0R trouve : (\d+) bauds, (\d) bits, parite (\w), station (\d+)\.(.*)$/, (m, b, n, p, st, rest) => `FP0R found: ${b} baud, ${n} bits, parity ${p}, station ${st}.${phrases(rest)}`],
     [/^Aucune reponse \((\d+) essais\)\. (.*)$/, (m, n, rest) => `No answer (${n} tries). ${translateLine(rest)}`],
     [/^Le port outil repond en Modbus RTU \((\d+) bauds, (\S+), station 1\), (.*)$/, (m, b, f, rest) => `The tool port answers in Modbus RTU (${b} baud, ${f}, station 1), ${phrases(rest)}`],

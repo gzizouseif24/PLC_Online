@@ -50,11 +50,12 @@ class PlcRefused(MewtocolError):
 CONTACT_AREAS = ("X", "Y", "R")
 
 
-def open_port(port: str, baud: int = 9600, parity: str = "O", timeout: float = 1.0, bytesize: int = 8):
-    """Open the serial port with the FP0R tool-port settings (8 data bits by default, 1 stop)."""
+def open_port(port: str, baud: int = 9600, parity: str = "O", timeout: float = 1.0, bytesize: int = 8,
+              stopbits: int = 1):
+    """Open the serial port with the FP0R tool-port settings (8 data bits, 1 stop by default)."""
     import serial  # imported here so the rest of the module works without pyserial
 
-    return serial.Serial(port, baud, parity=parity, bytesize=bytesize, stopbits=1, timeout=timeout)
+    return serial.Serial(port, baud, parity=parity, bytesize=bytesize, stopbits=stopbits, timeout=timeout)
 
 
 def decode_words(hexdata: str) -> list:

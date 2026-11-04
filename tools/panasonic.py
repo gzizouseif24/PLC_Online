@@ -139,7 +139,7 @@ def main():
 
     if a.commande == "chercher":
         from plc_online.web.panasonic_web import search
-        print(f"Recherche sur {a.port} (environ 40 s)...")
+        print(f"Recherche sur {a.port} (environ 1 min 30)...")
         r = search(a.port, lambda text, i, n: print(f"   {i:2}/{n}  {text}", flush=True))
         print("\n" + r["texte"])
         if r["trouve"]:

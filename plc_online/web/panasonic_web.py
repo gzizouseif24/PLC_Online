@@ -112,11 +112,12 @@ def open_fp0r(settings: dict):
 # ---- search: tool port settings unknown ----
 
 SPEEDS = [9600, 115200, 19200, 38400, 57600, 4800, 2400]
-FORMATS = [(8, "O"), (8, "N"), (8, "E"), (7, "O"), (7, "E"), (7, "N")]
+FORMATS = [(8, "O", 1), (8, "N", 1), (8, "E", 1), (7, "O", 1), (7, "E", 1), (7, "N", 1),
+           (8, "O", 2), (8, "N", 2), (8, "E", 2), (7, "O", 2), (7, "E", 2), (7, "N", 2)]
 
 
-def _serial(port, baud, bits, parity):
-    return mw.open_port(port, baud, parity, timeout=0.25, bytesize=bits)
+def _serial(port, baud, bits, parity, stop=1):
+    return mw.open_port(port, baud, parity, timeout=0.25, bytesize=bits, stopbits=stop)
 
 
 def mewtocol_frame(station: str) -> bytes:
@@ -167,12 +168,12 @@ def search(port: str, progress=None, opener=_serial) -> dict:
     tried, echo, noise = 0, [], []
     total = len(SPEEDS) * len(FORMATS) + len(SPEEDS) * 3
     for baud in SPEEDS:
-        for bits, parity in FORMATS:
+        for bits, parity, stop in FORMATS:
             tried += 1
             if progress:
-                progress(f"MEWTOCOL {baud} {bits}{parity}1", tried, total)
+                progress(f"MEWTOCOL {baud} {bits}{parity}{stop}", tried, total)
             try:
-                ser = opener(port, baud, bits, parity)
+                ser = opener(port, baud, bits, parity, stop)
             except Exception as e:                 # port missing or busy: no use trying further
                 raise _drv().DriverError(tsx_web.port_error(port, e)) from None
             try:
@@ -184,11 +185,12 @@ def search(port: str, progress=None, opener=_serial) -> dict:
                         return {"trouve": True, "protocole": "MEWTOCOL",
                                 "reglages": {"port": port, "baud": baud, "bits": bits, "parite": parity,
                                              "station": station},
-                                "texte": f"FP0R trouve : {baud} bauds, {bits} bits, parite {parity}, station {station}."}
+                                "texte": f"FP0R trouve : {baud} bauds, {bits} bits, parite {parity}, station {station}."
+                                         + (" (2 bits de stop : l'outil se connecte quand meme avec 1)" if stop == 2 else "")}
                     if got and got.startswith(frame.strip()):
-                        echo.append(f"{baud} {bits}{parity}")
+                        echo.append(f"{baud} {bits}{parity}{stop}")
                     elif got:
-                        noise.append(f"{baud} {bits}{parity}")
+                        noise.append(f"{baud} {bits}{parity}{stop}")
             finally:
                 ser.close()
     for baud in SPEEDS:
@@ -196,7 +198,7 @@ def search(port: str, progress=None, opener=_serial) -> dict:
             tried += 1
             if progress:
                 progress(f"Modbus RTU {baud} 8{parity}1", tried, total)
-            ser = opener(port, baud, 8, parity)
+            ser = opener(port, baud, 8, parity, 1)
             try:
                 if modbus_answer(probe(ser, modbus_frame())):
                     return {"trouve": False, "protocole": "Modbus RTU",
