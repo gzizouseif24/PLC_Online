@@ -48,6 +48,12 @@ body {
   border-bottom: 1px solid var(--line);
 }
 
+.topbar-right { display: flex; align-items: center; gap: 10px; }
+.langue {
+  padding: 4px 8px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--card); color: var(--text); font: inherit; font-size: 13px;
+}
+
 .brand { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 17px; white-space: nowrap; }
 .logo {
   width: 22px; height: 22px; border-radius: 6px;

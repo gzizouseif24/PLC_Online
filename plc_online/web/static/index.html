@@ -9,7 +9,13 @@
 <body>
   <header class="topbar">
     <div class="brand"><span class="logo" aria-hidden="true"></span>PLC Online</div>
-    <div id="link-pill" class="pill pill-off">Non connecte</div>
+    <div class="topbar-right">
+      <select id="langue" class="langue" aria-label="Langue / Language" data-no-i18n>
+        <option value="fr">Français</option>
+        <option value="en">English</option>
+      </select>
+      <div id="link-pill" class="pill pill-off">Non connecte</div>
+    </div>
   </header>
 
   <main class="layout">
@@ -273,6 +279,7 @@
     </section>
   </main>
 
+  <script src="/i18n.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>
