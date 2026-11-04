@@ -15,6 +15,7 @@ from pathlib import Path
 from plc_online.protocols import s7_program as program
 from plc_online.protocols.delta import DeltaError
 from plc_online.protocols.modbus import ModbusError, PlcRefused
+from plc_online.protocols.mewtocol import MewtocolError, PlcRefused as MewtocolRefused
 from plc_online.protocols.s7 import BLOCK_TYPES, S7300, S7Error, parse_block, parse_sdb1_modules
 from plc_online.protocols.s7_catalogue import catalog_name
 from plc_online.protocols.s7_names import address_range, cpu_parameter_lines, module_text
@@ -414,7 +415,7 @@ class DemoS7:
 
 DEFAULT_BACKUPS = Path.home() / "PLC Online" / "sauvegardes" / "s7-300"
 DEFAULT_TSX_BACKUPS = Path.home() / "PLC Online" / "sauvegardes" / "tsx"
-LINK_ERRORS = (S7Error, UniteError, OSError, ModbusError)
+LINK_ERRORS = (S7Error, UniteError, OSError, ModbusError, MewtocolError)
 BACKUP_ID = re.compile(r"^[\w\-. ]+$")
 
 
@@ -601,10 +602,11 @@ S7_FEATURES = ["horloge", "rack", "evenements", "db", "projet_step7", "programme
 TSX_FEATURES = ["donnees", "horloge", "programme", "runstop"]
 WAGO_FEATURES = ["chercher"]
 DELTA_FEATURES = ["donnees", "horloge"]
+FP0R_FEATURES = ["donnees", "runstop"]
 
 
 def _brands():
-    from plc_online.web import delta_web, tsx_web, wago_web
+    from plc_online.web import delta_web, panasonic_web, tsx_web, wago_web
     return {
         "s7-300": {"nom": "Siemens S7-300", "disponible": True, "famille": "s7", "fonctions": S7_FEATURES,
                    "reglages": [{"cle": "mpi", "nom": "Adresse MPI", "defaut": 2},
@@ -625,7 +627,10 @@ def _brands():
         "demo-delta": {"nom": "Demo (Delta DVP28SV simule)", "disponible": True, "famille": "delta",
                        "fonctions": DELTA_FEATURES, "reglages": []},
         "omron": {"nom": "Omron CJ1M", "disponible": False, "reglages": []},
-        "panasonic": {"nom": "Panasonic FP0R", "disponible": False, "reglages": []},
+        "panasonic": {"nom": "Panasonic FP0R", "disponible": True, "famille": "panasonic",
+                      "fonctions": FP0R_FEATURES, "reglages": panasonic_web.SETTINGS},
+        "demo-panasonic": {"nom": "Demo (Panasonic FP0R simule)", "disponible": True, "famille": "panasonic",
+                           "fonctions": FP0R_FEATURES, "reglages": []},
     }
 
 
@@ -639,6 +644,7 @@ class Session:
         from plc_online.web.tsx_web import TsxOps
         from plc_online.web.wago_web import WagoOps
         from plc_online.web.delta_web import DeltaOps
+        from plc_online.web.panasonic_web import Fp0rOps
         self.lock = threading.Lock()
         self.plc, self.brand, self.settings = None, None, {}
         self.opener = opener or open_plc
@@ -647,6 +653,7 @@ class Session:
         self.tsx = TsxOps(self)
         self.wago = WagoOps(self)
         self.delta = DeltaOps(self)
+        self.fp0r = Fp0rOps(self)
         self.job = None                   # long operation running in the background
         self.last_status = None
 
@@ -671,7 +678,7 @@ class Session:
 
     def _ops(self):
         """TsxOps when a TSX is connected, None for the S7-300 (methods of this class)."""
-        return {"tsx": self.tsx, "wago": self.wago, "delta": self.delta}.get(self.family)
+        return {"tsx": self.tsx, "wago": self.wago, "delta": self.delta, "panasonic": self.fp0r}.get(self.family)
 
     def busy(self) -> str:
         j = self.job
@@ -846,7 +853,7 @@ class Session:
     def data_delete(self, backup_id) -> dict:
         if self.busy():
             raise DriverError(f"Operation en cours : {self.busy()}")
-        return delete_copy((self.delta if self.family == "delta" else self.tsx).data, backup_id)
+        return delete_copy(self._data_ops().data, backup_id)
 
     def export_backup(self, backup_id) -> tuple:
         if self._ops():
@@ -872,11 +879,11 @@ class Session:
                     self._close()
                     raise DriverError(f"Liaison perdue : {e}") from None
                 raise DriverError(f"Refuse par l'automate : {e}") from None
-            except PlcRefused as e:
+            except (PlcRefused, MewtocolRefused) as e:
                 raise DriverError(f"Refuse : {e}") from None
             except DeltaError as e:
                 raise DriverError(str(e)) from None
-            except (S7Error, OSError, ModbusError) as e:
+            except (S7Error, OSError, ModbusError, MewtocolError) as e:
                 self._close()
                 raise DriverError(f"Liaison perdue : {e}") from None
 
@@ -884,12 +891,15 @@ class Session:
 
     def _tsx_only(self):
         """Ops of the brands with a Donnees tab (TSX, Delta)."""
-        if self.family not in ("tsx", "delta"):
-            raise DriverError("Sauvegarde des donnees : TSX et Delta seulement pour l'instant")
+        if self.family not in ("tsx", "delta", "panasonic"):
+            raise DriverError("Sauvegarde des donnees : TSX, Delta et Panasonic seulement pour l'instant")
         return self._ops()
 
+    def _data_ops(self):
+        return {"delta": self.delta, "panasonic": self.fp0r}.get(self.family, self.tsx)
+
     def data_list(self) -> dict:
-        return (self.delta if self.family == "delta" else self.tsx).data_list()
+        return self._data_ops().data_list()
 
     def data_save(self, note) -> dict:
         return self._tsx_only().data_save(note)
@@ -901,10 +911,10 @@ class Session:
         return self._tsx_only().data_restore(backup_id)
 
     def data_export(self, backup_id) -> tuple:
-        return (self.delta if self.family == "delta" else self.tsx).data_export(backup_id)
+        return self._data_ops().data_export(backup_id)
 
     def data_import(self, files, note) -> dict:
-        return (self.delta if self.family == "delta" else self.tsx).data_import(files, note)
+        return self._data_ops().data_import(files, note)
 
     def values(self, texts) -> dict:
         if self._ops():
@@ -941,6 +951,9 @@ def open_plc(brand: str, settings: dict):
     if brand in ("delta", "demo-delta"):
         from plc_online.web import delta_web
         return delta_web.demo_delta() if brand == "demo-delta" else delta_web.open_delta(settings)
+    if brand in ("panasonic", "demo-panasonic"):
+        from plc_online.web import panasonic_web
+        return panasonic_web.demo_fp0r() if brand == "demo-panasonic" else panasonic_web.open_fp0r(settings)
     if brand in ("wago", "demo-wago"):
         from plc_online.web import wago_web
         return wago_web.DemoWago() if brand == "demo-wago" else wago_web.open_wago(settings)

@@ -62,6 +62,7 @@ function renderSettings() {
   $("hint-tsx").hidden = key !== "tsx";
   $("hint-wago").hidden = key !== "wago";
   $("hint-delta").hidden = key !== "delta";
+  $("hint-panasonic").hidden = key !== "panasonic";
   if (key === "wago") loadCards();
 }
 
@@ -98,26 +99,33 @@ function applyBrand(key) {
   $("import-fichiers").accept = tsx ? ".stx,.tsxbak,.zip" : ".zip,.bin";
   $("btn-sauver").textContent = tsx ? "Sauvegarder le programme de l'automate" : "Sauvegarder le programme de la CPU";
   $("col-contenu").textContent = tsx ? "Contenu" : "Blocs";
-  $("watch-hint").textContent = family === "delta"
+  const pana = family === "panasonic";
+  $("btn-stop").textContent = pana ? "Passer en PROG" : "Passer en STOP";
+  const dataLike = family === "delta" || pana;        // .csv data copies of this tool
+  $("watch-hint").textContent = pana
+    ? "DT100, WX0 / WY0 / WR10 (mots), X0, X1F, Y3, R901C (bits : mot decimal + bit hexa). Ecriture : DT, WY, WR, Y, R. Format dint pour les compteurs 32 bits."
+    : family === "delta"
     ? "D100, M10, X17 et Y0 (en octal), T5 / C2 (valeur), S0. Ecriture : D, M, Y, T, C, S. Le format se change sur chaque ligne."
     : family === "wago"
     ? "IW0 (mot d'entree), QW0 (mot de sortie), I0 (bit d'entree), Q0 (bit de sortie). Ecriture : QW et Q. Format Pt100 pour le 750-461."
     : tsx
     ? "%MW, %MD, %KW, %KD, %SW, %M, %S (le % est facultatif). Ecriture : %MW et %MD. Le format se change sur chaque ligne."
     : "E/I, A/Q, M, DB10.DBW2, T5, Z2. Le format se change sur chaque ligne.";
-  $("ajout-adresse").placeholder = family === "delta" ? "D100, M10, X0, Y0" : family === "wago" ? "IW0, QW0, I0, Q0" : tsx ? "%MW10, %MD4, %M5, %I1.0" : "MW10, E0.0, DB10.DBD4";
-  $("titre-params").textContent = family === "delta" ? "Automate" : family === "wago" ? "Image process" : tsx ? "Automate" : "Parametres CPU";
+  $("ajout-adresse").placeholder = pana ? "DT100, WX0, X0, Y0, R10" : family === "delta" ? "D100, M10, X0, Y0" : family === "wago" ? "IW0, QW0, I0, Q0" : tsx ? "%MW10, %MD4, %M5, %I1.0" : "MW10, E0.0, DB10.DBD4";
+  $("titre-params").textContent = dataLike ? "Automate" : family === "wago" ? "Image process" : tsx ? "Automate" : "Parametres CPU";
   const head = $("table-rack").tHead.rows[0].cells;
-  head[0].textContent = tsx || family === "wago" ? "Position" : family === "delta" ? "" : "Empl.";
-  head[3].textContent = family === "wago" || family === "delta" ? "Module" : tsx ? "Configure (PL7)" : "Configure (HW Config)";
-  head[4].textContent = family === "wago" || family === "delta" ? "Valeurs" : "En place";
-  $("data-hint").textContent = family === "delta"
+  head[0].textContent = tsx || family === "wago" ? "Position" : dataLike ? "" : "Empl.";
+  head[3].textContent = family === "wago" || dataLike ? "Module" : tsx ? "Configure (PL7)" : "Configure (HW Config)";
+  head[4].textContent = family === "wago" || dataLike ? "Valeurs" : "En place";
+  $("data-hint").textContent = pana
+    ? "Copie de tous les registres DT (recettes, compteurs, reglages), sans le programme. Environ 1 a 2 minutes a 9600 bauds."
+    : family === "delta"
     ? "Copie de tous les registres D (recettes, compteurs, reglages), sans le programme."
     : "Copie de tous les mots internes %MW et des constantes %KW (recettes, compteurs, reglages), sans le programme.";
-  $("data-import-texte").textContent = family === "delta" ? "Importer un .csv" : "Importer un .dat ou .csv";
-  $("data-import-hint").textContent = family === "delta" ? "Fichier deja sur le PC (.csv de cet outil) :"
+  $("data-import-texte").textContent = dataLike ? "Importer un .csv" : "Importer un .dat ou .csv";
+  $("data-import-hint").textContent = dataLike ? "Fichier deja sur le PC (.csv de cet outil) :"
     : "Fichier deja sur le PC (transfert de donnees PL7 .dat, ou .csv) :";
-  $("data-import").accept = family === "delta" ? ".csv" : ".dat,.csv";
+  $("data-import").accept = dataLike ? ".csv" : ".dat,.csv";
   watch = loadWatch();
   for (const k of Object.keys(lastValues)) delete lastValues[k];
   diagLoaded = false;
@@ -140,7 +148,7 @@ function renderStatus(s) {
   const mode = $("mode");
   mode.textContent = s.mode + (s.mode_a_confirmer && s.mode !== "?" ? " ?" : "");
   mode.title = s.mode_a_confirmer ? "Etat lu par la requete 4F, decodage a confirmer sur le banc" : "";
-  mode.className = "mode" + (s.mode === "RUN" ? " run" : s.mode === "STOP" ? " stop" : "");
+  mode.className = "mode" + (s.mode === "RUN" ? " run" : s.mode === "STOP" || s.mode === "PROG" ? " stop" : "");
 
   const alerts = $("alertes");
   alerts.replaceChildren(...s.alertes.map((a) => el("div", "alerte", a)));
@@ -605,7 +613,7 @@ function saveData(ev) {
 }
 
 async function planData(b) {
-  const zn = family === "delta" ? "D" : "%MW";
+  const zn = family === "delta" ? "D" : family === "panasonic" ? "DT" : "%MW";
   setDataMsg(`Lecture des ${zn} de l'automate...`);
   let plan;
   try {
@@ -662,7 +670,7 @@ async function planData(b) {
 }
 
 async function importData(fileList) {
-  const files = [...fileList].filter((f) => (family === "delta" ? /\.csv$/i : /\.(dat|csv)$/i).test(f.name));
+  const files = [...fileList].filter((f) => (family === "delta" || family === "panasonic" ? /\.csv$/i : /\.(dat|csv)$/i).test(f.name));
   if (!files.length) {
     setDataMsg("Aucun fichier .dat ou .csv dans la selection.", true);
     return;
@@ -688,13 +696,15 @@ let monitoring = localStorageGet("visualiser") === "1";      // off by default, 
 const lastValues = {};
 
 const FORMAT_NAMES = { dec: "DEC", ud: "DEC non signe", hex: "HEX", bin: "BIN", real: "REAL", char: "CHAR",
-                       s5time: "S5TIME", bcd: "BCD", pt100: "Pt100 (°C)" };
+                       s5time: "S5TIME", bcd: "BCD", pt100: "Pt100 (°C)", dint: "DINT (32 bits)" };
 
 function formatsFor(adresse) {
   /** Formats that fit the size of the address ([] for a bit: always 0 / 1). */
   const a = adresse.toUpperCase();
   if (family === "wago") return /^[IQ]W\d+$/.test(a) ? ["dec", "pt100", "ud", "hex", "bin"] : [];
   if (family === "delta") return /^[DTC]\d+$/.test(a) ? ["dec", "ud", "hex", "bin"] : [];
+  if (family === "panasonic") return /^DT\d+$/.test(a) ? ["dec", "ud", "hex", "bin", "dint"]
+    : /^W[XYR]\d+$/.test(a) ? ["dec", "ud", "hex", "bin"] : [];
   if (family === "tsx") {
     const z = a.replace(/^%/, "").replace(/\d+$/, "");
     if (/^[IQ]W\d+\.\d+$/.test(a.replace(/^%/, ""))) return ["dec", "ud", "hex", "bin"];
@@ -1118,7 +1128,8 @@ function renderDiagnostic(d) {
   rackModules = d.modules || null;
   renderRackVars();
   $("diag-alertes").replaceChildren(...d.alertes.map((a) => el("div", "alerte", a)));
-  $("diag-info").textContent = family === "delta" ? "Relais et registres speciaux (M1000.., D1000..), entrees / sorties."
+  $("diag-info").textContent = family === "panasonic" ? "Relais et registres speciaux (R9000.., DT90000..), entrees / sorties integrees."
+    : family === "delta" ? "Relais et registres speciaux (M1000.., D1000..), entrees / sorties."
     : family === "wago" ? "Modules lus dans le coupleur, valeurs de l'image process."
     : d.systeme ? "Bits et mots systeme de l'automate."
     : d.config_compilee ? "Configuration materielle compilee le " + d.config_compilee + "."
@@ -1320,8 +1331,10 @@ async function init() {
       ? "Demarrage demande, mais la cle est sur STOP : la CPU restera en STOP (mettre la cle sur RUN ou RUN-P)."
       : "Demarrage demande (RUN)."));
   $("btn-stop").addEventListener("click", () => cpuAction("/api/cpu/arreter",
-    "Passer la CPU en STOP ? La machine s'arrete, les sorties sont coupees.\n\nMachine en securite ?",
-    () => "Arret demande (STOP)."));
+    family === "panasonic"
+      ? "Passer l'automate en PROG ? La machine s'arrete, les sorties sont coupees.\n\nMachine en securite ?"
+      : "Passer la CPU en STOP ? La machine s'arrete, les sorties sont coupees.\n\nMachine en securite ?",
+    () => family === "panasonic" ? "Arret demande (PROG)." : "Arret demande (STOP)."));
   $("btn-horloge").addEventListener("click", () => cpuAction("/api/cpu/horloge",
     "Mettre l'horloge de la CPU a l'heure de ce PC (" + new Date().toLocaleString("fr-FR") + ") ?",
     (r) => "Horloge CPU reglee : " + r.horloge.slice(0, 19)));

@@ -28,12 +28,26 @@ class MewtocolError(Exception):
     """Missing, corrupted or unexpected reply."""
 
 
+# error codes of a %01!xx reply (MEWTOCOL-COM manual)
+ERROR_CODES = {
+    "40": "BCC faux", "41": "format de commande", "42": "commande non supportee", "43": "trames multiples",
+    "60": "parametre invalide", "61": "donnee invalide", "62": "enregistrement (trop de contacts / registres)",
+    "63": "mode de l'automate (commande impossible dans ce mode : selecteur RUN / PROG ?)",
+    "65": "protection (mot de passe ou memoire protegee)", "66": "adresse hors plage", "67": "donnee manquante",
+}
+
+
 class PlcRefused(MewtocolError):
     """The PLC answered with an error code (%01!xx)."""
 
     def __init__(self, code: str, reply: str):
-        super().__init__(f"l'automate a refusé la commande (code {code}) : {reply!r}")
+        text = ERROR_CODES.get(code, "")
+        super().__init__(f"l'automate a refusé la commande (code {code}{' : ' + text if text else ''}) : {reply!r}")
         self.code = code
+
+
+# contact areas: X inputs, Y outputs, R internal relays (word decimal + bit hex: R901C = word 901 bit C)
+CONTACT_AREAS = ("X", "Y", "R")
 
 
 def open_port(port: str, baud: int = 9600, parity: str = "O", timeout: float = 1.0):
@@ -136,21 +150,67 @@ class Fp0r:
         self._transact(f"WDD{addr:05d}{addr:05d}{encode_word(value)}", "WD",
                        data_len=0, retry=False)
 
-    # ---------- status and program ----------
+    # ---------- contacts (X, Y, R) ----------
+
+    def read_contact_words(self, area: str, start: int, count: int) -> list:
+        """WX / WY / WR words (RCC), in blocks the PLC can handle; bit 0 = X0, X10..."""
+        words = []
+        addr, end = start, start + count
+        while addr < end:
+            n = min(MAX_WORDS_PER_FRAME, end - addr)
+            data = self._transact(f"RCC{area}{addr:04d}{addr + n - 1:04d}", "RC", data_len=4 * n)
+            words += decode_words(data)
+            addr += n
+        return words
+
+    def read_contact(self, area: str, word: int, bit: int) -> bool:
+        """One contact (RCS): X1F = word 1, bit 15."""
+        return self._transact(f"RCS{area}{word:03d}{bit:X}", "RC", data_len=1) == "1"
+
+    def write_contact(self, area: str, word: int, bit: int, on: bool) -> None:
+        """One Y / R contact (WCS). Not retried: the caller re-reads to confirm."""
+        self._transact(f"WCS{area}{word:03d}{bit:X}{int(bool(on))}", "WC", data_len=0, retry=False)
+
+    def write_contact_word(self, area: str, word: int, value: int) -> None:
+        """One WY / WR word (WCC). Not retried."""
+        self._transact(f"WCC{area}{word:04d}{word:04d}{encode_word(value)}", "WC", data_len=0, retry=False)
+
+    def write_dt_block(self, start: int, values: list) -> None:
+        """Consecutive DT registers (WD), at most MAX_WORDS_PER_FRAME per frame. Not retried."""
+        for i in range(0, len(values), MAX_WORDS_PER_FRAME):
+            chunk = values[i:i + MAX_WORDS_PER_FRAME]
+            a = start + i
+            self._transact(f"WDD{a:05d}{a + len(chunk) - 1:05d}" + "".join(encode_word(v) for v in chunk), "WD",
+                           data_len=0, retry=False)
+
+    # ---------- status, mode and program ----------
+
+    def set_mode(self, run: bool) -> None:
+        """Remote RUN (RMG) / PROG (RMP). Refused (code 63...) if the mode switch does not allow it."""
+        self._transact("RMG" if run else "RMP", "RM", data_len=0, retry=False)
 
     def read_status(self) -> dict:
-        """RT command: model, version, program capacity, mode."""
+        """RT command, laid out as in the MEWTOCOL-COM manual: model code, version, program capacity
+        (K steps), operation mode flags, link, error flags, self-diagnostic error code.
+        'raw' keeps the reply: the field decoding is not confirmed on an FP0R yet."""
         data = self._transact("RT", "RT")
-        info = {}
-        if len(data) >= 4:
-            info["model"] = data[:4]
+        info = {"raw": data}
         if len(data) >= 8:
-            info["version"] = data[4:8]
-        if len(data) >= 12:
-            info["capacity_k"] = int(data[8:12], 16)
+            info["model"] = data[0:2]
+            info["version"] = f"{data[2]}.{data[3]}"
+            try:
+                info["capacity_k"] = int(data[4:6])
+            except ValueError:
+                info["capacity_k"] = 0
             info["capacity_steps"] = info["capacity_k"] * 1024
-        if len(data) >= 14:
-            info["mode"] = {"00": "PROG", "01": "RUN", "02": "RUN"}.get(data[12:14], data[12:14])
+            flags = int(data[6:8], 16)
+            info["mode_flags"] = flags
+            info["mode"] = "RUN" if flags & 0x01 else "PROG"
+            info["remote"] = bool(flags & 0x80)
+        if len(data) >= 12:
+            info["error_flags"] = int(data[10:12], 16)
+        if len(data) >= 16:
+            info["self_diag"] = decode_words(data[12:16])[0]
         return info
 
     def read_program_steps(self, start: int, count: int) -> list:

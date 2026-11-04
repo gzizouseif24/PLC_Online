@@ -54,6 +54,15 @@ the program. Same list, download and import as the Programme tab, CSV files.
   I/O and right-side modules from D1140..D1143 / D1320..), Surveillance (D M X Y T C S, write D M Y
   T C S), Donnees (all D to CSV, restore the changed D, import .csv). **Program save missing:** the
   WPLSoft upload uses Delta commands outside Modbus; needs one capture of WPLSoft PLC -> PC.
+- **Panasonic FP0R (04/11), demo only so far:** connection (COM port, speed, parity, station; tool
+  port 9600 8-O-1 by default), Etat (RUN / PROG from R9020, self-diagnostic error R9000 + DT90000
+  code, operation error R9007 / R9008 + step DT90017 / DT90018, forcing R9029, scan time
+  DT90022..24; RUN / PROG buttons with RMG / RMP), Diagnostic (special R / DT explained, built-in
+  X / Y, raw RT reply), Surveillance (DT WX WY WR X Y R, dint format for 32-bit counters; write DT
+  WY WR Y R), Donnees (all DT to CSV, 12315 or 32765 words, restore the changed DT, import .csv).
+  **To confirm on the PLC:** the RT field layout (shown raw), the contact commands RCC / RCS / WCS
+  / WCC and RMG / RMP (from the MEWTOCOL-COM manual, not yet sent to a real FP0R). Program save
+  stays in `python tools/panasonic.py programme`.
 
 ## Order
 
