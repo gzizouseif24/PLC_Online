@@ -63,6 +63,7 @@ function renderSettings() {
   $("hint-wago").hidden = key !== "wago";
   $("hint-delta").hidden = key !== "delta";
   $("hint-panasonic").hidden = key !== "panasonic";
+  $("pana-chercher").hidden = key !== "panasonic";
   if (key === "wago") loadCards();
 }
 
@@ -1071,6 +1072,34 @@ async function sweepNetworks() {
   });
 }
 
+// ---- Panasonic: tool port settings unknown ----
+
+async function searchFp0r() {
+  const btn = $("btn-pana-chercher");
+  const msg = $("pana-msg");
+  const port = (document.querySelector('#reglages input[name="port"]') || {}).value || "";
+  btn.disabled = true;
+  msg.className = "msg";
+  msg.textContent = "Recherche sur " + port + " : toutes les vitesses, parites et stations (environ 40 s)...";
+  try {
+    const r = await api("POST", "/api/panasonic/chercher", { port });
+    msg.textContent = r.texte + (r.trouve ? " Reglages remplis : cliquer sur Connecter." : "");
+    msg.className = "msg" + (r.trouve ? "" : " err");
+    if (r.trouve) {
+      for (const [k, v] of Object.entries(r.reglages)) {
+        const input = document.querySelector(`#reglages input[name="${k}"]`);
+        if (input) input.value = v;
+        localStorageSet("reglage-panasonic-" + k, String(v));
+      }
+    }
+  } catch (e) {
+    msg.textContent = e.message;
+    msg.className = "msg err";
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 async function searchWago() {
   await autoSearch();
 }
@@ -1322,6 +1351,7 @@ async function init() {
     $("ajout-adresse").focus();
   });
   $("btn-visu").addEventListener("click", () => setMonitoring(!monitoring));
+  $("btn-pana-chercher").addEventListener("click", searchFp0r);
   setMonitoring(monitoring);
   $("btn-ecrire").addEventListener("click", writeValues);
   $("form-sauver").addEventListener("submit", saveProgram);

@@ -138,5 +138,80 @@ class Fp0rWebTests(unittest.TestCase):
             self.s.list_backups()
 
 
+class SearchTests(unittest.TestCase):
+    """search() against simulated tool ports."""
+
+    class Port:
+        def __init__(self, answer):
+            self.answer, self.buf = answer, b""
+
+        def reset_input_buffer(self):
+            self.buf = b""
+
+        def write(self, frame):
+            self.buf = self.answer(frame)
+
+        def read_until(self, end=b"\r"):
+            out, self.buf = self.buf, b""
+            return out
+
+        read = lambda self, n: self.read_until()
+
+        def close(self):
+            pass
+
+    def opener(self, answer_at):
+        self.tries = []
+
+        def open_(port, baud, bits, parity):
+            self.tries.append((baud, bits, parity))
+            return self.Port(lambda frame: answer_at(baud, bits, parity, frame))
+        return open_
+
+    def test_found_at_odd_settings(self):
+        def fp0r(baud, bits, parity, frame):
+            if (baud, bits, parity) != (19200, 7, "E") or not frame.startswith(b"%EE#"):
+                return b""
+            reply = "%05$RT46271681000000000"
+            return (reply + pw.xor_checksum(reply) + "\r").encode()
+        r = pw.search("COM3", opener=self.opener(fp0r))
+        self.assertTrue(r["trouve"])
+        self.assertEqual(r["reglages"], {"port": "COM3", "baud": 19200, "bits": 7, "parite": "E", "station": 5})
+
+    def test_error_reply_counts(self):
+        def fp0r(baud, bits, parity, frame):
+            if baud != 9600 or frame.startswith(b"%EE"):
+                return b""
+            return ("%01!42" + pw.xor_checksum("%01!42") + "\r").encode()
+        r = pw.search("COM3", opener=self.opener(fp0r))
+        self.assertEqual((r["trouve"], r["reglages"]["station"]), (True, 1))
+
+    def test_modbus_mode_reported(self):
+        import struct
+        from plc_online.protocols.modbus import crc16
+
+        def modbus(baud, bits, parity, frame):
+            if frame.startswith(b"%") or (baud, parity) != (38400, "N"):
+                return b""
+            body = bytes([1, 3, 2, 0, 7])
+            return body + struct.pack("<H", crc16(body))
+        r = pw.search("COM3", opener=self.opener(modbus))
+        self.assertEqual((r["trouve"], r["protocole"]), (False, "Modbus RTU"))
+        self.assertIn("38400", r["texte"])
+
+    def test_silence_and_echo(self):
+        r = pw.search("COM3", opener=self.opener(lambda *a: b""))
+        self.assertIn("Silence total", r["texte"])
+        self.assertEqual(len(self.tries), len(pw.SPEEDS) * (len(pw.FORMATS) + 3))
+        r = pw.search("COM3", opener=self.opener(lambda b, n, p, frame: frame))
+        self.assertIn("echo", r["texte"])
+
+    def test_port_missing(self):
+        def missing(*a):
+            raise OSError("could not open port 'COM9': FileNotFoundError")
+        with self.assertRaises(DriverError):
+            pw.search("COM9", opener=missing)
+
+
 if __name__ == "__main__":
     unittest.main()

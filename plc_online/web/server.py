@@ -25,6 +25,7 @@ JSON API:
     POST /api/cpu/arreter                      CPU to STOP
     POST /api/cpu/horloge                      CPU clock set to the PC time
     GET  /api/ports                            serial ports of the PC (TSX)
+    POST /api/panasonic/chercher {"port"}      FP0R tool port settings (speed, parity, bits, station; ~40 s)
     POST /api/wago/chercher {"ip"}             Modbus TCP devices on the PC's networks (WAGO identified)
     POST /api/wago/auto                        ARP table + scan + DHCP / BootP requests heard (about 15 s)
     POST /api/wago/donner {"carte", "mac", "ip", "ip_pc"}   give the coupler an address (DHCP / BootP)
@@ -182,6 +183,17 @@ def make_handler(session: Session):
                         return wago_web.set_pc_address(card, str(req.get("ip") or ""))
                     return wago_web.pc_auto(card)
                 return self.api(network)
+            if path == "/api/panasonic/chercher":
+                def find_fp0r():
+                    from plc_online.web.drivers import DriverError
+                    from plc_online.web.panasonic_web import search
+                    if session.connected:
+                        raise DriverError("Deconnecter d'abord : le port COM est utilise par la connexion en cours")
+                    port = str(self.read_json().get("port") or "").strip()
+                    if not port:
+                        raise DriverError("Port COM a renseigner")
+                    return search(port)
+                return self.api(find_fp0r)
             if path == "/api/programme/ob-erreur":
                 return self.api(lambda: session.load_error_obs(list(self.read_json().get("ob") or [])))
             if path == "/api/cpu/demarrer":

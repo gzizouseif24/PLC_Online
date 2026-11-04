@@ -432,6 +432,19 @@ const I18N = (() => {
     // Panasonic FP0R
     "Passer l'automate en PROG ? La machine s'arrete, les sorties sont coupees.": "Put the PLC in PROG? The machine stops, the outputs are switched off.",
     "Arret demande (PROG).": "Stop requested (PROG).",
+    "Chercher les reglages": "Find the settings", "Bits de donnees (7 ou 8)": "Data bits (7 or 8)",
+    "Bits de donnees : 7 ou 8": "Data bits: 7 or 8", "Vitesse, bits et station : des nombres": "Baud rate, bits and station: numbers",
+    "Reglages remplis : cliquer sur Connecter.": "Settings filled in: click Connect.",
+    "Deconnecter d'abord : le port COM est utilise par la connexion en cours": "Disconnect first: the COM port is used by the current connection",
+    "Port COM a renseigner": "COM port to fill in",
+    "Cable sur le port outil (mini-DIN 5) ? FPWIN ferme ? Reglages du port changes : bouton Chercher les reglages.":
+      "Cable on the tool port (mini-DIN 5)? FPWIN closed? Port settings changed: Find the settings button.",
+    "Seulement l'echo de nos trames : le cable renvoie ce qu'il envoie, l'automate ne repond pas. Cable branche sur le port outil ? Automate sous tension ?":
+      "Only the echo of our frames: the cable sends back what it sends, the PLC does not answer. Cable on the tool port? PLC powered?",
+    "Silence total sur toutes les vitesses. Mauvais port COM (voir le Gestionnaire de peripheriques), cable debranche, ou port outil en mode general (utilise par le programme : F159 MREC / F144 TRNS). Avec FPWIN : Hors ligne -> Registres systeme -> Port outil.":
+      "Total silence at every speed. Wrong COM port (see Device Manager), cable unplugged, or tool port in general-purpose mode (used by the program: F159 MREC / F144 TRNS). In FPWIN: Offline -> System registers -> Tool port.",
+    "pas en MEWTOCOL : il a ete regle en Modbus dans les registres systeme (412..). Le remettre en MEWTOCOL (liaison ordinateur) avec FPWIN, ou passer par le port USB de l'automate s'il en a un.":
+      "not MEWTOCOL: it was set to Modbus in the system registers (412..). Set it back to MEWTOCOL (computer link) with FPWIN, or use the PLC's USB port if it has one.",
     "Demo (Panasonic FP0R simule)": "Demo (simulated Panasonic FP0R)", "Passer en PROG": "Switch to PROG",
     "Panasonic : cable USB / RS-232 sur le port outil (mini-DIN 5),": "Panasonic: USB / RS-232 cable on the tool port (mini-DIN 5),",
     "FPWIN ferme": "FPWIN closed",
@@ -539,7 +552,12 @@ const I18N = (() => {
     [/^Erreur de syntaxe du programme \(M1004\) : D1004 = (.+)$/, "Program syntax error (M1004): D1004 = $1"],
     [/^Supprimer (.+) \?$/, "Delete $1?"],
     [/^Erreur d'operation \(R9007 \/ R9008\) au pas (\d+) \(DT90017 \/ DT90018\)$/, "Operation error (R9007 / R9008) at step $1 (DT90017 / DT90018)"],
-    [/^(\d+)k pas$/, "$1k steps"], [/^lecture DT : (\d+) \/ (\d+) mots$/, "reading DT: $1 / $2 words"],
+    [/^(\d+)k pas$/, "$1k steps"],
+    [/^Recherche sur (\S*) : toutes les vitesses, parites et stations \(environ 40 s\)\.\.\.$/, "Searching on $1: every speed, parity and station (about 40 s)..."],
+    [/^FP0R trouve : (\d+) bauds, (\d) bits, parite (\w), station (\d+)\.(.*)$/, (m, b, n, p, st, rest) => `FP0R found: ${b} baud, ${n} bits, parity ${p}, station ${st}.${phrases(rest)}`],
+    [/^Aucune reponse \((\d+) essais\)\. (.*)$/, (m, n, rest) => `No answer (${n} tries). ${translateLine(rest)}`],
+    [/^Le port outil repond en Modbus RTU \((\d+) bauds, (\S+), station 1\), (.*)$/, (m, b, f, rest) => `The tool port answers in Modbus RTU (${b} baud, ${f}, station 1), ${phrases(rest)}`],
+    [/^Des octets arrivent mais illisibles \((.*?)\) : (.*)$/, (m, l, rest) => `Bytes arrive but unreadable (${l}): ${rest.includes("autre protocole") ? "another protocol on the tool port (general-purpose mode / programmed PC link), or another device on the line." : rest}`], [/^lecture DT : (\d+) \/ (\d+) mots$/, "reading DT: $1 / $2 words"],
   ];
 
   // ---- phrases replaced inside longer texts, longest first ----

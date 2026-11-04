@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Panasonic FP0R par le port outil (MEWTOCOL), sans FPWIN.
 
+    python tools/panasonic.py chercher               trouver vitesse / parite / bits / station du port outil
     python tools/panasonic.py compteurs              compteurs rapides CH0..CH3 en direct (Ctrl+C)
     python tools/panasonic.py scan --debut 0 --fin 200   afficher les DT qui changent (Ctrl+C)
     python tools/panasonic.py ecrire [DT] [VALEUR]   ecrire UN DT, avec confirmation et relecture
@@ -126,7 +127,7 @@ def cmd_programme(plc):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("commande", choices=["compteurs", "scan", "ecrire", "programme"])
+    p.add_argument("commande", choices=["chercher", "compteurs", "scan", "ecrire", "programme"])
     p.add_argument("args", nargs="*", help="ecrire : DT et VALEUR (sinon demandes)")
     p.add_argument("--port", default="COM6")
     p.add_argument("--baud", type=int, default=None, help="9600 par defaut, 115200 pour programme")
@@ -135,6 +136,17 @@ def main():
     p.add_argument("--debut", type=int, default=0, help="scan : premier DT")
     p.add_argument("--fin", type=int, default=200, help="scan : dernier DT")
     a = p.parse_args()
+
+    if a.commande == "chercher":
+        from plc_online.web.panasonic_web import search
+        print(f"Recherche sur {a.port} (environ 40 s)...")
+        r = search(a.port, lambda text, i, n: print(f"   {i:2}/{n}  {text}", flush=True))
+        print("\n" + r["texte"])
+        if r["trouve"]:
+            g = r["reglages"]
+            print(f"A utiliser : --port {a.port} --baud {g['baud']} --parite {g['parite']} --station {g['station']}"
+                  + ("  (7 bits : regler aussi Bits = 7 dans l'interface web)" if g["bits"] == 7 else ""))
+        return
 
     baud = a.baud or (115200 if a.commande == "programme" else 9600)
     dt = new = None

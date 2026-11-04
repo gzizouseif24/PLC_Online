@@ -21,6 +21,7 @@ def _drv():
 SETTINGS = [{"cle": "port", "nom": "Port COM", "defaut": "COM3", "type": "port"},
             {"cle": "baud", "nom": "Vitesse", "defaut": 9600},
             {"cle": "parite", "nom": "Parite (E, O ou N)", "defaut": "O", "type": "texte"},
+            {"cle": "bits", "nom": "Bits de donnees (7 ou 8)", "defaut": 8},
             {"cle": "station", "nom": "Station", "defaut": 1}]
 
 # special relays (WR900 / WR901 / WR902) and registers read for the status
@@ -84,10 +85,13 @@ def open_fp0r(settings: dict):
         raise _drv().DriverError("Parite : E, O ou N")
     try:
         baud, station = int(settings.get("baud") or 9600), int(settings.get("station") or 1)
+        bits = int(settings.get("bits") or 8)
     except (TypeError, ValueError):
-        raise _drv().DriverError("Vitesse et station : des nombres") from None
+        raise _drv().DriverError("Vitesse, bits et station : des nombres") from None
+    if bits not in (7, 8):
+        raise _drv().DriverError("Bits de donnees : 7 ou 8")
     try:
-        ser = mw.open_port(port, baud, parity, timeout=0.6)
+        ser = mw.open_port(port, baud, parity, timeout=0.6, bytesize=bits)
     except Exception as e:                     # serial errors: port missing or busy
         raise _drv().DriverError(tsx_web.port_error(port, e)) from None
     plc = mw.Fp0r(ser, station)
@@ -97,12 +101,122 @@ def open_fp0r(settings: dict):
         pass
     except mw.MewtocolError as e:
         ser.close()
-        raise _drv().DriverError(f"L'automate ne repond pas sur {port} ({baud} 8{parity}1, station {station}) : {e}. "
-                                 "Cable sur le port outil (mini-DIN 5) ? FPWIN ferme ? Essayer 115200 ou la parite "
-                                 "O / N (reglage du port outil dans les registres systeme).") from None
+        raise _drv().DriverError(f"L'automate ne repond pas sur {port} ({baud} {bits}{parity}1, station {station}) : {e}. "
+                                 "Cable sur le port outil (mini-DIN 5) ? FPWIN ferme ? Reglages du port changes : "
+                                 "bouton Chercher les reglages.") from None
     plc.nom = "Panasonic FP0R"
     plc.close = ser.close
     return plc
+
+
+# ---- search: tool port settings unknown ----
+
+SPEEDS = [9600, 115200, 19200, 38400, 57600, 4800, 2400]
+FORMATS = [(8, "O"), (8, "N"), (8, "E"), (7, "O"), (7, "E"), (7, "N")]
+
+
+def _serial(port, baud, bits, parity):
+    return mw.open_port(port, baud, parity, timeout=0.25, bytesize=bits)
+
+
+def mewtocol_frame(station: str) -> bytes:
+    """RT (read status) to station '01' .. '99', or 'EE' (any station on the tool port)."""
+    body = f"%{station}#RT"
+    return (body + xor_checksum(body) + "\r").encode("ascii")
+
+
+def mewtocol_answer(got: bytes):
+    """Station number of a valid MEWTOCOL reply (BCC checked), else None. An error reply counts:
+    the settings are right."""
+    text = got.decode("ascii", "replace").strip()
+    i = text.find("%")
+    if i < 0:
+        return None
+    text = text[i:]
+    if len(text) < 6 or text[3] not in "$!" or xor_checksum(text[:-2]) != text[-2:].upper():
+        return None
+    return int(text[1:3]) if text[1:3].isdigit() else None
+
+
+def modbus_frame(unit=1) -> bytes:
+    import struct
+    from plc_online.protocols.modbus import crc16
+    body = bytes([unit, 3, 0, 0, 0, 1])
+    return body + struct.pack("<H", crc16(body))
+
+
+def modbus_answer(got: bytes) -> bool:
+    import struct
+    from plc_online.protocols.modbus import crc16
+    for n in (7, 5):                               # registers read, or an exception reply
+        if len(got) >= n and struct.unpack("<H", got[n - 2:n])[0] == crc16(got[:n - 2]):
+            return True
+    return False
+
+
+def probe(ser, frame: bytes) -> bytes:
+    ser.reset_input_buffer()
+    ser.write(frame)
+    got = ser.read_until(b"\r") if frame.endswith(b"\r") else ser.read(16)
+    return got or b""
+
+
+def search(port: str, progress=None, opener=_serial) -> dict:
+    """Try every tool port setting: MEWTOCOL (stations EE and 01), then Modbus RTU (the tool port
+    can be set to Modbus in the system registers). Returns the settings found, or a diagnosis."""
+    tried, echo, noise = 0, [], []
+    total = len(SPEEDS) * len(FORMATS) + len(SPEEDS) * 3
+    for baud in SPEEDS:
+        for bits, parity in FORMATS:
+            tried += 1
+            if progress:
+                progress(f"MEWTOCOL {baud} {bits}{parity}1", tried, total)
+            try:
+                ser = opener(port, baud, bits, parity)
+            except Exception as e:                 # port missing or busy: no use trying further
+                raise _drv().DriverError(tsx_web.port_error(port, e)) from None
+            try:
+                for st in ("EE", "01"):
+                    frame = mewtocol_frame(st)
+                    got = probe(ser, frame)
+                    station = mewtocol_answer(got)
+                    if station is not None:
+                        return {"trouve": True, "protocole": "MEWTOCOL",
+                                "reglages": {"port": port, "baud": baud, "bits": bits, "parite": parity,
+                                             "station": station},
+                                "texte": f"FP0R trouve : {baud} bauds, {bits} bits, parite {parity}, station {station}."}
+                    if got and got.startswith(frame.strip()):
+                        echo.append(f"{baud} {bits}{parity}")
+                    elif got:
+                        noise.append(f"{baud} {bits}{parity}")
+            finally:
+                ser.close()
+    for baud in SPEEDS:
+        for parity in ("N", "O", "E"):
+            tried += 1
+            if progress:
+                progress(f"Modbus RTU {baud} 8{parity}1", tried, total)
+            ser = opener(port, baud, 8, parity)
+            try:
+                if modbus_answer(probe(ser, modbus_frame())):
+                    return {"trouve": False, "protocole": "Modbus RTU",
+                            "texte": f"Le port outil repond en Modbus RTU ({baud} bauds, 8{parity}1, station 1), pas en "
+                                     "MEWTOCOL : il a ete regle en Modbus dans les registres systeme (412..). Le "
+                                     "remettre en MEWTOCOL (liaison ordinateur) avec FPWIN, ou passer par le port USB "
+                                     "de l'automate s'il en a un."}
+            finally:
+                ser.close()
+    if echo and not noise:
+        why = ("Seulement l'echo de nos trames : le cable renvoie ce qu'il envoie, l'automate ne repond pas. "
+               "Cable branche sur le port outil ? Automate sous tension ?")
+    elif noise:
+        why = (f"Des octets arrivent mais illisibles ({', '.join(noise[:4])}) : autre protocole sur le port outil "
+               "(mode general / liaison PC programmee), ou autre appareil sur la ligne.")
+    else:
+        why = ("Silence total sur toutes les vitesses. Mauvais port COM (voir le Gestionnaire de peripheriques), "
+               "cable debranche, ou port outil en mode general (utilise par le programme : F159 MREC / F144 TRNS). "
+               "Avec FPWIN : Hors ligne -> Registres systeme -> Port outil.")
+    return {"trouve": False, "protocole": "", "texte": f"Aucune reponse ({tried} essais). {why}"}
 
 
 # ---- demo ----
