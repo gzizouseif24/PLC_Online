@@ -6,6 +6,8 @@
     python tools/panasonic.py scan --debut 0 --fin 200   afficher les DT qui changent (Ctrl+C)
     python tools/panasonic.py ecrire [DT] [VALEUR]   ecrire UN DT, avec confirmation et relecture
     python tools/panasonic.py programme              copier le programme dans .bin + _hex.txt
+    python tools/panasonic.py test-entrees --positions 1,2 --entrees 8
+                                                     cocher chaque entree vue a 1 puis a 0 (Ctrl+C)
 
 Options : --port COM6, --baud (9600 ; 115200 par defaut pour programme), --parite O, --station 1.
 Ecriture : machine ARRETEE, avec l'accord du client, apres sauvegarde.
@@ -125,9 +127,64 @@ def cmd_programme(plc):
     save_as_hex(words, f"{name}_hex.txt")
 
 
+# ---- test des entrees : chaque entree doit passer a 1 puis revenir a 0 ----
+
+def input_names(positions, per_unit):
+    """[(word, bit, 'X20'), ...]: position 0 = CPU (X0..), n = extension n (X(2n)0..)."""
+    out = []
+    for pos in positions:
+        word = 2 * pos
+        for i in range(per_unit):
+            w, b = word + i // 16, i % 16
+            out.append((w, b, f"X{w}{b:X}" if w else f"X{b:X}"))
+    return out
+
+
+def cmd_test_entrees(plc, positions, per_unit):
+    inputs = input_names(positions, per_unit)
+    words = sorted({w for w, _, _ in inputs})
+    seen_on, done = set(), set()
+    print(f"Test de {len(inputs)} entrees : {inputs[0][2]}..{inputs[-1][2]}"
+          f"{' (' + str(len(positions)) + ' positions)' if len(positions) > 1 else ''}")
+    print("Mettre chaque entree a 1 puis la relacher. (Ctrl+C pour arreter)\n")
+    last = None
+    try:
+        _test_loop(plc, inputs, words, seen_on, done)
+    except KeyboardInterrupt:
+        pass
+    missing = [n for _, _, n in inputs if n not in done]
+    print(f"\n{len(done)}/{len(inputs)} entrees testees."
+          + (f" Pas vues : {', '.join(missing)}" if missing else " Toutes bonnes."))
+
+
+def _test_loop(plc, inputs, words, seen_on, done):
+    last = None
+    while len(done) < len(inputs):
+        values = {}
+        for w in words:
+            values[w] = plc.read_contact_words("X", w, 1)[0]
+        state = {name: (values[w] >> b) & 1 for w, b, name in inputs}
+        if last is not None:
+            for name, v in state.items():
+                if v != last[name]:
+                    if v:
+                        seen_on.add(name)
+                    elif name in seen_on:
+                        done.add(name)
+                    mark = "OK" if name in done else ""
+                    print(f"   {time.strftime('%H:%M:%S')}  {name} -> {v}   {mark}")
+        else:
+            stuck = [n for n, v in state.items() if v]
+            if stuck:
+                print("   Deja a 1 au depart : " + ", ".join(stuck) + " (a relacher, ou entree en court-circuit)")
+                seen_on.update(stuck)
+        last = state
+        time.sleep(0.05)
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("commande", choices=["chercher", "compteurs", "scan", "ecrire", "programme"])
+    p.add_argument("commande", choices=["chercher", "compteurs", "scan", "ecrire", "programme", "test-entrees"])
     p.add_argument("args", nargs="*", help="ecrire : DT et VALEUR (sinon demandes)")
     p.add_argument("--port", default="COM6")
     p.add_argument("--baud", type=int, default=None, help="9600 par defaut, 115200 pour programme")
@@ -135,6 +192,8 @@ def main():
     p.add_argument("--station", type=int, default=1)
     p.add_argument("--debut", type=int, default=0, help="scan : premier DT")
     p.add_argument("--fin", type=int, default=200, help="scan : dernier DT")
+    p.add_argument("--positions", default="1", help="test-entrees : 0 = CPU, 1..3 = extensions (ex. 1,2)")
+    p.add_argument("--entrees", type=int, default=8, help="test-entrees : entrees par position (8 pour un E16)")
     a = p.parse_args()
 
     if a.commande == "chercher":
@@ -166,6 +225,8 @@ def main():
             cmd_scan(plc, a.debut, a.fin)
         elif a.commande == "ecrire":
             cmd_ecrire(plc, dt, new)
+        elif a.commande == "test-entrees":
+            cmd_test_entrees(plc, [int(x) for x in a.positions.split(",") if x.strip()], a.entrees)
         else:
             cmd_programme(plc)
     except MewtocolError as e:
