@@ -25,6 +25,7 @@ JSON API:
     POST /api/cpu/arreter                      CPU to STOP
     POST /api/cpu/horloge                      CPU clock set to the PC time
     GET  /api/ports                            serial ports of the PC (TSX)
+    GET  /api/axes                             Allen-Bradley: Kinetix axes (state, faults, inhibits) + history
     POST /api/panasonic/chercher {"port"}      FP0R tool port settings (speed, parity, bits, station; ~40 s)
     POST /api/wago/chercher {"ip"}             Modbus TCP devices on the PC's networks (WAGO identified)
     POST /api/wago/auto                        ARP table + scan + DHCP / BootP requests heard (about 15 s)
@@ -116,6 +117,8 @@ def make_handler(session: Session):
                 self.end_headers()
                 self.wfile.write(data)
                 return
+            if path == "/api/axes":
+                return self.api(session.axes)
             if path == "/api/programme/blocs":
                 query = urllib.parse.parse_qs(self.path.partition("?")[2])
                 return self.api(lambda: session.backup_blocks((query.get("id") or [""])[0]))

@@ -47,6 +47,9 @@
         <button type="button" class="btn" id="btn-pana-chercher">Chercher les reglages</button>
         <p id="pana-msg" class="msg" role="status"></p>
       </div>
+      <p class="hint" id="hint-logix" hidden>Allen-Bradley : cable Ethernet sur le reseau de l'automate (port de la CPU
+        ou module 1756-EN2T), PC dans le meme reseau. Emplacement CPU : 0 en general. Necessite
+        <b>pip install pycomm3</b>.</p>
       <div class="hint" id="hint-wago" hidden>
         <p>WAGO : cable Ethernet entre le PC et le coupleur, puis <b>Recherche automatique</b>.</p>
         <label class="field" id="wago-carte-box">
@@ -83,10 +86,32 @@
       <nav class="tabs" id="tabs" role="tablist" hidden>
         <button type="button" role="tab" class="tab active" data-tab="etat-plein" aria-selected="true">Etat</button>
         <button type="button" role="tab" class="tab" data-tab="vue-diag" aria-selected="false">Diagnostic</button>
+        <button type="button" role="tab" class="tab" data-tab="vue-axes" aria-selected="false" data-fonction="axes">Axes</button>
         <button type="button" role="tab" class="tab" data-tab="vue-watch" aria-selected="false">Surveillance</button>
         <button type="button" role="tab" class="tab" data-tab="vue-prog" aria-selected="false" data-fonction="programme">Programme</button>
         <button type="button" role="tab" class="tab" data-tab="vue-data" aria-selected="false" data-fonction="donnees">Donnees</button>
       </nav>
+
+      <div id="vue-axes" class="vue" hidden>
+        <p class="hint">Axes Kinetix lus dans l'automate (tags AXIS_CIP_DRIVE), toutes les secondes. Lecture seule :
+          le reset des defauts se fait par le programme ou Studio 5000. Codes FLT / INHIBIT identiques a l'afficheur du
+          variateur.</p>
+        <p id="axes-msg" class="msg" role="status"></p>
+        <div class="table-wrap">
+          <table class="table" id="table-axes">
+            <thead><tr><th>Axe</th><th>Etat</th><th>Defauts / inhibitions</th><th>Bus CC</th><th>Charge moteur / variateur</th><th>Position / vitesse</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <h3>Historique <span class="hint">(depuis l'ouverture de l'onglet, le plus recent en haut)</span></h3>
+        <div class="table-wrap">
+          <table class="table" id="table-axes-histo">
+            <thead><tr><th>Heure</th><th>Axe</th><th>Evenement</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <p class="maj" id="axes-maj"></p>
+      </div>
 
       <div id="vue-data" class="vue" hidden>
         <form id="form-data" class="ajout" autocomplete="off">

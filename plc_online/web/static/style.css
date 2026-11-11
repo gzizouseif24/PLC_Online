@@ -307,3 +307,5 @@ a.btn { text-decoration: none; display: inline-block; }
 .ob-erreur summary { cursor: pointer; font-weight: 600; }
 .ob-liste { display: grid; gap: 4px; margin: 8px 0; }
 .ob-liste label { display: flex; gap: 8px; align-items: center; }
+
+#table-axes tr.ligne-defaut td:first-child { border-left: 3px solid var(--fault); }

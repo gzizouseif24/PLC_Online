@@ -63,6 +63,7 @@ function renderSettings() {
   $("hint-wago").hidden = key !== "wago";
   $("hint-delta").hidden = key !== "delta";
   $("hint-panasonic").hidden = key !== "panasonic";
+  $("hint-logix").hidden = key !== "logix";
   $("pana-chercher").hidden = key !== "panasonic";
   if (key === "wago") loadCards();
 }
@@ -101,9 +102,12 @@ function applyBrand(key) {
   $("btn-sauver").textContent = tsx ? "Sauvegarder le programme de l'automate" : "Sauvegarder le programme de la CPU";
   $("col-contenu").textContent = tsx ? "Contenu" : "Blocs";
   const pana = family === "panasonic";
+  const logix = family === "logix";
   $("btn-stop").textContent = pana ? "Passer en PROG" : "Passer en STOP";
   const dataLike = family === "delta" || pana;        // .csv data copies of this tool
-  $("watch-hint").textContent = pana
+  $("watch-hint").textContent = logix
+    ? "Nom du tag, comme dans Studio 5000 : Recipe_Speed, Recipe[3].Temp, Program:Main.Count. Ecriture : BOOL, entiers, REAL, STRING (pas les tags de securite)."
+    : pana
     ? "DT100, WX0 / WY0 / WR10 (mots), X0, X1F, Y3, R901C (bits : mot decimal + bit hexa). Ecriture : DT, WY, WR, Y, R. Format dint pour les compteurs 32 bits."
     : family === "delta"
     ? "D100, M10, X17 et Y0 (en octal), T5 / C2 (valeur), S0. Ecriture : D, M, Y, T, C, S. Le format se change sur chaque ligne."
@@ -112,12 +116,12 @@ function applyBrand(key) {
     : tsx
     ? "%MW, %MD, %KW, %KD, %SW, %M, %S (le % est facultatif). Ecriture : %MW et %MD. Le format se change sur chaque ligne."
     : "E/I, A/Q, M, DB10.DBW2, T5, Z2. Le format se change sur chaque ligne.";
-  $("ajout-adresse").placeholder = pana ? "DT100, WX0, X0, Y0, R10" : family === "delta" ? "D100, M10, X0, Y0" : family === "wago" ? "IW0, QW0, I0, Q0" : tsx ? "%MW10, %MD4, %M5, %I1.0" : "MW10, E0.0, DB10.DBD4";
-  $("titre-params").textContent = dataLike ? "Automate" : family === "wago" ? "Image process" : tsx ? "Automate" : "Parametres CPU";
+  $("ajout-adresse").placeholder = logix ? "Recipe_Speed, Program:Main.Count" : pana ? "DT100, WX0, X0, Y0, R10" : family === "delta" ? "D100, M10, X0, Y0" : family === "wago" ? "IW0, QW0, I0, Q0" : tsx ? "%MW10, %MD4, %M5, %I1.0" : "MW10, E0.0, DB10.DBD4";
+  $("titre-params").textContent = logix ? "Automate" : dataLike ? "Automate" : family === "wago" ? "Image process" : tsx ? "Automate" : "Parametres CPU";
   const head = $("table-rack").tHead.rows[0].cells;
   head[0].textContent = tsx || family === "wago" ? "Position" : dataLike ? "" : "Empl.";
-  head[3].textContent = family === "wago" || dataLike ? "Module" : tsx ? "Configure (PL7)" : "Configure (HW Config)";
-  head[4].textContent = family === "wago" || dataLike ? "Valeurs" : "En place";
+  head[3].textContent = family === "wago" || dataLike || logix ? "Module" : tsx ? "Configure (PL7)" : "Configure (HW Config)";
+  head[4].textContent = family === "wago" || dataLike ? "Valeurs" : logix ? "Statut" : "En place";
   $("data-hint").textContent = pana
     ? "Copie de tous les registres DT (recettes, compteurs, reglages), sans le programme. Environ 1 a 2 minutes a 9600 bauds."
     : family === "delta"
@@ -215,6 +219,60 @@ function showTab(id) {
   if (id === "vue-watch") { renderRackVars(); startWatch(); } else stopWatch();
   if (id === "vue-prog") loadBackups();
   if (id === "vue-data") loadData();
+  if (id === "vue-axes") startAxes(); else stopAxes();
+}
+
+// ---- Allen-Bradley: Kinetix axes ----
+
+let axesTimer = null;
+
+function startAxes() {
+  stopAxes();
+  loadAxes();
+  axesTimer = setInterval(loadAxes, 1000);
+}
+
+function stopAxes() {
+  if (axesTimer) clearInterval(axesTimer);
+  axesTimer = null;
+}
+
+let axesBusy = false;
+async function loadAxes() {
+  if (axesBusy) return;
+  axesBusy = true;
+  try {
+    const r = await api("GET", "/api/axes");
+    $("axes-msg").textContent = "";
+    rows($("table-axes").tBodies[0], r.axes, (a) => {
+      const tr = el("tr", a.ok ? "" : "ligne-defaut");
+      const state = el("span", "badge " + (a.ok ? (a.inhibe ? "bad" : "ok") : "bad"), a.etat);
+      const list = el("div");
+      for (const t of a.defauts) list.append(el("div", "valeur erreur", t));
+      for (const t of a.inhibitions) list.append(el("div", "sub", t));
+      for (const t of a.alarmes) list.append(el("div", "sub", t));
+      if (!list.childNodes.length) list.append(el("span", "sub", "—"));
+      list.title = Object.entries(a.brut).map(([k, v]) => k + " = " + v).join("\n")
+        + (a.non_lus.length ? "\n\nnon lus : " + a.non_lus.join(", ") : "");
+      tr.append(cell(a.axe, "mono", "Axe"), cell(state, "", "Etat"), cell(list, "", "Defauts"),
+                cell(a.bus || "—", "mono", "Bus CC"),
+                cell([a.charge_moteur, a.charge_variateur].filter(Boolean).join(" / ") || "—", "mono", "Charge"),
+                cell([a.position, a.vitesse].filter(Boolean).join(" / ") || "—", "mono", "Position"));
+      return tr;
+    }, "Aucun axe AXIS_CIP_DRIVE dans l'automate.", 6);
+    rows($("table-axes-histo").tBodies[0], r.historique, (h) => {
+      const tr = el("tr");
+      tr.append(cell(h.heure, "mono", "Heure"), cell(h.axe, "mono", "Axe"),
+                cell((h.actif ? "apparu : " : "disparu : ") + h.texte, h.actif ? "valeur erreur" : "sub", "Evenement"));
+      return tr;
+    }, "Aucun changement depuis l'ouverture de l'onglet.", 3);
+    $("axes-maj").textContent = "Mis a jour a " + new Date().toLocaleTimeString("fr-FR");
+  } catch (e) {
+    $("axes-msg").textContent = e.message;
+    $("axes-msg").className = "msg err";
+  } finally {
+    axesBusy = false;
+  }
 }
 
 // ---- program: save, compare, restore ----
@@ -702,6 +760,7 @@ const FORMAT_NAMES = { dec: "DEC", ud: "DEC non signe", hex: "HEX", bin: "BIN", 
 function formatsFor(adresse) {
   /** Formats that fit the size of the address ([] for a bit: always 0 / 1). */
   const a = adresse.toUpperCase();
+  if (family === "logix") return [];
   if (family === "wago") return /^[IQ]W\d+$/.test(a) ? ["dec", "pt100", "ud", "hex", "bin"] : [];
   if (family === "delta") return /^[DTC]\d+$/.test(a) ? ["dec", "ud", "hex", "bin"] : [];
   if (family === "panasonic") return /^DT\d+$/.test(a) ? ["dec", "ud", "hex", "bin", "dint"]
@@ -725,6 +784,7 @@ function fullAddress(w) {
 }
 
 function splitAddress(text) {
+  if (family === "logix") return { adresse: text.trim(), format: "" };     // Program:Main.Tag has a colon
   const [adresse, format = ""] = text.trim().split(":");
   const formats = formatsFor(adresse);
   const f = format.toLowerCase();
@@ -786,7 +846,7 @@ function renderWatchRows() {
         readWatch();
       });
     } else {
-      fmt = el("span", "sub", "BOOL");
+      fmt = el("span", "sub", family === "logix" ? "—" : "BOOL");
     }
     const input = el("input", "nouvelle");
     input.placeholder = "—";
@@ -1157,7 +1217,8 @@ function renderDiagnostic(d) {
   rackModules = d.modules || null;
   renderRackVars();
   $("diag-alertes").replaceChildren(...d.alertes.map((a) => el("div", "alerte", a)));
-  $("diag-info").textContent = family === "panasonic" ? "Relais et registres speciaux (R9000.., DT90000..), entrees / sorties integrees."
+  $("diag-info").textContent = family === "logix" ? "Automate, modules du chassis 1756 emplacement par emplacement, axes en defaut."
+    : family === "panasonic" ? "Relais et registres speciaux (R9000.., DT90000..), entrees / sorties integrees."
     : family === "delta" ? "Relais et registres speciaux (M1000.., D1000..), entrees / sorties."
     : family === "wago" ? "Modules lus dans le coupleur, valeurs de l'image process."
     : d.systeme ? "Bits et mots systeme de l'automate."
@@ -1228,6 +1289,7 @@ function setConnected(connected) {
   if (connected) showTab(currentTab);
   if (!connected) {
     stopWatch();
+    stopAxes();
     $("etat-vide").hidden = false;
     for (const v of document.querySelectorAll(".vue")) v.hidden = true;
     diagLoaded = false;

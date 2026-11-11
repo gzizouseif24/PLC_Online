@@ -63,6 +63,16 @@ the program. Same list, download and import as the Programme tab, CSV files.
   **To confirm on the PLC:** the RT field layout (shown raw), the contact commands RCC / RCS / WCS
   / WCC and RMG / RMP (from the MEWTOCOL-COM manual, not yet sent to a real FP0R). Program save
   stays in `python tools/panasonic.py programme`.
+- **Allen-Bradley ControlLogix / GuardLogix (11/11), demo only so far** (pycomm3, EtherNet/IP): Etat
+  (catalog, firmware, RUN / PROG, key switch, major / minor fault from the identity status word),
+  Diagnostic (1756 chassis slot by slot: product, firmware, I/O connection faulted; faulted axes),
+  **Axes** (every AXIS_CIP_DRIVE tag, once a second: state, FLT Sxx / FLT Mxx faults as on the
+  Kinetix 5500 display, start inhibits, alarms, DC bus, motor / inverter load, position / velocity,
+  history of faults appearing / clearing), Surveillance (tags by name, write BOOL / integers / REAL /
+  STRING; safety tags refused). Read only on the drives: no reset, no motion. **To confirm on the
+  machine:** reading the axis members (fallback: raw symbolic read, and axes found by probing when
+  the tag list upload stops on a system type), the status word bits, the fault names (only those
+  checked against 2198-UM001 are named, other bits show their code).
 
 ## Order
 
