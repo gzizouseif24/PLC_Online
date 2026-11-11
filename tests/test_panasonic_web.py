@@ -46,6 +46,19 @@ class ProtocolTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 pw.Fp0rVar(bad)
 
+    def test_expansion_models(self):
+        for text, model in (("FP0-E16P", "E16P"), ("AFP0RE16P", "E16P"), ("e32t", "E32T"), ("FP0-E16RS", "E16R"),
+                            ("E8YRS", "E8YR"), ("FP0-A21", "A21"), ("", None), ("aucune", ""), ("xyz", None)):
+            self.assertEqual(pw.expansion_model(text), model, text)
+        self.assertEqual(pw.EXPANSIONS["E8R"], (4, 4))
+
+    def test_io_verify_alert(self):
+        port = pw.DemoPort()
+        port.contacts[("R", 900)] = 1 << 4
+        port.dt[90010] = 0b010
+        plc = mw.Fp0r(port, 1)
+        self.assertIn("extension 2", pw.faults(pw._relays(plc), pw._registers(plc))[0])
+
     def test_self_diag_text(self):
         self.assertEqual(pw.self_diag_text(0), "aucune")
         self.assertIn("F148", pw.self_diag_text(120))
@@ -79,15 +92,18 @@ class Fp0rWebTests(unittest.TestCase):
         d = self.s.diagnostic()
         self.assertIn("R9000", [x["adresse"] for x in d["systeme"]])
         self.assertIn("DT90000", [x["adresse"] for x in d["systeme"]])
-        cpu, ext1, ext2 = d["modules"][:3]
+        self.assertEqual(len(d["modules"]), 3)                       # extension 3 = aucune: not shown
+        cpu, ext1, ext2 = d["modules"]
         self.assertEqual((cpu["adresse"], cpu["variables"][15]["adresse"]), ("X0..XF / Y0..YF", "XF"))
         self.assertTrue(cpu["en_place"]["nom"].startswith("X : 1 0 1"))
-        self.assertEqual((ext1["adresse"], ext1["etat"]), ("X20..X27 / Y20..Y27", "ok"))
-        self.assertTrue(ext1["en_place"]["nom"].startswith("X20..X27 : 1 0 0 0 1 0 0 0  /"))
+        self.assertEqual((ext1["configure"]["nom"], ext1["adresse"]), ("FP0-E16P", "X20..X27 / Y20..Y27"))
+        self.assertTrue(ext1["en_place"]["nom"].startswith("X20..X27 : 1 0 0 0 1 0 0 0  /  Y20..Y27 : 0 0 1"))
         self.assertEqual([v["adresse"] for v in ext1["variables"]][:2] + [ext1["variables"][8]["adresse"]],
                          ["X20", "X21", "Y20"])
         self.assertEqual(len(ext1["variables"]), 16)
+        self.assertEqual(ext2["configure"]["nom"], "type non renseigne")
         self.assertIn("tout a 0", ext2["etat"])
+        self.assertIn("R9004", [x["adresse"] for x in d["systeme"]])
 
     def test_fault_shown(self):
         self.s.plc.ser.contacts[("R", 900)] = 0x0081          # R9000 + R9007

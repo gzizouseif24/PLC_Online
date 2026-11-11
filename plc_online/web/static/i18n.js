@@ -454,6 +454,17 @@ const I18N = (() => {
     "pas en MEWTOCOL : il a ete regle en Modbus dans les registres systeme (412..). Le remettre en MEWTOCOL (liaison ordinateur) avec FPWIN, ou passer par le port USB de l'automate s'il en a un.":
       "not MEWTOCOL: it was set to Modbus in the system registers (412..). Set it back to MEWTOCOL (computer link) with FPWIN, or use the PLC's USB port if it has one.",
     "CPU (E/S integrees)": "CPU (built-in I/O)",
+    "Extension 1 (ex. E16P, E32T, E8X, A21 ; vide = inconnue ; aucune)": "Expansion 1 (e.g. E16P, E32T, E8X, A21; empty = unknown; aucune = none)",
+    "type non renseigne": "type not given", "adresses du manuel FP0R (4.3)": "addresses from the FP0R manual (4.3)",
+    "erreur de verification E/S : extension ajoutee, retiree ou mal enfichee depuis la mise sous tension (DT90010)":
+      "I/O verification error: expansion added, removed or badly plugged since power-up (DT90010)",
+    "cycle constant depasse - toujours a 1 si le cycle constant n'est pas utilise (registre systeme 34 = 0)":
+      "constant scan exceeded - always 1 when constant scan is not used (system register 34 = 0)",
+    "selecteur de mode sur RUN": "mode switch on RUN",
+    "extensions en erreur de verification E/S (bit 0..2 = extension 1..3)": "expansions with an I/O verification error (bit 0..2 = expansion 1..3)",
+    "erreur memoire programme (ROM utilisateur) : probable defaut materiel": "program memory error (user ROM): probably a hardware fault",
+    "installation des modules : plus de modules que la limite (voir le manuel materiel)": "unit installation: more units than the limit (see the hardware manual)",
+    "erreur des registres systeme : verifier ou initialiser les registres systeme": "system register error: check or initialize the system registers",
     "E/S par extension (8 = FP0-E16, 16 = FP0-E32, 4 = FP0-E8R)": "I/O per expansion (8 = FP0-E16, 16 = FP0-E32, 4 = FP0-E8R)", "module 32 points ou analogique": "32-point or analog module", "Entrees / sorties integrees": "Built-in inputs / outputs",
     "le FP0R ne donne pas le type du module : valeurs lues a ses adresses": "the FP0R does not report the module type: values read at its addresses",
     "tout a 0 (module absent, ou entrees / sorties a 0)": "all 0 (no module, or inputs / outputs at 0)",

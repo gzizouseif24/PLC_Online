@@ -23,27 +23,55 @@ SETTINGS = [{"cle": "port", "nom": "Port COM", "defaut": "COM3", "type": "port"}
             {"cle": "parite", "nom": "Parite (E, O ou N)", "defaut": "O", "type": "texte"},
             {"cle": "bits", "nom": "Bits de donnees (7 ou 8)", "defaut": 8},
             {"cle": "stop", "nom": "Bits de stop (1 ou 2)", "defaut": 1},
-            {"cle": "points", "nom": "E/S par extension (8 = FP0-E16, 16 = FP0-E32, 4 = FP0-E8R)", "defaut": 8},
-            {"cle": "station", "nom": "Station", "defaut": 1}]
+            {"cle": "station", "nom": "Station", "defaut": 1},
+            {"cle": "ext1", "nom": "Extension 1 (ex. E16P, E32T, E8X, A21 ; vide = inconnue ; aucune)", "defaut": "",
+             "type": "texte"},
+            {"cle": "ext2", "nom": "Extension 2", "defaut": "", "type": "texte"},
+            {"cle": "ext3", "nom": "Extension 3", "defaut": "", "type": "texte"}]
+
+# FP0 / FP0R expansion units, FP0R user's manual WUME-FP0R, 4.3 "I/O numbers of FP0/FP0R expansion unit":
+# (inputs, outputs) in bits from X(2n)0 / Y(2n)0, or "mots" for the analog / thermocouple units
+# (WX2n, WX2n+1 inputs, WY2n, WY2n+1 outputs)
+EXPANSIONS = {
+    "E8X": (8, 0), "E8R": (4, 4), "E8YT": (0, 8), "E8YP": (0, 8), "E8YR": (0, 8),
+    "E16X": (16, 0), "E16R": (8, 8), "E16T": (8, 8), "E16P": (8, 8), "E16YT": (0, 16), "E16YP": (0, 16),
+    "E32T": (16, 16), "E32P": (16, 16),
+    "AD4": "mots", "AD8": "mots", "DA4": "mots", "A21": "mots", "A42": "mots", "TC4": "mots", "TC8": "mots",
+}
+NO_UNIT = {"AUCUNE", "AUCUN", "NONE", "NON", "-", "0"}
+
+
+def expansion_model(text: str):
+    """'FP0-E16P', 'AFP0RE16P', 'e16p', 'E16RS' -> 'E16P' / 'E16R'; '' -> None (unknown); 'aucune' -> ''."""
+    t = re.sub(r"[\s_]", "", str(text or "")).upper()
+    if not t:
+        return None
+    if t in NO_UNIT:
+        return ""
+    for key in sorted(EXPANSIONS, key=len, reverse=True):
+        if key in t:
+            return key
+    return None
 
 # special relays (WR900 / WR901 / WR902) and registers read for the status
 RELAYS = {
     (900, 0x0): "erreur d'autodiagnostic (code dans DT90000)",
+    (900, 0x4): "erreur de verification E/S : extension ajoutee, retiree ou mal enfichee depuis la mise sous tension (DT90010)",
     (900, 0x7): "erreur d'operation, memorisee (adresse dans DT90017)",
     (900, 0x8): "erreur d'operation, derniere (adresse dans DT90018)",
     (900, 0xE): "erreur de communication port outil / RS-232C",
-    (900, 0xF): "erreur de cycle constant",
+    (900, 0xF): "cycle constant depasse - toujours a 1 si le cycle constant n'est pas utilise (registre systeme 34 = 0)",
     (901, 0x0): "toujours ON",
     (901, 0x3): "impulsion au demarrage (1er cycle)",
     (901, 0xC): "horloge 1 s",
-    (902, 0x0): "mode RUN",
+    (902, 0x0): "selecteur de mode sur RUN",
     (902, 0x6): "message (F149 MSG)",
-    (902, 0x7): "mode commande a distance",
     (902, 0x9): "forcage en cours",
 }
-BAD_RELAYS = {(900, 0x0), (900, 0x7), (900, 0x8), (900, 0xE), (900, 0xF), (902, 0x9)}
+BAD_RELAYS = {(900, 0x0), (900, 0x4), (900, 0x7), (900, 0x8), (900, 0xE), (902, 0x9)}
 REGISTERS = {
     90000: "code d'autodiagnostic (E..)",
+    90010: "extensions en erreur de verification E/S (bit 0..2 = extension 1..3)",
     90017: "adresse (pas) de l'erreur d'operation, memorisee",
     90018: "adresse (pas) de l'erreur d'operation, derniere",
     90022: "cycle actuel (0,1 ms)",
@@ -56,8 +84,9 @@ SELF_DIAG = {
     1: "erreur de syntaxe", 2: "sortie en double", 3: "instructions non appariees (MC/MCE, JP/LBL...)",
     4: "parametres incoherents (registres systeme)", 5: "zone de programme (instruction hors zone)",
     6: "memoire de compilation pleine", 7: "type d'instruction evoluee", 8: "operandes d'instruction evoluee",
-    26: "erreur memoire programme (ROM utilisateur)", 27: "trop de modules d'extension",
-    28: "trop de modules enregistres", 45: "erreur d'operation (arret sur erreur d'operation)",
+    26: "erreur memoire programme (ROM utilisateur) : probable defaut materiel",
+    27: "installation des modules : plus de modules que la limite (voir le manuel materiel)",
+    28: "erreur des registres systeme : verifier ou initialiser les registres systeme", 45: "erreur d'operation (arret sur erreur d'operation)",
     50: "erreur pile de sauvegarde",
 }
 
@@ -105,10 +134,7 @@ def open_fp0r(settings: dict):
                                  "Cable sur le port outil (mini-DIN 5) ? FPWIN ferme ? Reglages du port changes : "
                                  "bouton Chercher les reglages.") from None
     plc.nom = "Panasonic FP0R"
-    try:
-        plc.points = max(1, min(16, int(settings.get("points") or 8)))
-    except (TypeError, ValueError):
-        plc.points = 8
+    plc.expansions = [expansion_model(settings.get(f"ext{i}")) for i in (1, 2, 3)]
     plc.close = ser.close
     return plc
 
@@ -302,6 +328,7 @@ def demo_fp0r():
     port = DemoPort()
     plc = mw.Fp0r(port, 1)
     plc.nom = "Panasonic FP0R (demo)"
+    plc.expansions = ["E16P", None, ""]           # E16P, unknown, nothing
     plc.close = port.close
     return plc
 
@@ -339,8 +366,10 @@ def faults(r, w) -> list:
     if r[(900, 0x7)] or r[(900, 0x8)]:
         out.append(f"Erreur d'operation (R9007 / R9008) au pas {w[90017] if r[(900, 0x7)] else w[90018]} "
                    "(DT90017 / DT90018)")
-    if r[(900, 0xF)]:
-        out.append("Cycle constant depasse (R900F)")
+    if r[(900, 0x4)]:
+        units = [str(i + 1) for i in range(3) if w.get(90010, 0) >> i & 1]
+        out.append("Erreur de verification E/S (R9004) : extension " + (", ".join(units) or "?") + " ajoutee, retiree "
+                   "ou mal enfichee depuis la mise sous tension (DT90010). Verifier le connecteur entre modules.")
     if r[(902, 0x9)]:
         out.append("Forcage en cours (R9029) : des entrees / sorties sont forcees")
     return out
@@ -364,8 +393,6 @@ def fp0r_status(plc) -> dict:
                       ("Autodiagnostic", self_diag_text(w[90000]))]
     if rt.get("capacity_k"):
         out["details"].append(("Capacite programme", f"{rt['capacity_k']}k pas"))
-    if rt:
-        out["details"].append(("Commande a distance", "oui" if r[(902, 0x7)] else "non"))
     return out
 
 
@@ -390,34 +417,45 @@ def cpu_row(plc) -> dict:
                          + [{"adresse": bit_name("Y", i), "libelle": f"sortie Y{i:X}"} for i in range(16)]}
 
 
-def expansion_row(plc, position: int) -> dict:
-    """Expansion unit n (1..3): inputs X(2n)0.., outputs Y(2n)0.., shown bit by bit like the CPU
-    (WX2n / WY2n = 16 bits each; WX2n+1 / WY2n+1 only used by 32-point and analog units)."""
+def expansion_row(plc, position: int, model=None) -> dict:
+    """Expansion unit n (1..3) from its model (EXPANSIONS): only its own inputs / outputs, bit by bit;
+    analog units as words. model None = not given: the whole 16 bits of WX2n / WY2n."""
     w = 2 * position
-    n = getattr(plc, "points", 8)                  # inputs and outputs per unit (setting)
-    last = f"{n - 1:X}"
     wx, err_x = _words(plc, "X", w, 2)
     wy, err_y = _words(plc, "Y", w, 2)
     ok = wx is not None and wy is not None
-    shown = lambda v: " ".join(str((v >> i) & 1) for i in range(n))
-    if ok:
-        values = f"X{w}0..X{w}{last} : {shown(wx[0])}  /  Y{w}0..Y{w}{last} : {shown(wy[0])}"
-        beyond = (wx[0] | wy[0]) >> n
-        if beyond:
-            values += f"  (d'autres points sont a 1 au-dela de {w}{last} : module plus grand que {n} points ?)"
-        extra = [f"WX{w + 1} = {wx[1]}" for _ in [0] if wx[1]] + [f"WY{w + 1} = {wy[1]}" for _ in [0] if wy[1]]
-        if extra:
-            values += "  (" + ", ".join(extra) + " : module 32 points ou analogique)"
-        state = "ok" if any(wx + wy) else "tout a 0 (module absent, ou entrees / sorties a 0)"
+    kind = EXPANSIONS.get(model) if model else None
+    name = f"FP0-{model}" if model else "type non renseigne"
+    if not ok:
+        values, state, variables, addr = f"non lu ({err_x or err_y})", "non lu", [], f"X{w}0.. / Y{w}0.."
+    elif kind == "mots":
+        names = [f"WX{w}", f"WX{w + 1}", f"WY{w}", f"WY{w + 1}"]
+        values = "  ".join(f"{n} = {v}" for n, v in zip(names, wx + wy))
+        state, addr = "ok", f"WX{w}, WX{w + 1} / WY{w}, WY{w + 1}"
+        variables = [{"adresse": n, "libelle": f"extension {position} {n}"} for n in names]
     else:
-        values, state = f"non lu ({err_x or err_y})", "non lu"
-    return {"emplacement": position, "type": f"Extension {position}",
-            "adresse": f"X{w}0..X{w}{last} / Y{w}0..Y{w}{last}",
-            "configure": {"code": "", "nom": f"Extension {position}",
-                          "references": "le FP0R ne donne pas le type du module : valeurs lues a ses adresses"},
+        n_in, n_out = kind or (16, 16)
+        show = lambda v, n: " ".join(str((v >> i) & 1) for i in range(n))
+        parts, addr_parts = [], []
+        if n_in:
+            parts.append(f"X{w}0..X{w}{n_in - 1:X} : {show(wx[0], n_in)}")
+            addr_parts.append(f"X{w}0..X{w}{n_in - 1:X}")
+        if n_out:
+            parts.append(f"Y{w}0..Y{w}{n_out - 1:X} : {show(wy[0], n_out)}")
+            addr_parts.append(f"Y{w}0..Y{w}{n_out - 1:X}")
+        values, addr = "  /  ".join(parts), " / ".join(addr_parts)
+        beyond = (wx[0] >> n_in) | (wy[0] >> n_out) | wx[1] | wy[1]
+        if kind and beyond:
+            values += f"  (points a 1 hors du {name} : autre module que celui renseigne ?)"
+        state = "ok" if kind else ("tout a 0 (module absent, ou entrees / sorties a 0)" if not any(wx + wy) else "ok")
+        variables = ([{"adresse": f"X{w}{i:X}", "libelle": f"extension {position} entree X{w}{i:X}"} for i in range(n_in)]
+                     + [{"adresse": f"Y{w}{i:X}", "libelle": f"extension {position} sortie Y{w}{i:X}"} for i in range(n_out)])
+    ref = ("adresses du manuel FP0R (4.3)" if kind else
+           "le FP0R ne dit pas quel module est monte : renseigner Extension " + str(position) + " a la connexion")
+    return {"emplacement": position, "type": f"Extension {position}", "adresse": addr,
+            "configure": {"code": "", "nom": name, "references": ref},
             "en_place": {"code": "", "nom": values, "references": ""}, "etat": state, "ok": ok,
-            "variables": [{"adresse": f"X{w}{i:X}", "libelle": f"extension {position} entree X{w}{i:X}"} for i in range(n)]
-                         + [{"adresse": f"Y{w}{i:X}", "libelle": f"extension {position} sortie Y{w}{i:X}"} for i in range(n)]}
+            "variables": variables}
 
 
 def fp0r_diagnostic(plc) -> dict:
@@ -430,7 +468,9 @@ def fp0r_diagnostic(plc) -> dict:
         extra = f" : {self_diag_text(w[n])}" if n == 90000 and w[n] else ""
         out["systeme"].append({"adresse": f"DT{n}", "valeur": str(w[n]), "texte": text + extra,
                                "ok": not (n == 90000 and w[n])})
-    out["modules"] = [cpu_row(plc)] + [expansion_row(plc, n) for n in (1, 2, 3)]
+    models = getattr(plc, "expansions", [None, None, None])
+    out["modules"] = [cpu_row(plc)] + [expansion_row(plc, n, models[n - 1]) for n in (1, 2, 3)
+                                       if models[n - 1] != ""]
     if rt:
         out["parametres_cpu"] = [("Code modele (RT)", rt.get("model", "?")), ("Version", rt.get("version", "?")),
                                  ("Capacite programme", f"{rt.get('capacity_k', '?')}k pas"),
