@@ -453,7 +453,8 @@ const I18N = (() => {
       "Total silence at every speed. Wrong COM port (see Device Manager), cable unplugged, or tool port in general-purpose mode (used by the program: F159 MREC / F144 TRNS). In FPWIN: Offline -> System registers -> Tool port.",
     "pas en MEWTOCOL : il a ete regle en Modbus dans les registres systeme (412..). Le remettre en MEWTOCOL (liaison ordinateur) avec FPWIN, ou passer par le port USB de l'automate s'il en a un.":
       "not MEWTOCOL: it was set to Modbus in the system registers (412..). Set it back to MEWTOCOL (computer link) with FPWIN, or use the PLC's USB port if it has one.",
-    "CPU (E/S integrees)": "CPU (built-in I/O)", "module 32 points ou analogique": "32-point or analog module", "Entrees / sorties integrees": "Built-in inputs / outputs",
+    "CPU (E/S integrees)": "CPU (built-in I/O)",
+    "E/S par extension (8 = FP0-E16, 16 = FP0-E32, 4 = FP0-E8R)": "I/O per expansion (8 = FP0-E16, 16 = FP0-E32, 4 = FP0-E8R)", "module 32 points ou analogique": "32-point or analog module", "Entrees / sorties integrees": "Built-in inputs / outputs",
     "le FP0R ne donne pas le type du module : valeurs lues a ses adresses": "the FP0R does not report the module type: values read at its addresses",
     "tout a 0 (module absent, ou entrees / sorties a 0)": "all 0 (no module, or inputs / outputs at 0)",
     "Demo (Panasonic FP0R simule)": "Demo (simulated Panasonic FP0R)", "Passer en PROG": "Switch to PROG",

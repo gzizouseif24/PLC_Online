@@ -23,6 +23,7 @@ SETTINGS = [{"cle": "port", "nom": "Port COM", "defaut": "COM3", "type": "port"}
             {"cle": "parite", "nom": "Parite (E, O ou N)", "defaut": "O", "type": "texte"},
             {"cle": "bits", "nom": "Bits de donnees (7 ou 8)", "defaut": 8},
             {"cle": "stop", "nom": "Bits de stop (1 ou 2)", "defaut": 1},
+            {"cle": "points", "nom": "E/S par extension (8 = FP0-E16, 16 = FP0-E32, 4 = FP0-E8R)", "defaut": 8},
             {"cle": "station", "nom": "Station", "defaut": 1}]
 
 # special relays (WR900 / WR901 / WR902) and registers read for the status
@@ -104,6 +105,10 @@ def open_fp0r(settings: dict):
                                  "Cable sur le port outil (mini-DIN 5) ? FPWIN ferme ? Reglages du port changes : "
                                  "bouton Chercher les reglages.") from None
     plc.nom = "Panasonic FP0R"
+    try:
+        plc.points = max(1, min(16, int(settings.get("points") or 8)))
+    except (TypeError, ValueError):
+        plc.points = 8
     plc.close = ser.close
     return plc
 
@@ -389,12 +394,17 @@ def expansion_row(plc, position: int) -> dict:
     """Expansion unit n (1..3): inputs X(2n)0.., outputs Y(2n)0.., shown bit by bit like the CPU
     (WX2n / WY2n = 16 bits each; WX2n+1 / WY2n+1 only used by 32-point and analog units)."""
     w = 2 * position
+    n = getattr(plc, "points", 8)                  # inputs and outputs per unit (setting)
+    last = f"{n - 1:X}"
     wx, err_x = _words(plc, "X", w, 2)
     wy, err_y = _words(plc, "Y", w, 2)
     ok = wx is not None and wy is not None
-    bits16 = lambda v: " ".join(str((v >> i) & 1) for i in range(16))
+    shown = lambda v: " ".join(str((v >> i) & 1) for i in range(n))
     if ok:
-        values = f"X{w}0..X{w}F : {bits16(wx[0])}  /  Y{w}0..Y{w}F : {bits16(wy[0])}"
+        values = f"X{w}0..X{w}{last} : {shown(wx[0])}  /  Y{w}0..Y{w}{last} : {shown(wy[0])}"
+        beyond = (wx[0] | wy[0]) >> n
+        if beyond:
+            values += f"  (d'autres points sont a 1 au-dela de {w}{last} : module plus grand que {n} points ?)"
         extra = [f"WX{w + 1} = {wx[1]}" for _ in [0] if wx[1]] + [f"WY{w + 1} = {wy[1]}" for _ in [0] if wy[1]]
         if extra:
             values += "  (" + ", ".join(extra) + " : module 32 points ou analogique)"
@@ -402,12 +412,12 @@ def expansion_row(plc, position: int) -> dict:
     else:
         values, state = f"non lu ({err_x or err_y})", "non lu"
     return {"emplacement": position, "type": f"Extension {position}",
-            "adresse": f"X{w}0..X{w}F / Y{w}0..Y{w}F",
+            "adresse": f"X{w}0..X{w}{last} / Y{w}0..Y{w}{last}",
             "configure": {"code": "", "nom": f"Extension {position}",
                           "references": "le FP0R ne donne pas le type du module : valeurs lues a ses adresses"},
             "en_place": {"code": "", "nom": values, "references": ""}, "etat": state, "ok": ok,
-            "variables": [{"adresse": f"X{w}{i:X}", "libelle": f"extension {position} entree X{w}{i:X}"} for i in range(16)]
-                         + [{"adresse": f"Y{w}{i:X}", "libelle": f"extension {position} sortie Y{w}{i:X}"} for i in range(16)]}
+            "variables": [{"adresse": f"X{w}{i:X}", "libelle": f"extension {position} entree X{w}{i:X}"} for i in range(n)]
+                         + [{"adresse": f"Y{w}{i:X}", "libelle": f"extension {position} sortie Y{w}{i:X}"} for i in range(n)]}
 
 
 def fp0r_diagnostic(plc) -> dict:

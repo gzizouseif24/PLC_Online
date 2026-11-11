@@ -82,10 +82,11 @@ class Fp0rWebTests(unittest.TestCase):
         cpu, ext1, ext2 = d["modules"][:3]
         self.assertEqual((cpu["adresse"], cpu["variables"][15]["adresse"]), ("X0..XF / Y0..YF", "XF"))
         self.assertTrue(cpu["en_place"]["nom"].startswith("X : 1 0 1"))
-        self.assertEqual((ext1["adresse"], ext1["etat"]), ("X20..X2F / Y20..Y2F", "ok"))
-        self.assertTrue(ext1["en_place"]["nom"].startswith("X20..X2F : 1 0 0 0 1 0"))
-        self.assertEqual([v["adresse"] for v in ext1["variables"]][:2] + [ext1["variables"][16]["adresse"]],
+        self.assertEqual((ext1["adresse"], ext1["etat"]), ("X20..X27 / Y20..Y27", "ok"))
+        self.assertTrue(ext1["en_place"]["nom"].startswith("X20..X27 : 1 0 0 0 1 0 0 0  /"))
+        self.assertEqual([v["adresse"] for v in ext1["variables"]][:2] + [ext1["variables"][8]["adresse"]],
                          ["X20", "X21", "Y20"])
+        self.assertEqual(len(ext1["variables"]), 16)
         self.assertIn("tout a 0", ext2["etat"])
 
     def test_fault_shown(self):
