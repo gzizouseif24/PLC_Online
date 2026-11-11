@@ -220,5 +220,26 @@ class SearchTests(unittest.TestCase):
             pw.search("COM9", opener=missing)
 
 
+class JournalTests(unittest.TestCase):
+    def test_read_many_groups_frames(self):
+        port = pw.DemoPort()
+        port.dt.update({90308: 0x0001, 90309: 0x0000, 406: 361, 432: 1, 954: 500, 424: 0xFFFE})
+        port.contacts[("R", 13)] = 1 << 9                 # R139 on, R137 off
+        sent = []
+        orig = port._answer
+        port._answer = lambda cmd: (sent.append(cmd), orig(cmd))[1]
+        plc = mw.Fp0r(port, 1)
+        vars_ = [pw.Fp0rVar(t) for t in "DT90308:dint,DT406,DT432,R139,DT424,DT954,R137".split(",")]
+        v = pw.read_many(plc, vars_)
+        self.assertEqual((v["DT90308:dint"], v["DT406"], v["DT424"], v["R139"], v["R137"]), ("1", "361", "-2", "1", "0"))
+        self.assertEqual(len(sent), 5)                    # DT406..424, DT432, DT954, DT90308-09, WR13
+        self.assertEqual(sum(c.startswith("RCC") for c in sent), 1)
+
+    def test_peak(self):
+        w = pw.PeakWatch()
+        got = [w.update(x) for x in (0, 100, 250, 362, 362, 5, 80)]
+        self.assertEqual(got, [None, None, None, None, None, 362, None])
+
+
 if __name__ == "__main__":
     unittest.main()

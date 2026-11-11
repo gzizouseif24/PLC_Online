@@ -697,3 +697,53 @@ class Fp0rOps:
     def __getattr__(self, name):
         raise _drv().DriverError("Fonction pas encore disponible pour le FP0R (programme : python tools/panasonic.py "
                                  "programme)")
+
+
+# ---- logging a few values fast (tools/panasonic.py journal) ----
+
+def read_many(plc, variables) -> dict:
+    """Values of several Fp0rVar in as few frames as possible: DT read in ranges (gaps up to a
+    frame), X / Y / R / WX / WY / WR by word. {text: decoded value}."""
+    dt = sorted({a for v in variables if v.area == "DT" for a in range(v.n, v.n + (2 if v.fmt == "dint" else 1))})
+    words = {}
+    i = 0
+    while i < len(dt):
+        start = end = dt[i]
+        while i + 1 < len(dt) and dt[i + 1] - start < mw.MAX_WORDS_PER_FRAME:
+            i += 1
+            end = dt[i]
+        words.update(zip(range(start, end + 1), plc.read_dt(start, end - start + 1)))
+        i += 1
+    contacts = {}
+    for v in variables:
+        if v.area != "DT":
+            area = v.area[-1]
+            if (area, v.n) not in contacts:
+                contacts[(area, v.n)] = plc.read_contact_words(area, v.n, 1)[0]
+    out = {}
+    for v in variables:
+        if v.area == "DT":
+            raw = mw.dint([words[v.n], words[v.n + 1]], 0) if v.fmt == "dint" else words[v.n]
+        elif v.word:
+            raw = contacts[(v.area[-1], v.n)]
+        else:
+            raw = (contacts[(v.area, v.n)] >> v.bit) & 1
+        out[v.text] = v.decode(raw)
+    return out
+
+
+class PeakWatch:
+    """Peak of a counter before each reset (value falls below half of its peak)."""
+
+    def __init__(self):
+        self.peak = None
+
+    def update(self, value: int):
+        """Returns the peak just ended when the counter resets, else None."""
+        if self.peak is None or value >= self.peak:
+            self.peak = value
+            return None
+        if self.peak > 0 and value < self.peak / 2:
+            done, self.peak = self.peak, value
+            return done
+        return None
