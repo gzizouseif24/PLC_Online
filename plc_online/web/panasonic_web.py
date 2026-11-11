@@ -60,8 +60,6 @@ SELF_DIAG = {
     50: "erreur pile de sauvegarde",
 }
 
-# built-in I/O by model (inputs, outputs) - FP0R-C16 when the model is unknown
-DEFAULT_IO = (8, 8)
 DATA_SIZES = (32765, 12315)      # DT area: F32 / T32, then C10..C32
 
 
@@ -231,6 +229,7 @@ class DemoPort:
         self.dt = {i: 0 for i in list(range(12315)) + list(range(90000, 90100))}
         self.dt.update({0: 1250, 1: 42, 10: 300, 90000: 0, 90017: 0, 90018: 0, 90022: 18, 90023: 12, 90024: 41})
         self.contacts = {("X", 0): 0b0000_0000_0000_0101, ("Y", 0): 0b0000_0000_0000_0010, ("R", 0): 0b1,
+                         ("X", 2): 0x0011, ("Y", 2): 0x0004,                                 # expansion 1
                          ("R", 900): 0, ("R", 901): 0x0001 | 0x1000, ("R", 902): 0x0001}   # R9010, R901C, R9020
         self.run = True
         self.program = [0x1234 + i for i in range(40)]
@@ -365,16 +364,46 @@ def fp0r_status(plc) -> dict:
     return out
 
 
-def io_row(plc, area, count, label):
+def _words(plc, area, start, count):
     try:
-        word = plc.read_contact_words(area, 0, 1)[0]
-        values, ok, etat = " ".join(str((word >> i) & 1) for i in range(count)), True, "ok"
+        return plc.read_contact_words(area, start, count), ""
     except mw.MewtocolError as e:
-        values, ok, etat = f"non lu ({e})", False, "non lu"
-    return {"emplacement": 0, "type": label, "adresse": f"{area}0..{bit_name(area, count - 1)}",
-            "configure": {"code": "", "nom": label, "references": f"{count} voies"},
-            "en_place": {"code": "", "nom": values, "references": ""}, "etat": etat, "ok": ok,
-            "variables": [{"adresse": bit_name(area, i), "libelle": f"{label} {i + 1}"} for i in range(count)]}
+        return None, str(e)
+
+
+def cpu_row(plc) -> dict:
+    """Built-in I/O: X0..XF and Y0..YF (WX0 / WY0, 16 bits: covers C10 to C32)."""
+    wx, err_x = _words(plc, "X", 0, 1)
+    wy, err_y = _words(plc, "Y", 0, 1)
+    bits16 = lambda w: " ".join(str((w >> i) & 1) for i in range(16))
+    ok = wx is not None and wy is not None
+    values = (f"X : {bits16(wx[0])}  /  Y : {bits16(wy[0])}" if ok else f"non lu ({err_x or err_y})")
+    return {"emplacement": 0, "type": "CPU (E/S integrees)", "adresse": "X0..XF / Y0..YF",
+            "configure": {"code": "", "nom": "Entrees / sorties integrees", "references": "WX0 / WY0"},
+            "en_place": {"code": "", "nom": values, "references": ""}, "etat": "ok" if ok else "non lu", "ok": ok,
+            "variables": [{"adresse": bit_name("X", i), "libelle": f"entree X{i:X}"} for i in range(16)]
+                         + [{"adresse": bit_name("Y", i), "libelle": f"sortie Y{i:X}"} for i in range(16)]}
+
+
+def expansion_row(plc, position: int) -> dict:
+    """Expansion unit n (1..3): X(2n)0..X(2n+1)F / Y(2n)0..Y(2n+1)F, i.e. WX2n, WX2n+1, WY2n, WY2n+1.
+    Digital units use the bits, analog units (FP0-A21...) one word per channel."""
+    w = 2 * position
+    wx, err_x = _words(plc, "X", w, 2)
+    wy, err_y = _words(plc, "Y", w, 2)
+    names = [f"WX{w}", f"WX{w + 1}", f"WY{w}", f"WY{w + 1}"]
+    ok = wx is not None and wy is not None
+    if ok:
+        values = "  ".join(f"{n} = {v} (16#{v:04X})" for n, v in zip(names, wx + wy))
+        state = "ok" if any(wx + wy) else "tout a 0 (module absent, ou entrees / sorties a 0)"
+    else:
+        values, state = f"non lu ({err_x or err_y})", "non lu"
+    return {"emplacement": position, "type": f"Extension {position}",
+            "adresse": f"X{w}0..X{w + 1}F / Y{w}0..Y{w + 1}F",
+            "configure": {"code": "", "nom": f"Extension {position}",
+                          "references": "le FP0R ne donne pas le type du module : valeurs lues a ses adresses"},
+            "en_place": {"code": "", "nom": values, "references": ""}, "etat": state, "ok": ok,
+            "variables": [{"adresse": n, "libelle": f"extension {position} {n}"} for n in names]}
 
 
 def fp0r_diagnostic(plc) -> dict:
@@ -387,8 +416,7 @@ def fp0r_diagnostic(plc) -> dict:
         extra = f" : {self_diag_text(w[n])}" if n == 90000 and w[n] else ""
         out["systeme"].append({"adresse": f"DT{n}", "valeur": str(w[n]), "texte": text + extra,
                                "ok": not (n == 90000 and w[n])})
-    n_in, n_out = DEFAULT_IO
-    out["modules"] = [io_row(plc, "X", n_in, "Entrees integrees"), io_row(plc, "Y", n_out, "Sorties integrees")]
+    out["modules"] = [cpu_row(plc)] + [expansion_row(plc, n) for n in (1, 2, 3)]
     if rt:
         out["parametres_cpu"] = [("Code modele (RT)", rt.get("model", "?")), ("Version", rt.get("version", "?")),
                                  ("Capacite programme", f"{rt.get('capacity_k', '?')}k pas"),
