@@ -386,24 +386,28 @@ def cpu_row(plc) -> dict:
 
 
 def expansion_row(plc, position: int) -> dict:
-    """Expansion unit n (1..3): X(2n)0..X(2n+1)F / Y(2n)0..Y(2n+1)F, i.e. WX2n, WX2n+1, WY2n, WY2n+1.
-    Digital units use the bits, analog units (FP0-A21...) one word per channel."""
+    """Expansion unit n (1..3): inputs X(2n)0.., outputs Y(2n)0.., shown bit by bit like the CPU
+    (WX2n / WY2n = 16 bits each; WX2n+1 / WY2n+1 only used by 32-point and analog units)."""
     w = 2 * position
     wx, err_x = _words(plc, "X", w, 2)
     wy, err_y = _words(plc, "Y", w, 2)
-    names = [f"WX{w}", f"WX{w + 1}", f"WY{w}", f"WY{w + 1}"]
     ok = wx is not None and wy is not None
+    bits16 = lambda v: " ".join(str((v >> i) & 1) for i in range(16))
     if ok:
-        values = "  ".join(f"{n} = {v} (16#{v:04X})" for n, v in zip(names, wx + wy))
+        values = f"X{w}0..X{w}F : {bits16(wx[0])}  /  Y{w}0..Y{w}F : {bits16(wy[0])}"
+        extra = [f"WX{w + 1} = {wx[1]}" for _ in [0] if wx[1]] + [f"WY{w + 1} = {wy[1]}" for _ in [0] if wy[1]]
+        if extra:
+            values += "  (" + ", ".join(extra) + " : module 32 points ou analogique)"
         state = "ok" if any(wx + wy) else "tout a 0 (module absent, ou entrees / sorties a 0)"
     else:
         values, state = f"non lu ({err_x or err_y})", "non lu"
     return {"emplacement": position, "type": f"Extension {position}",
-            "adresse": f"X{w}0..X{w + 1}F / Y{w}0..Y{w + 1}F",
+            "adresse": f"X{w}0..X{w}F / Y{w}0..Y{w}F",
             "configure": {"code": "", "nom": f"Extension {position}",
                           "references": "le FP0R ne donne pas le type du module : valeurs lues a ses adresses"},
             "en_place": {"code": "", "nom": values, "references": ""}, "etat": state, "ok": ok,
-            "variables": [{"adresse": n, "libelle": f"extension {position} {n}"} for n in names]}
+            "variables": [{"adresse": f"X{w}{i:X}", "libelle": f"extension {position} entree X{w}{i:X}"} for i in range(16)]
+                         + [{"adresse": f"Y{w}{i:X}", "libelle": f"extension {position} sortie Y{w}{i:X}"} for i in range(16)]}
 
 
 def fp0r_diagnostic(plc) -> dict:
