@@ -823,7 +823,10 @@ class Session:
             except S7Error:
                 pass
             stamp = time.strftime("%Y-%m-%d %H:%M:%S")
-            folder = self.backups / time.strftime("%Y%m%d_%H%M%S")
+            folder, n = self.backups / time.strftime("%Y%m%d_%H%M%S"), 1
+            while folder.exists():            # two saves in the same second: keep both
+                n += 1
+                folder = self.backups / f"{time.strftime('%Y%m%d_%H%M%S')}_{n}"
             program.save_program(folder, blocks, [f"date : {stamp}", f"CPU  : {info.get('reference', '?')}"])
             meta = {"date": stamp, "cpu": info.get("reference", ""),
                     "modele": catalog_name(info.get("reference")) or "", "note": note.strip()[:200],
