@@ -136,8 +136,8 @@ class ApiTests(unittest.TestCase):
     def test_errors_for_the_technician(self):
         code, e = self.json("POST", "/api/connexion", {"marque": "s7-300", "reglages": {"mpi": 9}})
         self.assertEqual((code, e["erreur"]), (502, "pas de CPU a l'adresse MPI 9"))
-        code, e = self.json("POST", "/api/connexion", {"marque": "omron"})
-        self.assertEqual((code, e["erreur"]), (400, "Marque non disponible : omron"))
+        code, e = self.json("POST", "/api/connexion", {"marque": "siemens-s5"})
+        self.assertEqual((code, e["erreur"]), (400, "Marque non disponible : siemens-s5"))
         self.assertEqual(self.json("POST", "/api/connexion", {"marque": "s7-300", "reglages": {"mpi": 7}})[0], 200)
         code, e = self.json("GET", "/api/etat")
         self.assertEqual((code, e["erreur"]), (502, "Liaison perdue : pas de reponse"))
@@ -161,7 +161,8 @@ class ApiTests(unittest.TestCase):
     def test_brands(self):
         code, b = self.json("GET", "/api/marques")
         self.assertTrue(b["s7-300"]["disponible"])
-        self.assertFalse(b["omron"]["disponible"])
+        self.assertTrue(b["omron"]["disponible"])
+        self.assertTrue(b["demo-tsx"]["cache"])
 
 
 if __name__ == "__main__":
