@@ -632,11 +632,12 @@ WAGO_FEATURES = ["chercher"]
 DELTA_FEATURES = ["donnees", "horloge", "changements", "test_entrees"]
 FP0R_FEATURES = ["donnees", "runstop", "changements", "test_entrees", "programme"]
 LOGIX_FEATURES = ["axes"]
+OMRON_FEATURES = ["donnees", "runstop", "monitor", "programme", "changements", "test_entrees"]
 FX_FEATURES = ["donnees", "horloge", "runstop", "programme", "changements", "test_entrees"]
 
 
 def _brands():
-    from plc_online.web import delta_web, logix_web, melsec_web, panasonic_web, tsx_web, wago_web
+    from plc_online.web import delta_web, logix_web, melsec_web, omron_web, panasonic_web, tsx_web, wago_web
     return {
         "s7-300": {"nom": "Siemens S7-300", "disponible": True, "famille": "s7", "fonctions": S7_FEATURES,
                    "reglages": [{"cle": "mpi", "nom": "Adresse MPI", "defaut": 2},
@@ -664,7 +665,10 @@ def _brands():
                        "fonctions": FX_FEATURES, "reglages": melsec_web.SETTINGS},
         "demo-mitsubishi": {"nom": "Demo (Mitsubishi FX1N-40MR simule)", "disponible": True, "cache": True, "famille": "mitsubishi",
                             "fonctions": FX_FEATURES, "reglages": []},
-        "omron": {"nom": "Omron CJ1M", "disponible": False, "reglages": []},
+        "omron": {"nom": "Omron CJ1M (port peripherique, Host Link)", "disponible": True, "famille": "omron",
+                  "fonctions": OMRON_FEATURES, "reglages": omron_web.SETTINGS},
+        "demo-omron": {"nom": "Demo (Omron CJ1M simule)", "disponible": True, "famille": "omron",
+                       "fonctions": OMRON_FEATURES, "reglages": []},
         "panasonic": {"nom": "Panasonic FP0R", "disponible": True, "famille": "panasonic",
                       "fonctions": FP0R_FEATURES, "reglages": panasonic_web.SETTINGS},
         "demo-panasonic": {"nom": "Demo (Panasonic FP0R simule)", "disponible": True, "cache": True, "famille": "panasonic",
@@ -695,6 +699,7 @@ class Session:
         from plc_online.web.panasonic_web import Fp0rOps
         from plc_online.web.logix_web import LogixOps
         from plc_online.web.melsec_web import FxOps
+        from plc_online.web.omron_web import OmronOps
         self.lock = threading.Lock()
         self.plc, self.brand, self.settings = None, None, {}
         self.opener = opener or open_plc
@@ -706,6 +711,7 @@ class Session:
         self.fp0r = Fp0rOps(self)
         self.logix = LogixOps(self)
         self.fx = FxOps(self)
+        self.omron = OmronOps(self)
         self.job = None                   # long operation running in the background
         self.last_status = None
 
@@ -731,7 +737,7 @@ class Session:
     def _ops(self):
         """TsxOps when a TSX is connected, None for the S7-300 (methods of this class)."""
         return {"tsx": self.tsx, "wago": self.wago, "delta": self.delta, "panasonic": self.fp0r, "logix": self.logix,
-                "mitsubishi": self.fx}.get(self.family)
+                "mitsubishi": self.fx, "omron": self.omron}.get(self.family)
 
     def busy(self) -> str:
         j = self.job
@@ -898,6 +904,11 @@ class Session:
             return {"ok": True}
         return self._call(run)
 
+    def monitor_cpu(self) -> dict:
+        if self.family != "omron":
+            raise DriverError("Mode MONITOR : Omron seulement")
+        return self.omron.monitor_cpu()
+
     def set_clock(self) -> dict:
         if self._ops():
             return self._ops().set_clock()
@@ -952,12 +963,12 @@ class Session:
 
     def _tsx_only(self):
         """Ops of the brands with a Donnees tab (TSX, Delta)."""
-        if self.family not in ("tsx", "delta", "panasonic", "mitsubishi"):
-            raise DriverError("Sauvegarde des donnees : TSX, Delta, Panasonic et Mitsubishi seulement pour l'instant")
+        if self.family not in ("tsx", "delta", "panasonic", "mitsubishi", "omron"):
+            raise DriverError("Sauvegarde des donnees : pas pour cet automate")
         return self._ops()
 
     def _data_ops(self):
-        return {"delta": self.delta, "panasonic": self.fp0r, "mitsubishi": self.fx}.get(self.family, self.tsx)
+        return {"delta": self.delta, "panasonic": self.fp0r, "mitsubishi": self.fx, "omron": self.omron}.get(self.family, self.tsx)
 
     def data_list(self) -> dict:
         return self._data_ops().data_list()
@@ -1027,6 +1038,9 @@ def open_plc(brand: str, settings: dict):
     if brand in ("delta", "demo-delta"):
         from plc_online.web import delta_web
         return delta_web.demo_delta() if brand == "demo-delta" else delta_web.open_delta(settings)
+    if brand in ("omron", "demo-omron"):
+        from plc_online.web import omron_web
+        return omron_web.demo_omron() if brand == "demo-omron" else omron_web.open_omron(settings)
     if brand in ("mitsubishi", "demo-mitsubishi"):
         from plc_online.web import melsec_web
         return melsec_web.demo_fx() if brand == "demo-mitsubishi" else melsec_web.open_fx(settings)

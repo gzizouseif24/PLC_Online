@@ -676,6 +676,30 @@ const I18N = (() => {
     "Comparer a une copie": "Compare with a copy", "Configuration materielle de la copie": "Hardware configuration of the copy",
     "Comparaison de deux copies : S7-300 seulement pour l'instant": "Comparing two copies: S7-300 only for now",
     "Valeurs actuelles differentes (pas un changement de programme) :": "Different current values (not a program change):",
+    // Omron
+    "Omron CJ1M (port peripherique, Host Link)": "Omron CJ1M (peripheral port, Host Link)", "Demo (Omron CJ1M simule)": "Demo (simulated Omron CJ1M)",
+    "Port COM (port peripherique)": "COM port (peripheral port)", "Numero d'unite Host Link": "Host Link unit number",
+    "Passer en MONITOR": "Switch to MONITOR", "Passer en PROGRAM": "Switch to PROGRAM", "MONITOR demande.": "MONITOR requested.",
+    "Arret demande (PROGRAM).": "Stop requested (PROGRAM).",
+    "Passer l'automate en MONITOR ? Le programme continue de tourner, les ecritures sont acceptees.": "Switch the PLC to MONITOR? The program keeps running, writes are accepted.",
+    "Omron : cable CS1W-CN226 / USB-serie sur le port peripherique,": "Omron: CS1W-CN226 / USB-serial cable on the peripheral port,",
+    "CX-Programmer ferme": "CX-Programmer closed",
+    ". Port en Host Link 9600 7E2, unite 0 (DIP 4 ON). En RUN l'automate refuse les ecritures : passer en MONITOR.": ". Port in Host Link 9600 7E2, unit 0 (DIP 4 ON). In RUN the PLC refuses writes: switch to MONITOR.",
+    "D100, W10, H5, A400, T5 / C2 (valeur), 0 ou CIO 0 (mot), 0.03 / W10.05 (bit). Ecriture : CIO, W, H, D, T, C, A448+ (en MONITOR ou PROGRAM).":
+      "D100, W10, H5, A400, T5 / C2 (value), 0 or CIO 0 (word), 0.03 / W10.05 (bit). Writing: CIO, W, H, D, T, C, A448+ (in MONITOR or PROGRAM).",
+    "Copie des zones D, H et W (recettes, compteurs, reglages), sans le programme. Restauration : passage en MONITOR si l'automate est en RUN.":
+      "Copy of the D, H and W areas (recipes, counters, settings), without the program. Restore: switches to MONITOR if the PLC is in RUN.",
+    "Copie de la zone programme (FINS 0306, experimental), en lecture seule : a garder et a comparer. Rechargement : CX-Programmer.":
+      "Copy of the program area (FINS 0306, experimental), read only: to keep and compare. Loading back: CX-Programmer.",
+    "Journal d'erreurs, erreurs fatales / non fatales, cartes de la table E/S avec leurs mots CIO, reglages automate.":
+      "Error log, fatal / non-fatal errors, cards of the I/O table with their CIO words, PLC settings.",
+    "En RUN l'automate refuse les ecritures : passer en MONITOR (bouton Passer en MONITOR, le programme continue de tourner)":
+      "In RUN the PLC refuses writes: switch to MONITOR (Switch to MONITOR button, the program keeps running)",
+    "RUN / MONITOR": "RUN / MONITOR", "fixe : erreur fatale, clignote : non fatale": "steady: fatal error, flashing: non-fatal",
+    "table E/S enregistree": "registered I/O table", "carte inconnue de l'outil : taille et mots CIO non calcules": "card unknown to the tool: size and CIO words not computed",
+    "Aucune carte d'entrees connue dans la table E/S.": "No known input card in the I/O table.",
+    "passage en MONITOR (le programme continue)": "switching to MONITOR (the program keeps running)", "lecture des mots de l'automate": "reading the PLC's words",
+    "16 entrees CC": "16 DC inputs", "16 sorties relais": "16 relay outputs", "Pile": "Battery", "presente": "present", "Pile absente": "Battery missing",
     // short words, used inside longer texts
     "entrees": "inputs", "sorties": "outputs", "entree": "input", "sortie": "output", "voies": "channels", "voie": "channel",
     "mots": "words", "octets": "bytes", "octet": "byte", "alerte(s)": "alert(s)", "differents": "different",
@@ -733,6 +757,12 @@ const I18N = (() => {
     [/^(Erreur materiel|Erreur de parametre|Erreur de syntaxe|Erreur de structure du programme|Erreur d'execution) \(M(\d+)\) : (.*)$/,
       (m, k, n, rest) => `${{"Erreur materiel": "Hardware error", "Erreur de parametre": "Parameter error", "Erreur de syntaxe": "Syntax error", "Erreur de structure du programme": "Program structure error", "Erreur d'execution": "Runtime error"}[k]} (M${n}): ${phrases(rest.replace(/, au pas (\d+) \(D8069\)/, ", at step $1 (D8069)"))}`],
     [/^FX1N V(.+)$/, "FX1N V$1"],
+    [/^Erreur (fatale|non fatale) : (.*)$/, (m, k, r) => `${k === "fatale" ? "Fatal" : "Non-fatal"} error: ${phrases(r)}`],
+    [/^Erreur la plus grave : code (\w+) : (.*)$/, (m, c, r) => `Most serious error: code ${c}: ${phrases(r)}`],
+    [/^Rack (\d+) emplacement (\d+) \((.+)\)$/, "Rack $1 slot $2 ($3)"],
+    [/^code (\w+) \/ (\w+) : (.*)$/, (m, a, b, r) => `code ${a} / ${b}: ${phrases(r)}`],
+    [/^journal (\d+)$/, "log $1"], [/^(\S+) voie (\d+)$/, "$1 channel $2"],
+    [/^L'automate ne repond pas sur (\S+) \((\d+) 7E2, unite (\d+)\) : (.*)$/, (m, p, b, u, r) => `The PLC does not answer on ${p} (${b} 7E2, unit ${u}): ${r.replace(/Port peripherique en Host Link.*$/, "Peripheral port in Host Link (DIP 4 ON)? CX-Programmer closed? Right COM port?")}`],
     [/^Maintien en cours \(reecrit toutes les 0,5 s\) : (.*)$/, "Holding (written again every 0.5 s): $1"],
     [/^Maintien arrete : (.*)$/, (m, r) => "Holding stopped: " + phrases(r)],
     [/^Copies identiques \((.+) et (.+)\)$/, "Identical copies ($1 and $2)"],

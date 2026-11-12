@@ -233,6 +233,8 @@ def make_handler(session: Session):
                 return self.api(lambda: session.start_cpu())
             if path == "/api/cpu/arreter":
                 return self.api(lambda: session.stop_cpu())
+            if path == "/api/cpu/monitor":
+                return self.api(lambda: session.monitor_cpu())
             if path == "/api/cpu/horloge":
                 return self.api(lambda: session.set_clock())
             if path == "/api/programme/supprimer":

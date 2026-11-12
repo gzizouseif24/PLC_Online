@@ -46,6 +46,9 @@
       <p class="hint" id="hint-mitsubishi" hidden>Mitsubishi FX : cable SC-09 / USB-SC09 sur le port de programmation
         (mini-DIN 8 sous le capot), <b>GX Developer / GX Works ferme</b>. 9600 bauds 7E1. Renseigner l'unite de base
         et les extensions dans l'ordre (le FX ne les signale pas).</p>
+      <p class="hint" id="hint-omron" hidden>Omron : cable CS1W-CN226 / USB-serie sur le port peripherique, <b>CX-Programmer
+        ferme</b>. Port en Host Link 9600 7E2, unite 0 (DIP 4 ON). En RUN l'automate refuse les ecritures : passer en
+        MONITOR.</p>
       <div class="hint" id="delta-chercher" hidden>
         <button type="button" class="btn" id="btn-delta-chercher">Chercher les reglages</button>
         <button type="button" class="btn" id="btn-delta-ihm">Ecouter l'IHM</button>
@@ -362,6 +365,7 @@
         <div class="cpu-actions">
           <button type="button" class="btn btn-run" id="btn-run" data-fonction="runstop">Passer en RUN</button>
           <button type="button" class="btn btn-stop" id="btn-stop" data-fonction="runstop">Passer en STOP</button>
+          <button type="button" class="btn" id="btn-monitor" data-fonction="monitor" title="Le programme tourne et les ecritures sont acceptees">Passer en MONITOR</button>
           <button type="button" class="btn" id="btn-horloge" data-fonction="horloge">Mettre l'horloge a l'heure du PC</button>
         </div>
         <p id="cpu-msg" class="msg" role="status"></p>

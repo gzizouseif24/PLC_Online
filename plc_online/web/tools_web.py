@@ -9,6 +9,7 @@ BLOCK_ZONES = {
     "panasonic": [("DT", True), ("WR", True), ("WX", True), ("WY", True)],
     "delta": [("D", True), ("T", True), ("C", True), ("M", False), ("X", False), ("Y", False), ("S", False)],
     "mitsubishi": [("D", True), ("T", True), ("C", True), ("M", False), ("X", False), ("Y", False), ("S", False)],
+    "omron": [("D", True), ("CIO", True), ("W", True), ("H", True), ("A", True), ("T", True), ("C", True)],
     "tsx": [("MW", True), ("MD", True), ("KW", True), ("KD", True), ("SW", True), ("M", False), ("S", False)],
 }
 
@@ -42,6 +43,13 @@ def read_block(family: str, plc, zone: str, start: int, count: int) -> dict:
             raise _drv().DriverError(str(e)) from None
         names = [dl.name(zone, start + i) for i in range(count)]
         values = [signed(v) if zones[zone] else int(v) for v in values]
+    elif family == "omron":
+        from plc_online.protocols import hostlink as hl
+        try:
+            values = [hl.signed16(v) for v in plc.read(zone, start, count)]
+        except ValueError as e:
+            raise _drv().DriverError(str(e)) from None
+        names = [f"{'CIO ' if zone == 'CIO' else zone}{start + i}" for i in range(count)]
     elif family == "mitsubishi":
         from plc_online.protocols import melsec_fx as fx
         try:
@@ -73,7 +81,27 @@ def inputs(family: str, plc) -> dict:
         return _fx_inputs(plc)
     if family == "delta":
         return _delta_inputs(plc)
-    raise _drv().DriverError("Test des entrees : Panasonic, Mitsubishi et Delta")
+    if family == "omron":
+        return _omron_inputs(plc)
+    raise _drv().DriverError("Test des entrees : Panasonic, Mitsubishi, Delta et Omron")
+
+
+def _omron_inputs(plc) -> dict:
+    from plc_online.protocols import hostlink as hl
+    units, notes = [], []
+    for c in hl.rack_layout(plc.io_table(40)):
+        if c["cio"] is None:
+            notes.append(f"Rack {c['rack']} emplacement {c['slot']} : {c['model']}, pas testee.")
+            continue
+        if "entree" not in c["kind"]:
+            continue
+        words = plc.read("CIO", c["cio"], c["words"])
+        units.append({"nom": f"Rack {c['rack']} emplacement {c['slot']} ({c['model']})",
+                      "entrees": [{"adresse": f"{c['cio'] + k}.{b:02d}", "valeur": words[k] >> b & 1}
+                                  for k in range(c["words"]) for b in range(16)]})
+    if not units:
+        notes.append("Aucune carte d'entrees connue dans la table E/S.")
+    return {"unites": units, "notes": notes, "cablage": ""}
 
 
 def _panasonic_inputs(plc) -> dict:

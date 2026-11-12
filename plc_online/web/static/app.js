@@ -67,6 +67,7 @@ function renderSettings() {
   $("hint-mitsubishi").hidden = key !== "mitsubishi";
   $("pana-chercher").hidden = key !== "panasonic";
   $("delta-chercher").hidden = key !== "delta";
+  $("hint-omron").hidden = key !== "omron";
   if (key === "wago") loadCards();
 }
 
@@ -89,7 +90,7 @@ let features = [];
 
 function fxpFamily() {
   /** Brands whose program copy is read only (no restore button). */
-  return family === "mitsubishi" || family === "panasonic";
+  return family === "mitsubishi" || family === "panasonic" || family === "omron";
 }
 
 function applyBrand(key) {
@@ -101,8 +102,10 @@ function applyBrand(key) {
   testState = {};
   chLog = [];
   const tsx = family === "tsx";
-  const fxp = family === "mitsubishi" || family === "panasonic";
-  $("prog-hint").textContent = family === "panasonic"
+  const fxp = fxpFamily();
+  $("prog-hint").textContent = family === "omron"
+    ? "Copie de la zone programme (FINS 0306, experimental), en lecture seule : a garder et a comparer. Rechargement : CX-Programmer."
+    : family === "panasonic"
     ? "Copie des pas du programme (commande RP), en lecture seule : a garder et a comparer. Rechargement : FPWIN GR."
     : fxp
     ? "Copie de la memoire programme (parametres + programme), en lecture seule : a garder et a comparer. Environ 1 minute. Rechargement : GX Developer / GX Works."
@@ -120,15 +123,17 @@ function applyBrand(key) {
   $("col-contenu").textContent = tsx ? "Contenu" : "Blocs";
   const pana = family === "panasonic";
   const logix = family === "logix";
-  $("btn-stop").textContent = pana ? "Passer en PROG" : "Passer en STOP";
+  $("btn-stop").textContent = pana ? "Passer en PROG" : family === "omron" ? "Passer en PROGRAM" : "Passer en STOP";
   const mitsu = family === "mitsubishi";
-  const dataLike = family === "delta" || pana || mitsu;        // .csv data copies of this tool
+  const dataLike = family === "delta" || pana || mitsu || family === "omron";        // .csv data copies of this tool
   $("watch-hint").textContent = logix
     ? "Nom du tag, comme dans Studio 5000 : Recipe_Speed, Recipe[3].Temp, Program:Main.Count. Ecriture : BOOL, entiers, REAL, STRING (pas les tags de securite)."
     : pana
     ? "DT100, WX0 / WY0 / WR10 (mots), X0, X1F, Y3, R901C (bits : mot decimal + bit hexa). Ecriture : DT, WY, WR, Y, R. Format dint pour les compteurs 32 bits."
     : family === "delta"
     ? "D100, M10, X17 et Y0 (en octal), T5 / C2 (valeur), S0. Ecriture : D, M, Y, T, C, S. Le format se change sur chaque ligne."
+    : family === "omron"
+    ? "D100, W10, H5, A400, T5 / C2 (valeur), 0 ou CIO 0 (mot), 0.03 / W10.05 (bit). Ecriture : CIO, W, H, D, T, C, A448+ (en MONITOR ou PROGRAM)."
     : mitsu
     ? "D0..D511, D8000.., M0..M1023, M8000.., X27 et Y17 (en octal), T5 / C2 (valeur, C200..C255 sur 32 bits), S0. Ecriture : D, T, C, M, Y, S."
     : family === "wago"
@@ -136,7 +141,7 @@ function applyBrand(key) {
     : tsx
     ? "%MW, %MD, %KW, %KD, %SW, %M, %S (le % est facultatif). Ecriture : %MW et %MD. Le format se change sur chaque ligne."
     : "E/I, A/Q, M, DB10.DBW2, T5, Z2. Le format se change sur chaque ligne.";
-  $("ajout-adresse").placeholder = logix ? "Recipe_Speed, Program:Main.Count" : pana ? "DT100, WX0, X0, Y0, R10" : family === "delta" ? "D100, M10, X0, Y0" : mitsu ? "D100, M8000, X27, Y0" : family === "wago" ? "IW0, QW0, I0, Q0" : tsx ? "%MW10, %MD4, %M5, %I1.0" : "MW10, E0.0, DB10.DBD4";
+  $("ajout-adresse").placeholder = logix ? "Recipe_Speed, Program:Main.Count" : pana ? "DT100, WX0, X0, Y0, R10" : family === "delta" ? "D100, M10, X0, Y0" : family === "omron" ? "D100, 0.03, W10, H5, A400" : mitsu ? "D100, M8000, X27, Y0" : family === "wago" ? "IW0, QW0, I0, Q0" : tsx ? "%MW10, %MD4, %M5, %I1.0" : "MW10, E0.0, DB10.DBD4";
   $("titre-params").textContent = logix ? "Automate" : dataLike ? "Automate" : family === "wago" ? "Image process" : tsx ? "Automate" : "Parametres CPU";
   const head = $("table-rack").tHead.rows[0].cells;
   head[0].textContent = tsx || family === "wago" ? "Position" : dataLike ? "" : "Empl.";
@@ -146,6 +151,8 @@ function applyBrand(key) {
     ? "Copie de tous les registres DT (recettes, compteurs, reglages), sans le programme. Environ 1 a 2 minutes a 9600 bauds."
     : family === "delta"
     ? "Copie de tous les registres D (recettes, compteurs, reglages), sans le programme."
+    : family === "omron"
+    ? "Copie des zones D, H et W (recettes, compteurs, reglages), sans le programme. Restauration : passage en MONITOR si l'automate est en RUN."
     : mitsu
     ? "Copie des registres D0..D511 (zone lisible par le port de programmation), sans le programme."
     : "Copie de tous les mots internes %MW et des constantes %KW (recettes, compteurs, reglages), sans le programme.";
@@ -214,7 +221,7 @@ function setCpuMsg(text, isError) {
 
 async function cpuAction(path, question, done) {
   if (!confirm(question)) return;
-  for (const id of ["btn-run", "btn-stop", "btn-horloge"]) $(id).disabled = true;
+  for (const id of ["btn-run", "btn-stop", "btn-horloge", "btn-monitor"]) $(id).disabled = true;
   try {
     const r = await api("POST", path);
     setCpuMsg(done(r));
@@ -222,7 +229,7 @@ async function cpuAction(path, question, done) {
   } catch (e) {
     setCpuMsg(e.message, true);
   } finally {
-    for (const id of ["btn-run", "btn-stop", "btn-horloge"]) $(id).disabled = false;
+    for (const id of ["btn-run", "btn-stop", "btn-horloge", "btn-monitor"]) $(id).disabled = false;
   }
 }
 
@@ -871,7 +878,7 @@ function saveData(ev) {
 }
 
 async function planData(b) {
-  const zn = family === "delta" || family === "mitsubishi" ? "D" : family === "panasonic" ? "DT" : "%MW";
+  const zn = family === "omron" ? "mots" : family === "delta" || family === "mitsubishi" ? "D" : family === "panasonic" ? "DT" : "%MW";
   setDataMsg(`Lecture des ${zn} de l'automate...`);
   let plan;
   try {
@@ -928,7 +935,7 @@ async function planData(b) {
 }
 
 async function importData(fileList) {
-  const files = [...fileList].filter((f) => (["delta", "panasonic", "mitsubishi"].includes(family) ? /\.csv$/i : /\.(dat|csv)$/i).test(f.name));
+  const files = [...fileList].filter((f) => (["delta", "panasonic", "mitsubishi", "omron"].includes(family) ? /\.csv$/i : /\.(dat|csv)$/i).test(f.name));
   if (!files.length) {
     setDataMsg("Aucun fichier .dat ou .csv dans la selection.", true);
     return;
@@ -962,6 +969,7 @@ function formatsFor(adresse) {
   if (family === "logix") return [];
   if (family === "wago") return /^[IQ]W\d+$/.test(a) ? ["dec", "pt100", "ud", "hex", "bin"] : [];
   if (family === "delta" || family === "mitsubishi") return /^[DTC]\d+$/.test(a) ? ["dec", "ud", "hex", "bin"] : [];
+  if (family === "omron") return /\./.test(a) ? [] : ["dec", "ud", "hex", "bin"];
   if (family === "panasonic") return /^DT\d+$/.test(a) ? ["dec", "ud", "hex", "bin", "dint"]
     : /^W[XYR]\d+$/.test(a) ? ["dec", "ud", "hex", "bin"] : [];
   if (family === "tsx") {
@@ -1510,6 +1518,7 @@ function renderDiagnostic(d) {
   $("diag-info").textContent = family === "logix" ? "Automate, modules du chassis 1756 emplacement par emplacement, axes en defaut."
     : family === "panasonic" ? "Relais et registres speciaux (R9000.., DT90000..), entrees / sorties integrees."
     : family === "delta" ? "Relais et registres speciaux (M1000.., D1000..), entrees / sorties."
+    : family === "omron" ? "Journal d'erreurs, erreurs fatales / non fatales, cartes de la table E/S avec leurs mots CIO, reglages automate."
     : family === "mitsubishi" ? "Relais et registres speciaux (M8000.., D8000..), entrees / sorties par unite (octal)."
     : family === "wago" ? "Modules lus dans le coupleur, valeurs de l'image process."
     : d.systeme ? "Bits et mots systeme de l'automate."
@@ -1727,10 +1736,13 @@ async function init() {
       ? "Demarrage demande, mais la cle est sur STOP : la CPU restera en STOP (mettre la cle sur RUN ou RUN-P)."
       : "Demarrage demande (RUN)."));
   $("btn-stop").addEventListener("click", () => cpuAction("/api/cpu/arreter",
-    family === "panasonic"
-      ? "Passer l'automate en PROG ? La machine s'arrete, les sorties sont coupees.\n\nMachine en securite ?"
+    family === "panasonic" || family === "omron"
+      ? `Passer l'automate en ${family === "omron" ? "PROGRAM" : "PROG"} ? La machine s'arrete, les sorties sont coupees.\n\nMachine en securite ?`
       : "Passer la CPU en STOP ? La machine s'arrete, les sorties sont coupees.\n\nMachine en securite ?",
-    () => family === "panasonic" ? "Arret demande (PROG)." : "Arret demande (STOP)."));
+    () => family === "panasonic" ? "Arret demande (PROG)." : family === "omron" ? "Arret demande (PROGRAM)." : "Arret demande (STOP)."));
+  $("btn-monitor").addEventListener("click", () => cpuAction("/api/cpu/monitor",
+    "Passer l'automate en MONITOR ? Le programme continue de tourner, les ecritures sont acceptees.",
+    () => "MONITOR demande."));
   $("btn-horloge").addEventListener("click", () => cpuAction("/api/cpu/horloge",
     "Mettre l'horloge de la CPU a l'heure de ce PC (" + new Date().toLocaleString("fr-FR") + ") ?",
     (r) => "Horloge CPU reglee : " + r.horloge.slice(0, 19)));
