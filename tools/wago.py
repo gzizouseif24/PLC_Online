@@ -49,14 +49,8 @@ def cmd_surveiller(plc):
 
 
 def cmd_registres(plc):
-    for name, start, n in (("constantes", 0x2000, 9), ("firmware", 0x2010, 5), ("voyant I/O", 0x1020, 2),
-                           ("taille image", 0x1022, 4), ("modules", 0x2030, 8), ("entrees (mots)", 0x0000, 4)):
-        for fc, read in (("03", plc.mb.read_holding), ("04", plc.mb.read_input_registers)):
-            try:
-                v = read(start, n)
-                print(f"{name:15} 0x{start:04X} x{n} fonction {fc} : " + " ".join(f"{x:04X}" for x in v))
-            except wg.ModbusError as e:
-                print(f"{name:15} 0x{start:04X} x{n} fonction {fc} : {e}")
+    for r in wago_web.raw_registers(plc):
+        print(f"{r['texte']:28} {r['adresse']:16} : {r['valeur']}")
 
 
 def main():

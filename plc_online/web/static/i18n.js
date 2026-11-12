@@ -668,6 +668,7 @@ const I18N = (() => {
     "Reglages inconnus : bouton Chercher les reglages ; IHM branchee sur le RS-485 : Ecouter l'IHM.": "Unknown settings: Find the settings button; HMI on the RS-485: Listen to the HMI.",
     "Aucune trame lue. Adaptateur branche en parallele sur D+ / D- de l'IHM (essayer d'inverser) ? IHM allumee (en erreur de communication, elle interroge toujours) ?":
       "No frame heard. Adapter wired in parallel on the HMI's D+ / D- (try swapping)? HMI on (in communication error, it keeps polling)?",
+    "constantes": "constants", "voyant I/O": "I/O LED", "taille image": "image size", "entrees (mots)": "inputs (words)",
     // short words, used inside longer texts
     "entrees": "inputs", "sorties": "outputs", "entree": "input", "sortie": "output", "voies": "channels", "voie": "channel",
     "mots": "words", "octets": "bytes", "octet": "byte", "alerte(s)": "alert(s)", "differents": "different",
@@ -725,6 +726,7 @@ const I18N = (() => {
     [/^(Erreur materiel|Erreur de parametre|Erreur de syntaxe|Erreur de structure du programme|Erreur d'execution) \(M(\d+)\) : (.*)$/,
       (m, k, n, rest) => `${{"Erreur materiel": "Hardware error", "Erreur de parametre": "Parameter error", "Erreur de syntaxe": "Syntax error", "Erreur de structure du programme": "Program structure error", "Erreur d'execution": "Runtime error"}[k]} (M${n}): ${phrases(rest.replace(/, au pas (\d+) \(D8069\)/, ", at step $1 (D8069)"))}`],
     [/^FX1N V(.+)$/, "FX1N V$1"],
+    [/^(.+), fonction (\d\d)$/, (m, n, f) => `${phrases(n)}, function ${f}`],
     [/^Delta trouve : (.+), station (\d+)\.(.*)$/, (m, f, st, rest) => `Delta found: ${f}, station ${st}.${phrases(rest)}`],
     [/^L'IHM parle en (\S+ \d+ \S+) a la station (\d+) \((\d+) trames\)\.(.*)$/, (m, f, st, n, rest) => `The HMI talks ${f} to station ${st} (${n} frames).` + rest.replace(/Reglages a mettre dans l'automate \(Surveillance, ou au demarrage du programme sous M1002\) :/, "Settings to put in the PLC (Watch, or at program start under M1002):").replace("Vitesse non prise en charge par le DVP.", "Speed not supported by the DVP.")],
     [/^Ecoute de la ligne sur (\S*) \(environ 1 min\)\.\.\.$/, "Listening to the line on $1 (about 1 min)..."],

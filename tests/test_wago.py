@@ -73,7 +73,11 @@ class WagoTest(unittest.TestCase):
         self.assertEqual(s.values(["IW0:pt100"])["valeurs"]["IW0:pt100"], "23.4 °C")
         r = s.write([{"adresse": "Q1", "valeur": "1"}])
         self.assertTrue(r["resultats"][0]["ok"])
-        self.assertTrue(len(s.diagnostic()["modules"]) == 4)
+        d = s.diagnostic()
+        self.assertTrue(len(d["modules"]) == 4)
+        raw = {r["adresse"]: r for r in d["systeme"]}
+        self.assertTrue(raw["0x2000 x9 (03)"]["valeur"].startswith("1234 0000"))
+        self.assertIn("exception", raw["0x2000 x9 (04)"]["valeur"])
 
 
 if __name__ == "__main__":
