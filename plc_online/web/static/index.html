@@ -349,6 +349,24 @@
 
         </div>
 
+        <details class="watch-journal" id="tsx-es" data-fonction="chercher_es">
+          <summary>Recherche des %I (pour le developpement de l'outil)</summary>
+          <p class="hint">Trouve ou le TSX garde l'etat des entrees, pour afficher les %I en direct dans une version
+            future. Lecture seule. Il faut une entree que l'on peut faire passer de 0 a 1. Chaque etape dure environ
+            1 minute.</p>
+          <div class="ajout">
+            <label class="field"><span>Positions des modules d'entrees</span><input id="es-positions" value="1"></label>
+            <label class="field"><span>Entree basculee (ex. %I1.3)</span><input id="es-entree"></label>
+          </div>
+          <div class="ajout">
+            <button type="button" class="btn" id="btn-es-a">1. Lire, entree a 0</button>
+            <button type="button" class="btn" id="btn-es-b">2. Lire, entree a 1</button>
+            <button type="button" class="btn" id="btn-es-c">3. Lire, entree revenue a 0</button>
+          </div>
+          <p id="es-msg" class="msg" role="status"></p>
+          <div id="es-resultat"></div>
+        </details>
+
         <h3 id="titre-params">Parametres CPU</h3>
         <dl id="params" class="details"></dl>
       </div>

@@ -360,6 +360,11 @@ def omron_diagnostic(plc) -> dict:
             params.append((f"Unite {addr:02X}", model))
     except hl.HostLinkError:
         pass
+    try:
+        table = plc.io_table(40)
+        params.append(("Table E/S brute (40 premiers mots)", " ".join(f"{w:04X}" for w in table).rstrip(" 0") or "vide"))
+    except hl.HostLinkError:
+        pass
     out["parametres_cpu"] = params
     return out
 

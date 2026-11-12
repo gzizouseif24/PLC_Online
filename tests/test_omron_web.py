@@ -89,3 +89,15 @@ class OmronWebTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ModiconWebTests(unittest.TestCase):
+    def test_read_only_slave(self):
+        s = Session(backups=tempfile.mkdtemp())
+        s.connect("demo-modicon", {})
+        v = s.values(["%MW0", "MW10", "%M3", "%IW1:hex", "X1"])
+        self.assertEqual((v["valeurs"]["%MW0"], v["valeurs"]["MW10"], v["valeurs"]["%IW1:hex"]), ("1250", "-5", "16#002A"))
+        self.assertIn("X1", v["erreurs"])
+        self.assertEqual(s.block("M", 0, 4)["valeurs"], [1, 0, 0, 1])
+        with self.assertRaises(DriverError):
+            s.write([{"adresse": "%MW0", "valeur": "1"}])

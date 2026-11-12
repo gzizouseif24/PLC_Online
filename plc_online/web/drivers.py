@@ -18,6 +18,7 @@ from plc_online.protocols.modbus import ModbusError, PlcRefused
 from plc_online.protocols.mewtocol import MewtocolError, PlcRefused as MewtocolRefused
 from plc_online.protocols.logix import LogixError, TagRefused
 from plc_online.protocols.melsec_fx import FxError, FxRefused
+from plc_online.protocols.hostlink import FinsRefused, HostLinkError, PlcRefused as HostLinkRefused
 from plc_online.protocols.s7 import BLOCK_TYPES, S7300, S7Error, parse_block, parse_sdb1_modules
 from plc_online.protocols.s7_catalogue import catalog_name
 from plc_online.protocols.s7_names import address_range, cpu_parameter_lines, module_text
@@ -417,7 +418,7 @@ class DemoS7:
 
 DEFAULT_BACKUPS = Path.home() / "PLC Online" / "sauvegardes" / "s7-300"
 DEFAULT_TSX_BACKUPS = Path.home() / "PLC Online" / "sauvegardes" / "tsx"
-LINK_ERRORS = (S7Error, UniteError, OSError, ModbusError, MewtocolError, LogixError, FxError)
+LINK_ERRORS = (S7Error, UniteError, OSError, ModbusError, MewtocolError, LogixError, FxError, HostLinkError)
 BACKUP_ID = re.compile(r"^[\w\-. ]+$")
 
 
@@ -627,17 +628,19 @@ def import_files(folder: Path, files: list, note: str = "") -> dict:
 
 
 S7_FEATURES = ["horloge", "rack", "evenements", "db", "projet_step7", "programme", "runstop", "ob_erreur"]
-TSX_FEATURES = ["donnees", "horloge", "programme", "runstop", "changements"]
+TSX_FEATURES = ["donnees", "horloge", "programme", "runstop", "changements", "chercher_es"]
 WAGO_FEATURES = ["chercher"]
 DELTA_FEATURES = ["donnees", "horloge", "changements", "test_entrees"]
 FP0R_FEATURES = ["donnees", "runstop", "changements", "test_entrees", "programme"]
 LOGIX_FEATURES = ["axes"]
 OMRON_FEATURES = ["donnees", "runstop", "monitor", "programme", "changements", "test_entrees"]
+MODICON_FEATURES = ["changements"]
 FX_FEATURES = ["donnees", "horloge", "runstop", "programme", "changements", "test_entrees"]
 
 
 def _brands():
-    from plc_online.web import delta_web, logix_web, melsec_web, omron_web, panasonic_web, tsx_web, wago_web
+    from plc_online.web import (delta_web, logix_web, melsec_web, modicon_web, omron_web, panasonic_web, tsx_web,
+                                wago_web)
     return {
         "s7-300": {"nom": "Siemens S7-300", "disponible": True, "famille": "s7", "fonctions": S7_FEATURES,
                    "reglages": [{"cle": "mpi", "nom": "Adresse MPI", "defaut": 2},
@@ -665,6 +668,10 @@ def _brands():
                        "fonctions": FX_FEATURES, "reglages": melsec_web.SETTINGS},
         "demo-mitsubishi": {"nom": "Demo (Mitsubishi FX1N-40MR simule)", "disponible": True, "cache": True, "famille": "mitsubishi",
                             "fonctions": FX_FEATURES, "reglages": []},
+        "modicon": {"nom": "Modicon / Modbus (RTU ou TCP, lecture seule)", "disponible": True, "famille": "modicon",
+                    "fonctions": MODICON_FEATURES, "reglages": modicon_web.SETTINGS},
+        "demo-modicon": {"nom": "Demo (esclave Modbus simule)", "disponible": True, "famille": "modicon",
+                         "fonctions": MODICON_FEATURES, "reglages": []},
         "omron": {"nom": "Omron CJ1M (port peripherique, Host Link)", "disponible": True, "famille": "omron",
                   "fonctions": OMRON_FEATURES, "reglages": omron_web.SETTINGS},
         "demo-omron": {"nom": "Demo (Omron CJ1M simule)", "disponible": True, "famille": "omron",
@@ -700,6 +707,7 @@ class Session:
         from plc_online.web.logix_web import LogixOps
         from plc_online.web.melsec_web import FxOps
         from plc_online.web.omron_web import OmronOps
+        from plc_online.web.modicon_web import ModiconOps
         self.lock = threading.Lock()
         self.plc, self.brand, self.settings = None, None, {}
         self.opener = opener or open_plc
@@ -712,6 +720,7 @@ class Session:
         self.logix = LogixOps(self)
         self.fx = FxOps(self)
         self.omron = OmronOps(self)
+        self.modicon = ModiconOps(self)
         self.job = None                   # long operation running in the background
         self.last_status = None
 
@@ -737,7 +746,8 @@ class Session:
     def _ops(self):
         """TsxOps when a TSX is connected, None for the S7-300 (methods of this class)."""
         return {"tsx": self.tsx, "wago": self.wago, "delta": self.delta, "panasonic": self.fp0r, "logix": self.logix,
-                "mitsubishi": self.fx, "omron": self.omron}.get(self.family)
+                "mitsubishi": self.fx, "omron": self.omron,
+                "modicon": self.modicon}.get(self.family)
 
     def busy(self) -> str:
         j = self.job
@@ -954,11 +964,11 @@ class Session:
                     self._close()
                     raise DriverError(f"Liaison perdue : {e}") from None
                 raise DriverError(f"Refuse par l'automate : {e}") from None
-            except (PlcRefused, MewtocolRefused, TagRefused, FxRefused) as e:
+            except (PlcRefused, MewtocolRefused, TagRefused, FxRefused, HostLinkRefused, FinsRefused) as e:
                 raise DriverError(f"Refuse : {e}") from None
             except DeltaError as e:
                 raise DriverError(str(e)) from None
-            except (S7Error, OSError, ModbusError, MewtocolError, LogixError, FxError) as e:
+            except (S7Error, OSError, ModbusError, MewtocolError, LogixError, FxError, HostLinkError) as e:
                 self._close()
                 raise DriverError(f"Liaison perdue : {e}") from None
 
@@ -1015,6 +1025,11 @@ class Session:
         family = self.family
         return self._call(lambda plc: tools_web.inputs(family, plc))
 
+    def io_search(self, step, positions, which="") -> dict:
+        if self.family != "tsx":
+            raise DriverError("Recherche des %I : TSX seulement")
+        return self.tsx.io_search(step, positions, which)
+
     def axes(self) -> dict:
         if self.family != "logix":
             raise DriverError("Axes : automates Allen-Bradley seulement")
@@ -1041,6 +1056,9 @@ def open_plc(brand: str, settings: dict):
     if brand in ("delta", "demo-delta"):
         from plc_online.web import delta_web
         return delta_web.demo_delta() if brand == "demo-delta" else delta_web.open_delta(settings)
+    if brand in ("modicon", "demo-modicon"):
+        from plc_online.web import modicon_web
+        return modicon_web.DemoModicon() if brand == "demo-modicon" else modicon_web.open_modicon(settings)
     if brand in ("omron", "demo-omron"):
         from plc_online.web import omron_web
         return omron_web.demo_omron() if brand == "demo-omron" else omron_web.open_omron(settings)

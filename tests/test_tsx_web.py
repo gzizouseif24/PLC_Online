@@ -210,4 +210,28 @@ class ModuleVarsTest(unittest.TestCase):
         from plc_online.web.tsx_web import TsxVar
         with self.assertRaises(ValueError) as e:
             TsxVar("%I1.0")
-        self.assertIn("chercher-es", str(e.exception))
+        self.assertIn("Recherche des %I", str(e.exception))
+
+
+class IoSearchTests(unittest.TestCase):
+    def test_three_steps_find_the_input(self):
+        import tempfile
+        from plc_online.web.drivers import DriverError, Session
+        s = Session(backups=tempfile.mkdtemp())
+        s.connect("demo-tsx", {})
+
+        def run(step, which=""):
+            s.io_search(step, [1], which)
+            while not s.job_state()["fini"]:
+                time.sleep(0.02)
+            self.assertEqual(s.job_state()["erreur"], "")
+            return s.job_state()["resultat"]
+        with self.assertRaises(DriverError):
+            s.io_search("C", [1])
+        self.assertEqual(run("A")["segments"], "60")
+        s.plc.input_on = True
+        run("B")
+        s.plc.input_on = False
+        r = run("C", "%I1.3")
+        self.assertEqual([f["requete"] for f in r["trouves"]], ["43 type 1 position 1"])
+        self.assertIn("%I1.3", open(r["fichier"], encoding="utf-8").read())

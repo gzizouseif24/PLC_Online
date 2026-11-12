@@ -149,6 +149,16 @@ def make_handler(session: Session):
                 return self.api(connect)
             if path == "/api/valeurs":
                 return self.api(lambda: session.values(list(self.read_json().get("adresses") or [])))
+            if path == "/api/tsx/chercher-es":
+                def io_search():
+                    from plc_online.web.drivers import DriverError
+                    req = self.read_json()
+                    try:
+                        positions = [int(x) for x in str(req.get("positions") or "1").replace(" ", "").split(",") if x]
+                    except ValueError:
+                        raise DriverError("Positions : des nombres separes par des virgules (ex. 1,2)") from None
+                    return session.io_search(str(req.get("etape") or ""), positions, str(req.get("entree") or ""))
+                return self.api(io_search)
             if path == "/api/bloc":
                 def block():
                     req = self.read_json()

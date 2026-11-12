@@ -132,6 +132,8 @@ function applyBrand(key) {
     ? "DT100, WX0 / WY0 / WR10 (mots), X0, X1F, Y3, R901C (bits : mot decimal + bit hexa). Ecriture : DT, WY, WR, Y, R. Format dint pour les compteurs 32 bits."
     : family === "delta"
     ? "D100, M10, X17 et Y0 (en octal), T5 / C2 (valeur), S0. Ecriture : D, M, Y, T, C, S. Le format se change sur chaque ligne."
+    : family === "modicon"
+    ? "%MW (registres 03), %IW (04), %M (bits 01), %I (02). Lecture seule."
     : family === "omron"
     ? "D100, W10, H5, A400, T5 / C2 (valeur), 0 ou CIO 0 (mot), 0.03 / W10.05 (bit). Ecriture : CIO, W, H, D, T, C, A448+ (en MONITOR ou PROGRAM)."
     : mitsu
@@ -141,7 +143,7 @@ function applyBrand(key) {
     : tsx
     ? "%MW, %MD, %KW, %KD, %SW, %M, %S (le % est facultatif). Ecriture : %MW et %MD. Le format se change sur chaque ligne."
     : "E/I, A/Q, M, DB10.DBW2, T5, Z2. Le format se change sur chaque ligne.";
-  $("ajout-adresse").placeholder = logix ? "Recipe_Speed, Program:Main.Count" : pana ? "DT100, WX0, X0, Y0, R10" : family === "delta" ? "D100, M10, X0, Y0" : family === "omron" ? "D100, 0.03, W10, H5, A400" : mitsu ? "D100, M8000, X27, Y0" : family === "wago" ? "IW0, QW0, I0, Q0" : tsx ? "%MW10, %MD4, %M5, %I1.0" : "MW10, E0.0, DB10.DBD4";
+  $("ajout-adresse").placeholder = logix ? "Recipe_Speed, Program:Main.Count" : pana ? "DT100, WX0, X0, Y0, R10" : family === "delta" ? "D100, M10, X0, Y0" : family === "omron" ? "D100, 0.03, W10, H5, A400" : family === "modicon" ? "%MW10, %IW0, %M5, %I2" : mitsu ? "D100, M8000, X27, Y0" : family === "wago" ? "IW0, QW0, I0, Q0" : tsx ? "%MW10, %MD4, %M5, %I1.0" : "MW10, E0.0, DB10.DBD4";
   $("titre-params").textContent = logix ? "Automate" : dataLike ? "Automate" : family === "wago" ? "Image process" : tsx ? "Automate" : "Parametres CPU";
   const head = $("table-rack").tHead.rows[0].cells;
   head[0].textContent = tsx || family === "wago" ? "Position" : dataLike ? "" : "Empl.";
@@ -322,6 +324,47 @@ function changesCsv() {
   a.href = URL.createObjectURL(new Blob([lines.join("\n") + "\n"], { type: "text/csv" }));
   a.download = "changements_" + new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-") + ".csv";
   a.click();
+}
+
+// ---- TSX: where are the %I kept? (3 read-only snapshots) ----
+
+async function ioSearch(step) {
+  const msg = $("es-msg");
+  const buttons = ["btn-es-a", "btn-es-b", "btn-es-c"];
+  if (step === "C" && !$("es-entree").value.trim()) {
+    msg.textContent = "Indiquer l'entree basculee (ex. %I1.3) avant l'etape 3.";
+    msg.className = "msg err";
+    return;
+  }
+  for (const b of buttons) $(b).disabled = true;
+  msg.className = "msg";
+  try {
+    await api("POST", "/api/tsx/chercher-es", { etape: step, positions: $("es-positions").value, entree: $("es-entree").value });
+    let j;
+    do {
+      await new Promise((r) => setTimeout(r, 500));
+      j = await api("GET", "/api/tache");
+      msg.textContent = (j.nom || "") + " : " + (j.texte || "...");
+    } while (!j.fini);
+    if (j.erreur) throw new Error(j.erreur);
+    const r = j.resultat;
+    if (r.etape !== "C") {
+      msg.textContent = `Etape ${r.etape} faite (${r.lectures} lectures, segments ${r.segments}). ` +
+        (r.etape === "A" ? "Mettre l'entree a 1, puis etape 2." : "Remettre l'entree a 0, puis etape 3.");
+      return;
+    }
+    msg.textContent = `Reponses qui suivent l'entree (0 -> 1 -> 0) : ${r.trouves.length}. Journal complet : ${r.fichier}`;
+    $("es-resultat").replaceChildren(...r.trouves.map((f) => {
+      const d = el("div", "chip");
+      d.textContent = `${f.requete} : 0 = ${f.a0} / 1 = ${f.a1}`;
+      return d;
+    }));
+  } catch (e) {
+    msg.textContent = e.message;
+    msg.className = "msg err";
+  } finally {
+    for (const b of buttons) $(b).disabled = false;
+  }
 }
 
 // ---- Test E/S: each input seen at 1 then back at 0 ----
@@ -970,6 +1013,7 @@ function formatsFor(adresse) {
   if (family === "wago") return /^[IQ]W\d+$/.test(a) ? ["dec", "pt100", "ud", "hex", "bin"] : [];
   if (family === "delta" || family === "mitsubishi") return /^[DTC]\d+$/.test(a) ? ["dec", "ud", "hex", "bin"] : [];
   if (family === "omron") return /\./.test(a) ? [] : ["dec", "ud", "hex", "bin"];
+  if (family === "modicon") return /^%?[MI]W\d+$/.test(a) ? ["dec", "ud", "hex", "bin"] : [];
   if (family === "panasonic") return /^DT\d+$/.test(a) ? ["dec", "ud", "hex", "bin", "dint"]
     : /^W[XYR]\d+$/.test(a) ? ["dec", "ud", "hex", "bin"] : [];
   if (family === "tsx") {
@@ -1689,6 +1733,9 @@ async function init() {
   $("btn-journal-csv").addEventListener("click", watchLogCsv);
   $("btn-ch-effacer").addEventListener("click", () => { chLog = []; rows($("table-ch").tBodies[0], [], null, "Aucun changement pour l'instant.", 4); });
   $("btn-ch-csv").addEventListener("click", changesCsv);
+  $("btn-es-a").addEventListener("click", () => ioSearch("A"));
+  $("btn-es-b").addEventListener("click", () => ioSearch("B"));
+  $("btn-es-c").addEventListener("click", () => ioSearch("C"));
   $("btn-test-reset").addEventListener("click", () => { testState = {}; readTest(); });
   renderErrorObs();
   $("btn-ob-erreur").addEventListener("click", loadErrorObs);

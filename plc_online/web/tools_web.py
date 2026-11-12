@@ -9,6 +9,7 @@ BLOCK_ZONES = {
     "panasonic": [("DT", True), ("WR", True), ("WX", True), ("WY", True)],
     "delta": [("D", True), ("T", True), ("C", True), ("M", False), ("X", False), ("Y", False), ("S", False)],
     "mitsubishi": [("D", True), ("T", True), ("C", True), ("M", False), ("X", False), ("Y", False), ("S", False)],
+    "modicon": [("MW", True), ("IW", True), ("M", False), ("I", False)],
     "omron": [("D", True), ("CIO", True), ("W", True), ("H", True), ("A", True), ("T", True), ("C", True)],
     "tsx": [("MW", True), ("MD", True), ("KW", True), ("KD", True), ("SW", True), ("M", False), ("S", False)],
 }
@@ -30,6 +31,9 @@ def read_block(family: str, plc, zone: str, start: int, count: int) -> dict:
         raise _drv().DriverError(f"Zone {zone} : {', '.join(zones) or 'aucune pour cet automate'}")
     if not (0 <= start and 1 <= count <= MAX_BLOCK):
         raise _drv().DriverError(f"Debut >= 0, nombre 1..{MAX_BLOCK}")
+    if family == "modicon":
+        from plc_online.web import modicon_web
+        return modicon_web.read_block(plc, zone, start, count)
     if family == "panasonic":
         values = (plc.read_dt(start, count) if zone == "DT"
                   else plc.read_contact_words(zone[1], start, count))

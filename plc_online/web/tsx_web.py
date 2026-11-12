@@ -97,6 +97,21 @@ def list_ports() -> list:
 
 # ---- demo ----
 
+class _DemoSlave:
+    """Raw requests of the demo TSX (chercher-es): position 1 answers 43 type 1 with its input bit."""
+    category = 0
+
+    def __init__(self, tsx):
+        self.tsx = tsx
+
+    def request(self, req, timeout=3):
+        if req[0] == 0x43 and req[2] == 1 and req[4] == 1:
+            return [0x73, 0x01, 0x08 if self.tsx.input_on else 0x00]
+        if req[0] == ut.DEBUG_MEMORY and req[3] == 0x60:
+            return [ut.DEBUG_MEMORY + 0x30] + [0] * 4
+        raise UniteError("refuse par l'automate (FD)")
+
+
 class DemoTsx:
     """Simulated TSX 3721 (bench values) with the same calls as unitelway.Tsx."""
 
@@ -123,7 +138,8 @@ class DemoTsx:
         self.clock_offset = -86400 * 400 - 3 * 3600         # clock lost after a battery fault
         self.s50 = 0
         self.tick = 0
-        self.slave = type("S", (), {"category": 0})()
+        self.slave = _DemoSlave(self)
+        self.input_on = False                               # demo of chercher-es: one input of position 1
 
     def _simulate(self):
         self.tick += 1
@@ -570,8 +586,8 @@ class TsxVar:
         address, _, fmt = self.text.partition(":")
         m = ADDRESS.match(address.strip())
         if not m and IO_ADDRESS.match(address.strip()):
-            raise ValueError("lecture des %I / %Q pas encore possible sur TSX : lancer une fois "
-                             "python tools/tsx.py chercher-es (voir la doc)")
+            raise ValueError("lecture des %I / %Q pas encore possible sur TSX : faire une fois la Recherche des %I "
+                             "(onglet Diagnostic, en bas) et envoyer le journal (chercher-es)")
         if not m:
             raise ValueError("adresse TSX non reconnue (ex. %MW10, %MD4, %KW0, %SW30, %M5, %S10)")
         self.zone, self.addr = m.group(1).upper(), int(m.group(2))
@@ -849,12 +865,78 @@ def import_data_files(folder: Path, files: list, note: str) -> dict:
 
 # ---- what the session calls for a TSX ----
 
+# ---- where does the PLC keep its %I? (research, read only: was tools/tsx.py chercher-es) ----
+
+def io_probe_requests(positions, segments) -> list:
+    """Read-only requests whose answers may hold the %I image: READ_IO_CHANNEL (43) and
+    READ_STATUS_MODULE (44) per position, READ_OBJECTS (36) on unknown segments, debug memory
+    (92 01) on the segments that answered."""
+    out = []
+    for pos in positions:
+        for t in (1, 2, 3, 4):
+            out.append((f"43 type {t} position {pos}", [0x43, ut.PL7_CATEGORY, t, 0, pos, 0xFF, 0x01, 0x08, 0, 0, 0, 0]))
+        out.append((f"44 position {pos}", [ut.READ_STATUS_MODULE, ut.PL7_CATEGORY, 0x02, 0x00, pos]))
+    out.append(("93 defauts rack", [ut.MONITOR, ut.PL7_CATEGORY, 0x02, 0x68, 0x00, 0x04, 0x02, 0x10]))
+    for seg in range(0x60, 0x70):
+        if seg in (0x68, 0x69, 0x6A):
+            continue
+        for typ in (5, 6, 7):
+            out.append((f"36 segment {seg:02X} type {typ}", [ut.READ_OBJECTS, 0, seg, typ, 0, 0, 8, 0]))
+    for seg in segments:
+        for off in range(0, 0x400, 0x60):
+            out.append((f"92 segment {seg:02X} offset {off:03X}",
+                        [ut.DEBUG_MEMORY, ut.PL7_CATEGORY, 0x01, seg, 0x00, off & 0xFF, off >> 8, 0x60]))
+    return out
+
+
+def io_segments(tsx) -> list:
+    try:
+        tsx.slave.request([ut.MONITOR, ut.PL7_CATEGORY, 0x0B], timeout=3)   # debug session, like PL7
+    except UniteError:
+        pass
+    segments = []
+    for seg in range(0x50, 0x80):
+        try:
+            ans = tsx.slave.request([ut.DEBUG_MEMORY, ut.PL7_CATEGORY, 0x01, seg, 0x00, 0, 0, 0x10], timeout=3)
+            if ans and ans[0] == ut.DEBUG_MEMORY + 0x30:
+                segments.append(seg)
+        except UniteError:
+            pass
+    return segments
+
+
+def io_snapshot(tsx, requests, progress=None) -> dict:
+    answers = {}
+    for i, (name, req) in enumerate(requests):
+        if progress:
+            progress(f"lecture {i + 1} / {len(requests)}", i + 1, len(requests))
+        try:
+            answers[name] = ut.hexs(tsx.slave.request(req, timeout=3))
+        except UniteError as e:
+            answers[name] = f"ERREUR {e}"
+    return answers
+
+
+def io_result(info, shots, which) -> tuple:
+    """(names of the answers that follow the input 0 -> 1 -> 0, full log text)."""
+    log = [f"chercher-es {time.strftime('%Y-%m-%d %H:%M:%S')} positions {info['positions']} segments "
+           f"{info['segments']}", f"entree basculee : {which}"]
+    found = []
+    for name, _ in info["requests"]:
+        a, b, c = shots["A"][name], shots["B"][name], shots["C"][name]
+        log.append(f"{name}\n   A {a}\n   B {b}\n   C {c}")
+        if a == c and a != b and not a.startswith("ERREUR"):
+            found.append(name)
+    return found, "\n".join(log) + "\n"
+
+
 class TsxOps:
     """Session calls for a TSX: same names as for the S7-300, plus the Donnees tab."""
 
     def __init__(self, session):
         self.s = session
         self.configs = {}                  # (PLC, application signature) -> configured modules
+        self.io_search_state = None        # chercher-es: requests and the snapshots taken so far
 
     @property
     def programs(self) -> Path:
@@ -932,6 +1014,36 @@ class TsxOps:
                 raise UniteError(f"horloge relue {clock_text(sw)} : la mise a l'heure n'a pas pris")
             return {"horloge": clock_text(sw), "methode": done["methode"]}
         return self.s._call(run)
+
+    def io_search(self, step, positions, which=""):
+        """Step A (input at 0), B (at 1), C (back at 0): one read-only snapshot each; the result after C."""
+        step = str(step).upper()
+        if step not in ("A", "B", "C"):
+            raise _drv().DriverError("Etape A, B ou C")
+        state = self.io_search_state
+        if step in ("B", "C") and (state is None or ("B" if step == "C" else "A") not in state["shots"]):
+            raise _drv().DriverError("Faire les etapes dans l'ordre : A, B puis C")
+
+        def work(plc, progress):
+            nonlocal state
+            if step == "A":
+                progress("segments de memoire de mise au point", 0, 0)
+                segments = io_segments(plc)
+                state = self.io_search_state = {"positions": positions, "segments": segments,
+                                                "requests": io_probe_requests(positions, segments), "shots": {}}
+            state["shots"][step] = io_snapshot(plc, state["requests"], progress)
+            if step != "C":
+                return {"etape": step, "lectures": len(state["requests"]),
+                        "segments": " ".join(f"{s:02X}" for s in state["segments"]) or "aucun"}
+            found, log = io_result(state, state["shots"], which)
+            folder = self.s.tsx_backups / "recherche_es"
+            folder.mkdir(parents=True, exist_ok=True)
+            path = folder / f"chercher_es_{time.strftime('%Y%m%d_%H%M%S')}.txt"
+            path.write_text(log, encoding="utf-8")
+            self.io_search_state = None
+            return {"etape": "C", "trouves": [{"requete": n, "a0": state["shots"]["A"][n], "a1": state["shots"]["B"][n]}
+                                              for n in found], "fichier": str(path)}
+        return self.s.start_job(f"recherche des %I, etape {step}", work)
 
     # program
 
