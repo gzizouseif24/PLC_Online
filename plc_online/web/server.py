@@ -200,6 +200,17 @@ def make_handler(session: Session):
                         return wago_web.set_pc_address(card, str(req.get("ip") or ""))
                     return wago_web.pc_auto(card)
                 return self.api(network)
+            if path in ("/api/delta/chercher", "/api/delta/ecouter-ihm"):
+                def find_delta():
+                    from plc_online.web.drivers import DriverError
+                    from plc_online.web import delta_web
+                    if session.connected:
+                        raise DriverError("Deconnecter d'abord : le port COM est utilise par la connexion en cours")
+                    port = str(self.read_json().get("port") or "").strip()
+                    if not port:
+                        raise DriverError("Port COM a renseigner")
+                    return delta_web.search(port) if path.endswith("chercher") else delta_web.listen_hmi(port)
+                return self.api(find_delta)
             if path == "/api/panasonic/chercher":
                 def find_fp0r():
                     from plc_online.web.drivers import DriverError

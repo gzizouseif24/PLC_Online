@@ -56,6 +56,114 @@ def open_delta(settings: dict):
     return plc
 
 
+# ---- settings search (the PLC answers) and HMI listening (another master talks) ----
+
+def _open(port, baud, parity, stop, timeout, bits):
+    from plc_online.protocols.modbus import open_serial
+    return open_serial(port, baud, parity, stop, timeout, bytesize=bits)
+
+
+def request_frame(mode, station):
+    """Read D1000 (1 word)."""
+    from plc_online.protocols.modbus import crc16
+    body = bytes([station]) + struct.pack(">BHH", 3, 0x1000 + 1000, 1)
+    if mode == "ascii":
+        return b":" + (body + bytes([lrc(body)])).hex().upper().encode() + b"\r\n"
+    return body + struct.pack("<H", crc16(body))
+
+
+def answered(mode, station, got):
+    from plc_online.protocols.modbus import crc16
+    try:
+        if mode == "ascii":
+            data = bytes.fromhex(got.strip()[1:].decode("ascii"))
+            return got.strip().startswith(b":") and lrc(data[:-1]) == data[-1] and data[0] == station
+        return len(got) >= 5 and got[0] == station and crc16(got[:-2]) == struct.unpack("<H", got[-2:])[0]
+    except (ValueError, IndexError):
+        return False
+
+
+def probe(port, mode, baud, parity, stop, station, opener=None):
+    try:
+        ser = (opener or _open)(port, baud, parity, stop, 0.4, 7 if mode == "ascii" else 8)
+    except Exception as e:
+        raise _drv().DriverError(tsx_web.port_error(port, e)) from None
+    try:
+        ser.reset_input_buffer()
+        ser.write(request_frame(mode, station))
+        got = ser.read(64)
+        while True:
+            more = ser.read(64)
+            if not more:
+                return got
+            got += more
+    finally:
+        ser.close()
+
+
+def search(port, opener=None, progress=None) -> dict:
+    """Every usual format at station 1, then stations 1..32 at 9600 E."""
+    echo = noise = False
+    tries = [(m, b, p, s, 1) for m, b, p, s in dl.SEARCH] + [(m, 9600, "E", 1, st) for m in ("ascii", "rtu")
+                                                            for st in range(1, 33)]
+    for i, (mode, baud, parity, stop, station) in enumerate(tries):
+        if progress:
+            progress(f"{mode.upper()} {baud} {parity}{stop} station {station}", i, len(tries))
+        got = probe(port, mode, baud, parity, stop, station, opener)
+        if got and answered(mode, station, got):
+            bits = 7 if mode == "ascii" else 8
+            return {"trouve": True, "reglages": {"port": port, "mode": mode, "baud": baud, "parite": parity,
+                                                 "station": station},
+                    "texte": f"Delta trouve : {mode.upper()} {baud} {bits}{parity}{stop}, station {station}."}
+        if got and got.startswith(request_frame(mode, station)):
+            echo = True
+        elif got:
+            noise = True
+    if noise:
+        text = ("Des octets arrivent mais illisibles : format non standard, ou un autre appareil (IHM maitre) parle "
+                "sur la ligne : bouton Ecouter l'IHM.")
+    elif echo:
+        text = "Seulement l'echo de nos trames : l'adaptateur renvoie ce qu'il envoie, l'automate ne repond pas."
+    else:
+        text = ("Silence total. Fils + / - inverses (les permuter) ? COM2 utilise par le programme en maitre "
+                "(MODRD / MODWR) : passer par COM1 (RS-232, mini-DIN 8). Bon port COM ?")
+    return {"trouve": False, "reglages": {}, "texte": f"Aucune reponse ({len(tries)} essais). {text}"}
+
+
+def listen_hmi(port, seconds=1.5, opener=None) -> dict:
+    """Listen to the RS-485 line where an HMI (master) polls the PLC: its format and the station it asks."""
+    for mode, baud, bits, parity, stop in dl.LISTEN_SETTINGS:
+        try:
+            ser = (opener or _open)(port, baud, parity, stop, 0.1, bits)
+        except Exception as e:
+            raise _drv().DriverError(tsx_web.port_error(port, e)) from None
+        buf, end = b"", time.time() + seconds
+        try:
+            ser.reset_input_buffer()
+            while time.time() < end:
+                buf += ser.read(256)
+        finally:
+            ser.close()
+        frames = dl.ascii_frames(buf) if mode == "ascii" else dl.rtu_frames(buf)
+        if not frames:
+            continue
+        stations = sorted({st for st, _ in frames})
+        out = {"trouve": True, "reglages": {"port": port, "mode": mode, "baud": baud, "parite": parity,
+                                            "station": stations[0]},
+               "texte": f"L'IHM parle en {mode.upper()} {baud} {bits}{parity}{stop} a la station {stations[0]} "
+                        f"({len(frames)} trames)."}
+        try:
+            code = dl.com_word(baud, bits, parity, stop)
+            out["texte"] += (f" Reglages a mettre dans l'automate (Surveillance, ou au demarrage du programme sous M1002) : "
+                             f"D1120 = 16#{code:02X}, M1143 = {1 if mode == 'rtu' else 0}, D1121 = {stations[0]}, M1120 = 1.")
+        except KeyError:
+            out["texte"] += " Vitesse non prise en charge par le DVP."
+        return out
+    return {"trouve": False, "reglages": {},
+            "texte": "Aucune trame lue. Adaptateur branche en parallele sur D+ / D- de l'IHM (essayer d'inverser) ? "
+                     "IHM allumee (en erreur de communication, elle interroge toujours) ?"}
+
+
 # ---- demo ----
 
 class DemoPort:

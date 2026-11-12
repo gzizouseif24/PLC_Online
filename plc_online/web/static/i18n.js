@@ -664,6 +664,10 @@ const I18N = (() => {
       "24 V DC inputs, either polarity on COM (8 inputs per common, the two COM pins are joined). E16P connector: X0 X1 / X2 X3 / X4 X5 / X6 X7 / COM COM (docs/fp0r.md).",
     "Entrees sur le commun S/S (manuel materiel FX1N 5.1.2). NPN ou contact vers 0V : S/S relie au 24V. PNP ou contact vers +24V : S/S relie au 0V.":
       "Inputs on the S/S common (FX1N hardware manual 5.1.2). NPN or contact to 0V: S/S to 24V. PNP or contact to +24V: S/S to 0V.",
+    "Ecouter l'IHM": "Listen to the HMI",
+    "Reglages inconnus : bouton Chercher les reglages ; IHM branchee sur le RS-485 : Ecouter l'IHM.": "Unknown settings: Find the settings button; HMI on the RS-485: Listen to the HMI.",
+    "Aucune trame lue. Adaptateur branche en parallele sur D+ / D- de l'IHM (essayer d'inverser) ? IHM allumee (en erreur de communication, elle interroge toujours) ?":
+      "No frame heard. Adapter wired in parallel on the HMI's D+ / D- (try swapping)? HMI on (in communication error, it keeps polling)?",
     // short words, used inside longer texts
     "entrees": "inputs", "sorties": "outputs", "entree": "input", "sortie": "output", "voies": "channels", "voie": "channel",
     "mots": "words", "octets": "bytes", "octet": "byte", "alerte(s)": "alert(s)", "differents": "different",
@@ -721,6 +725,10 @@ const I18N = (() => {
     [/^(Erreur materiel|Erreur de parametre|Erreur de syntaxe|Erreur de structure du programme|Erreur d'execution) \(M(\d+)\) : (.*)$/,
       (m, k, n, rest) => `${{"Erreur materiel": "Hardware error", "Erreur de parametre": "Parameter error", "Erreur de syntaxe": "Syntax error", "Erreur de structure du programme": "Program structure error", "Erreur d'execution": "Runtime error"}[k]} (M${n}): ${phrases(rest.replace(/, au pas (\d+) \(D8069\)/, ", at step $1 (D8069)"))}`],
     [/^FX1N V(.+)$/, "FX1N V$1"],
+    [/^Delta trouve : (.+), station (\d+)\.(.*)$/, (m, f, st, rest) => `Delta found: ${f}, station ${st}.${phrases(rest)}`],
+    [/^L'IHM parle en (\S+ \d+ \S+) a la station (\d+) \((\d+) trames\)\.(.*)$/, (m, f, st, n, rest) => `The HMI talks ${f} to station ${st} (${n} frames).` + rest.replace(/Reglages a mettre dans l'automate \(Surveillance, ou au demarrage du programme sous M1002\) :/, "Settings to put in the PLC (Watch, or at program start under M1002):").replace("Vitesse non prise en charge par le DVP.", "Speed not supported by the DVP.")],
+    [/^Ecoute de la ligne sur (\S*) \(environ 1 min\)\.\.\.$/, "Listening to the line on $1 (about 1 min)..."],
+    [/^Recherche sur (\S*) : formats, vitesses et stations \(environ 1 min\)\.\.\.$/, "Searching on $1: formats, speeds and stations (about 1 min)..."],
     [/^(\d+) \/ (\d+) entrees testees( - pas vues : (.*))?$/, (m, a, b, r, l) => `${a} / ${b} inputs tested` + (l ? " - not seen: " + l : "")],
     [/^Extension (\d) : type non renseigne, pas testee\.$/, "Expansion $1: type not given, not tested."],
     [/^Extension (\d) \((.+)\)$/, "Expansion $1 ($2)"], [/^lecture du programme : (\d+) \/ (\d+) octets$/, "reading the program: $1 / $2 bytes"],

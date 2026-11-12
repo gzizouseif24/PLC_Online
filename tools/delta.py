@@ -34,125 +34,20 @@ def confirm(question):
 
 # ---- chercher ----
 
-def request_frame(mode, station):
-    """Read D1000 (1 word): the frame sent by chercher."""
-    import struct
-    from plc_online.protocols.modbus import crc16, lrc
-    body = bytes([station]) + struct.pack(">BHH", 3, 0x1000 + 1000, 1)
-    if mode == "ascii":
-        return b":" + (body + bytes([lrc(body)])).hex().upper().encode() + b"\r\n"
-    return body + struct.pack("<H", crc16(body))
-
-
-def probe(port, mode, baud, parity, stop, station):
-    """Bytes received after the request (b'' = silence)."""
-    from plc_online.protocols.modbus import open_serial
-    try:
-        ser = open_serial(port, baud, parity, stop, 0.4, bytesize=7 if mode == "ascii" else 8)
-    except Exception as e:
-        raise SystemExit(f"ECHEC : port {port} : {e}")
-    try:
-        ser.reset_input_buffer()
-        ser.write(request_frame(mode, station))
-        got = ser.read(64)
-        while True:                     # keep the rest of a slow reply
-            more = ser.read(64)
-            if not more:
-                return got
-            got += more
-    finally:
-        ser.close()
-
-
-def answered(mode, station, got):
-    """True if got is a valid reply from station (data or Modbus exception)."""
-    try:
-        if mode == "ascii":
-            data = bytes.fromhex(got.strip()[1:].decode("ascii"))
-            from plc_online.protocols.modbus import lrc
-            return got.strip().startswith(b":") and lrc(data[:-1]) == data[-1] and data[0] == station
-        from plc_online.protocols.modbus import crc16
-        import struct
-        return len(got) >= 5 and got[0] == station and crc16(got[:-2]) == struct.unpack("<H", got[-2:])[0]
-    except (ValueError, IndexError):
-        return False
-
-
 def cmd_chercher(port, station):
-    print(f"Recherche sur {port}, station {station}...")
-    echo_seen = noise_seen = False
-    for mode, baud, parity, stop in SEARCH:
-        bits = 7 if mode == "ascii" else 8
-        print(f"   {mode.upper():5} {baud:6} {bits}{parity}{stop} ... ", end="", flush=True)
-        got = probe(port, mode, baud, parity, stop, station)
-        if got and answered(mode, station, got):
-            print("REPOND")
-            print(f"\nA utiliser : --mode {mode} --baud {baud} --parite {parity} --stop {stop} --station {station}")
-            return
-        if not got:
-            print("rien recu")
-        elif got.startswith(request_frame(mode, station)):
-            echo_seen = True
-            print(f"ECHO de notre trame seulement ({len(got)} octets)")
-        else:
-            noise_seen = True
-            print(f"{len(got)} octets illisibles : {got[:24].hex(' ')}")
-    if not echo_seen and not noise_seen:
-        print("\nSilence total. Causes probables :\n"
-              "   - fils + / - inverses : les permuter et relancer\n"
-              "   - COM2 utilise par le programme en MAITRE (variateurs, MODRD/MODWR) : il ne repond pas\n"
-              "     -> passer par COM1 (RS-232, mini-DIN 8, cable DVPACAB230 ou equivalent)\n"
-              "   - mauvais port COM / adaptateur : verifier dans le Gestionnaire de peripheriques")
-    elif noise_seen:
-        print("\nDes octets arrivent mais illisibles : vitesse/format non standard, ou un autre appareil parle sur la ligne.")
-        print("Envoyer cette sortie.")
-    else:
-        print("\nSeulement l'echo : l'adaptateur renvoie ce qu'il envoie, l'automate ne repond pas (voir causes ci-dessus).")
-    print(f"\nEssai des stations 1..32 en ASCII 9600 7E1 et RTU 9600 8E1 (environ 30 s)...")
-    for mode in ("ascii", "rtu"):
-        for st in range(1, 33):
-            got = probe(port, mode, 9600, "E", 1, st)
-            if got and answered(mode, st, got):
-                print(f"REPOND : --mode {mode} --baud 9600 --parite E --stop 1 --station {st}")
-                return
-    print("Aucune station ne repond.")
+    from plc_online.web.delta_web import search
+    print(f"Recherche sur {port} (environ 1 min)...")
+    r = search(port, progress=lambda text, i, n: print(f"   {i + 1:2}/{n}  {text}", flush=True))
+    print("\n" + r["texte"])
+    if r["trouve"]:
+        g = r["reglages"]
+        print(f"A utiliser : --mode {g['mode']} --baud {g['baud']} --parite {g['parite']} --station {g['station']}")
 
-
-# ---- ecouter-ihm ----
 
 def cmd_ecouter_ihm(port, seconds=1.5):
-    from plc_online.protocols.delta import LISTEN_SETTINGS, ascii_frames, com_word, rtu_frames
-    from plc_online.protocols.modbus import open_serial
+    from plc_online.web.delta_web import listen_hmi
     print(f"Ecoute de la ligne RS-485 sur {port} (l'IHM doit etre allumee et interroger l'automate)...")
-    for mode, baud, bits, parity, stop in LISTEN_SETTINGS:
-        print(f"   {mode.upper():5} {baud:6} {bits}{parity}{stop} ... ", end="", flush=True)
-        try:
-            ser = open_serial(port, baud, parity, stop, 0.1, bytesize=bits)
-        except Exception as e:
-            raise SystemExit(f"ECHEC : port {port} : {e}")
-        buf, end = b"", time.time() + seconds
-        try:
-            ser.reset_input_buffer()
-            while time.time() < end:
-                buf += ser.read(256)
-        finally:
-            ser.close()
-        frames = ascii_frames(buf) if mode == "ascii" else rtu_frames(buf)
-        if not frames:
-            print("rien" if not buf else f"{len(buf)} octets illisibles")
-            continue
-        stations = sorted({st for st, _ in frames})
-        print(f"TROUVE : {len(frames)} trames, station(s) {stations}")
-        try:
-            code = com_word(baud, bits, parity, stop)
-            print(f"\nL'IHM parle en {mode.upper()} {baud} {bits}{parity}{stop} a la station {stations[0]}.")
-            print("Reglages a mettre dans l'automate (onglet Surveillance, ou au demarrage du programme sous M1002) :")
-            print(f"   D1120 = 16#{code:02X}   M1143 = {1 if mode == 'rtu' else 0}   D1121 = {stations[0]}   M1120 = 1")
-        except KeyError:
-            print("Vitesse non prise en charge par le DVP.")
-        return
-    print("\nAucune trame lue. Verifier : adaptateur branche en parallele sur D+ / D- de l'IHM (essayer d'inverser),"
-          " IHM allumee et en erreur de communication (elle interroge toujours).")
+    print(listen_hmi(port, seconds)["texte"])
 
 
 # ---- etat ----

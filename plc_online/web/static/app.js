@@ -66,6 +66,7 @@ function renderSettings() {
   $("hint-logix").hidden = key !== "logix";
   $("hint-mitsubishi").hidden = key !== "mitsubishi";
   $("pana-chercher").hidden = key !== "panasonic";
+  $("delta-chercher").hidden = key !== "delta";
   if (key === "wago") loadCards();
 }
 
@@ -1306,6 +1307,30 @@ async function searchFp0r() {
   }
 }
 
+async function searchDelta(kind) {
+  const msg = $("delta-msg");
+  const port = (document.querySelector('#reglages input[name="port"]') || {}).value || "";
+  for (const b of ["btn-delta-chercher", "btn-delta-ihm"]) $(b).disabled = true;
+  msg.className = "msg";
+  msg.textContent = kind === "ihm" ? "Ecoute de la ligne sur " + port + " (environ 1 min)..."
+    : "Recherche sur " + port + " : formats, vitesses et stations (environ 1 min)...";
+  try {
+    const r = await api("POST", kind === "ihm" ? "/api/delta/ecouter-ihm" : "/api/delta/chercher", { port });
+    msg.textContent = r.texte + (r.trouve ? " Reglages remplis : cliquer sur Connecter." : "");
+    msg.className = "msg" + (r.trouve ? "" : " err");
+    for (const [k, v] of Object.entries(r.reglages || {})) {
+      const input = document.querySelector(`#reglages input[name="${k}"]`);
+      if (input) input.value = v;
+      localStorageSet("reglage-delta-" + k, String(v));
+    }
+  } catch (e) {
+    msg.textContent = e.message;
+    msg.className = "msg err";
+  } finally {
+    for (const b of ["btn-delta-chercher", "btn-delta-ihm"]) $(b).disabled = false;
+  }
+}
+
 async function searchWago() {
   await autoSearch();
 }
@@ -1568,6 +1593,8 @@ async function init() {
   });
   $("btn-visu").addEventListener("click", () => setMonitoring(!monitoring));
   $("btn-pana-chercher").addEventListener("click", searchFp0r);
+  $("btn-delta-chercher").addEventListener("click", () => searchDelta("chercher"));
+  $("btn-delta-ihm").addEventListener("click", () => searchDelta("ihm"));
   setMonitoring(monitoring);
   $("btn-ecrire").addEventListener("click", writeValues);
   $("form-sauver").addEventListener("submit", saveProgram);
