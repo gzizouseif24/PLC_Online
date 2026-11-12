@@ -269,6 +269,8 @@
             <span id="visu-texte">Visualiser</span>
           </button>
           <button type="button" class="btn" id="btn-ecrire">Ecrire les valeurs</button>
+          <label class="check" title="Reecrire les valeurs toutes les 0,5 s jusqu'a Arreter, comme Forcer permanent de STEP 7 (pas un vrai forcage)">
+            <input type="checkbox" id="watch-maintenir"> Maintenir</label>
           <span class="spacer"></span>
           <button type="button" class="btn" id="btn-exporter">Exporter</button>
           <label class="btn" for="fichier-table">Importer</label>
@@ -276,6 +278,10 @@
           <button type="button" class="btn" id="btn-vider">Vider</button>
         </div>
         <p id="watch-msg" class="msg" role="status"></p>
+        <div id="watch-maintien" class="alerte" hidden>
+          <span id="watch-maintien-texte"></span>
+          <button type="button" class="btn" id="btn-maintien-stop">Arreter le maintien</button>
+        </div>
 
         <div class="table-wrap">
           <table class="table watch" id="table-watch">
@@ -284,6 +290,20 @@
           </table>
         </div>
         <p class="maj" id="watch-maj"></p>
+        <details class="watch-journal">
+          <summary>Journal des changements <span id="watch-journal-compte" class="hint"></span></summary>
+          <p class="hint">Chaque valeur qui change pendant la visualisation, avec l'heure : pour un defaut fugitif.</p>
+          <div class="ajout">
+            <button type="button" class="btn" id="btn-journal-effacer">Effacer</button>
+            <button type="button" class="btn" id="btn-journal-csv">Journal en .csv</button>
+          </div>
+          <div class="table-wrap">
+            <table class="table" id="table-watch-journal">
+              <thead><tr><th>Heure</th><th>Adresse</th><th>Libelle</th><th>Avant</th><th>Apres</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </details>
       </div>
 
       <div id="vue-diag" class="vue" hidden>

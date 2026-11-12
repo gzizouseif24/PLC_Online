@@ -165,6 +165,11 @@ def make_handler(session: Session):
                 return self.api(lambda: session.save_program(str(self.read_json().get("note") or "")))
             if path == "/api/programme/comparer":
                 return self.api(lambda: session.compare(str(self.read_json().get("id") or "")))
+            if path == "/api/programme/comparer-copies":
+                def compare_copies():
+                    req = self.read_json()
+                    return session.compare_copies(str(req.get("id") or ""), str(req.get("autre") or ""))
+                return self.api(compare_copies)
             if path == "/api/programme/plan":
                 def plan():
                     req = self.read_json()

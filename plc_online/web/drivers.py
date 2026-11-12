@@ -454,7 +454,33 @@ def backup_path(folder: Path, backup_id: str) -> Path:
 def backup_blocks(folder: Path, backup_id: str) -> dict:
     blocks = program.load_program(backup_path(folder, backup_id))
     return {"id": backup_id, "blocs": [program.block_info(k, n, d) for (k, n), d in
-                                       sorted(blocks.items(), key=lambda kv: program.sort_key(kv[0]))]}
+                                       sorted(blocks.items(), key=lambda kv: program.sort_key(kv[0]))],
+            "config": copy_config(blocks)}
+
+
+def copy_config(blocks: dict) -> dict:
+    """Hardware configuration stored in a copy (SDB 1 modules, SDB 0 CPU parameters), without the CPU."""
+    out = {"modules": [], "parametres_cpu": [], "date": ""}
+    sdb1, sdb0 = blocks.get(("SDB", 1)), blocks.get(("SDB", 0))
+    if sdb1:
+        try:
+            out["date"] = parse_block(sdb1)["date"]
+            for m in parse_sdb1_modules(sdb1):
+                if m["type"] == "CPU":
+                    out["modules"].append({"emplacement": m["emplacement"], "type": "CPU", "adresse": "",
+                                           "nom": f"type {m['code']:04X}"})
+                else:
+                    out["modules"].append({"emplacement": m["emplacement"], "type": m["type"],
+                                           "adresse": address_range(m["type"], m["adresse"], m["octets"]),
+                                           "nom": f"{module_text(m['code']) or 'module inconnu'} (type {m['code']:04X})"})
+        except S7Error as e:
+            out["erreur"] = f"SDB 1 illisible : {e}"
+    if sdb0:
+        try:
+            out["parametres_cpu"] = [list(x) for x in cpu_parameter_lines(sdb0)]
+        except S7Error:
+            pass
+    return out
 
 
 MAX_IMPORT = 5 * 1024 * 1024
@@ -810,6 +836,14 @@ class Session:
             now = program.upload_program(plc, lambda k, i, n: progress(f"lecture {k} {i}/{n}", i, n))
             return {"id": backup_id, **program.comparison(ref, now)}
         return self.start_job("comparaison avec la CPU", work)
+
+    def compare_copies(self, backup_id, other_id) -> dict:
+        """Two copies on the PC, without the CPU (S7: block by block)."""
+        if self._ops():
+            raise DriverError("Comparaison de deux copies : S7-300 seulement pour l'instant")
+        ref = program.load_program(backup_path(self.backups, backup_id))
+        now = program.load_program(backup_path(self.backups, other_id))
+        return {"id": backup_id, "autre": other_id, **program.comparison(ref, now)}
 
     def restore_plan(self, backup_id, with_db: bool) -> dict:
         if self._ops():

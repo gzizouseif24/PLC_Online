@@ -202,6 +202,17 @@ class ProgramTests(unittest.TestCase):
         blocks = [x["bloc"] for x in self.session.backup_blocks(bid)["blocs"]]
         self.assertEqual(blocks[:5], ["OB1", "OB35", "FB1", "FC1", "FC2"])
 
+    def test_copy_config_and_compare_two_copies(self):
+        first = self.save("a")
+        cfg = self.session.backup_blocks(first)["config"]
+        self.assertTrue(cfg["modules"], cfg)
+        fc2 = self.session.plc.blocks[("FC", 2)]
+        self.session.plc.blocks[("FC", 2)] = fc2[:40] + b"\x99" + fc2[41:]
+        second = self.save("b")
+        r = self.session.compare_copies(first, second)
+        self.assertEqual([d["bloc"] for d in r["differences"]], ["FC2"])
+        self.assertTrue(self.session.compare_copies(first, first)["identique"])
+
     def test_compare_finds_changed_block_and_db_values(self):
         bid = self.save()
         self.session.write([{"adresse": "DB10.DBD4", "valeur": "30.5"}])

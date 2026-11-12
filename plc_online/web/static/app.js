@@ -563,6 +563,7 @@ async function loadBackups() {
       const tr = el("tr");
       const actions = el("div", "row-actions");
       for (const [text, fn] of [["Comparer", () => compareBackup(b)],
+                                ...(family === "s7" && r.sauvegardes.length > 1 ? [["Comparer a une copie", () => compareWithCopy(b, r.sauvegardes)]] : []),
                                 ...(fxpFamily() ? [] : [["Restaurer", () => (family === "tsx" ? planRestoreTsx(b) : planRestore(b, false))]]),
                                 [family === "tsx" || fxpFamily() ? "Details" : "Blocs", () => showBlocks(b)]]) {
         const btn = el("button", "btn small", text);
@@ -596,6 +597,32 @@ function saveProgram(ev) {
   });
 }
 
+function compareWithCopy(b, all) {
+  const others = all.filter((x) => x.id !== b.id);
+  const list = others.map((x, i) => `${i + 1}. ${x.date}${x.note ? " — " + x.note : ""}`).join("\n");
+  const pick = prompt(`Comparer la sauvegarde du ${b.date} a quelle copie ? (numero)\n\n${list}`, "1");
+  const other = others[Number(pick) - 1];
+  if (!other) return;
+  api("POST", "/api/programme/comparer-copies", { id: b.id, autre: other.id }).then((r) => {
+    showResult(r.identique ? "ok" : "bad", (box) => {
+      box.append(el("h4", "", r.identique ? `Copies identiques (${b.date} et ${other.date})`
+                                           : `${r.differences.length} bloc(s) different(s) entre ${b.date} et ${other.date}`));
+      if (!r.identique) {
+        const ul = el("ul");
+        ul.append(...r.differences.map((d) => {
+          const li = el("li");
+          li.append(el("b", "mono", d.bloc + " " + d.verdict), document.createTextNode(d.detail ? "  " + d.detail : ""));
+          return li;
+        }));
+        box.append(ul);
+      }
+      if (r.valeurs_db.length) {
+        box.append(el("p", "hint", "Valeurs actuelles differentes (pas un changement de programme) :"), chips(r.valeurs_db));
+      }
+    });
+  }).catch((e) => showResult("bad", (box) => box.append(el("h4", "", e.message))));
+}
+
 function compareBackup(b) {
   runJob("/api/programme/comparer", { id: b.id }, (r) => {
     showResult(r.identique ? "ok" : "bad", (box) => {
@@ -623,7 +650,7 @@ async function showBlocks(b) {
   try {
     const r = await api("GET", "/api/programme/blocs?id=" + encodeURIComponent(b.id));
     showResult("", (box) => {
-      if (family === "tsx") {
+      if (family === "tsx" || fxpFamily()) {
         box.append(el("h4", "", "Sauvegarde du " + b.date + (b.note ? " — " + b.note : "")));
         const dl = el("dl", "details");
         dl.append(...r.blocs.flatMap((x) => [el("dt", "", x.bloc), el("dd", "", x.taille)]));
@@ -647,6 +674,31 @@ async function showBlocks(b) {
       t.append(head, body);
       wrap.append(t);
       box.append(wrap);
+      const c = r.config;
+      if (c && (c.modules.length || c.parametres_cpu.length)) {
+        box.append(el("h4", "", "Configuration materielle de la copie" + (c.date ? " (compilee le " + c.date + ")" : "")));
+        if (c.erreur) box.append(el("p", "msg err", c.erreur));
+        const w2 = el("div", "table-wrap");
+        const t2 = el("table", "table");
+        const h2 = el("thead");
+        const r2 = el("tr");
+        r2.append(...["Empl.", "Type", "Adresse", "Module"].map((h) => el("th", "", h)));
+        h2.append(r2);
+        const b2 = el("tbody");
+        b2.append(...c.modules.map((m) => {
+          const tr = el("tr");
+          tr.append(cell(String(m.emplacement), "mono"), cell(m.type), cell(m.adresse, "mono"), cell(m.nom));
+          return tr;
+        }));
+        t2.append(h2, b2);
+        w2.append(t2);
+        box.append(w2);
+        if (c.parametres_cpu.length) {
+          const dl = el("dl", "details");
+          dl.append(...c.parametres_cpu.flatMap(([k, v]) => [el("dt", "", k), el("dd", "", v)]));
+          box.append(dl);
+        }
+      }
     });
   } catch (e) {
     setProgMsg(e.message, true);
@@ -1021,7 +1073,15 @@ function renderWatchValues(r) {
       const changed = a in lastValues && lastValues[a] !== v;
       span.textContent = v;
       span.className = "valeur" + (v === "1" ? " bit1" : "");
-      if (changed) { void span.offsetWidth; span.classList.add("changed"); }
+      if (changed) {
+        void span.offsetWidth;
+        span.classList.add("changed");
+        const w = watch.find((x) => fullAddress(x) === a);
+        watchLog.unshift({ heure: new Date().toLocaleTimeString("fr-FR"), adresse: a, libelle: w ? w.libelle || "" : "",
+                           avant: lastValues[a], apres: v });
+        watchLog = watchLog.slice(0, 1000);
+        renderWatchLog();
+      }
       lastValues[a] = v;
     }
   }
@@ -1074,6 +1134,62 @@ function addWatch(text, libelle) {
   return true;
 }
 
+// ---- journal of the watch table: every change, with the time (intermittent faults) ----
+
+let watchLog = [];
+
+function renderWatchLog() {
+  $("watch-journal-compte").textContent = watchLog.length ? `(${watchLog.length})` : "";
+  rows($("table-watch-journal").tBodies[0], watchLog.slice(0, 200), (c) => {
+    const tr = el("tr");
+    tr.append(cell(c.heure), cell(c.adresse, "mono"), cell(c.libelle), cell(String(c.avant), "mono"), cell(String(c.apres), "mono"));
+    return tr;
+  }, "Aucun changement depuis l'ouverture de la table.", 5);
+}
+
+function watchLogCsv() {
+  const lines = ["heure;adresse;libelle;avant;apres",
+                 ...watchLog.slice().reverse().map((c) => [c.heure, c.adresse, c.libelle, c.avant, c.apres].join(";"))];
+  const a = el("a");
+  a.href = URL.createObjectURL(new Blob([lines.join("\n") + "\n"], { type: "text/csv" }));
+  a.download = "journal_surveillance_" + new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-") + ".csv";
+  a.click();
+}
+
+// ---- hold: write the same values again and again until stopped (like "modify permanently") ----
+
+let holdTimer = null, holdItems = null, holdBefore = null;
+
+function stopHold(askRestore) {
+  if (holdTimer) clearInterval(holdTimer);
+  holdTimer = null;
+  $("watch-maintien").hidden = true;
+  const before = holdBefore, items = holdItems;
+  holdItems = holdBefore = null;
+  if (!askRestore || !before || !before.length) return;
+  const lines = before.map((b) => `  ${b.adresse} = ${b.avant}`).join("\n");
+  if (!confirm(`Maintien arrete. Remettre les valeurs d'avant ?\n\n${lines}`)) return;
+  api("POST", "/api/ecrire", { ecritures: before.map((b) => ({ adresse: b.adresse, valeur: b.avant })) })
+    .then(() => setWatchMsg("Valeurs d'avant remises."))
+    .catch((e) => setWatchMsg(e.message, true));
+}
+
+function startHold(items, results) {
+  holdItems = items.map(({ adresse, valeur }) => ({ adresse, valeur }));
+  holdBefore = results.map((x) => ({ adresse: x.adresse, avant: x.avant ?? x.ancien })).filter((x) => x.avant !== undefined && x.avant !== null && x.avant !== "?");
+  $("watch-maintien").hidden = false;
+  $("watch-maintien-texte").textContent = "Maintien en cours (reecrit toutes les 0,5 s) : "
+    + holdItems.map((x) => `${x.adresse} = ${x.valeur}`).join(", ");
+  holdTimer = setInterval(async () => {
+    try {
+      await api("POST", "/api/ecrire", { ecritures: holdItems });
+    } catch (e) {
+      stopHold(false);
+      setWatchMsg("Maintien arrete : " + e.message, true);
+    }
+  }, 500);
+}
+
 async function writeValues() {
   const items = [];
   for (const tr of $("table-watch").tBodies[0].rows) {
@@ -1085,7 +1201,9 @@ async function writeValues() {
     return;
   }
   const lines = items.map((it) => `  ${it.adresse} : ${lastValues[it.adresse] ?? "?"}  ->  ${it.valeur}`).join("\n");
-  if (!confirm(`Ecrire dans l'automate ?\n\n${lines}\n\nMachine en securite ?`)) {
+  const hold = $("watch-maintenir").checked;
+  if (hold && holdTimer) stopHold(false);
+  if (!confirm(`${hold ? "Maintenir (reecrire en continu jusqu'a Arreter)" : "Ecrire dans l'automate"} ?\n\n${lines}\n\nMachine en securite ?`)) {
     setWatchMsg("Annule, rien n'a ete ecrit.");
     return;
   }
@@ -1100,6 +1218,7 @@ async function writeValues() {
     if (r.run && io) text += " CPU en RUN : les entrees / sorties sont reecrites a chaque cycle.";
     else if (r.run) text += " Automate en RUN : le programme peut reecrire ces valeurs.";
     setWatchMsg(text, bad.length > 0);
+    if (hold) startHold(items, r.resultats);
     if (monitoring) readWatch();
   } catch (e) {
     setWatchMsg(e.message, true);
@@ -1464,6 +1583,7 @@ function setConnected(connected) {
     stopAxes();
     stopTest();
     stopChanges();
+    stopHold(false);
     $("etat-vide").hidden = false;
     for (const v of document.querySelectorAll(".vue")) v.hidden = true;
     diagLoaded = false;
@@ -1555,6 +1675,9 @@ async function init() {
   $("btn-diag").addEventListener("click", loadDiagnostic);
   $("btn-chercher").addEventListener("click", searchWago);
   $("form-changements").addEventListener("submit", toggleChanges);
+  $("btn-maintien-stop").addEventListener("click", () => stopHold(true));
+  $("btn-journal-effacer").addEventListener("click", () => { watchLog = []; renderWatchLog(); });
+  $("btn-journal-csv").addEventListener("click", watchLogCsv);
   $("btn-ch-effacer").addEventListener("click", () => { chLog = []; rows($("table-ch").tBodies[0], [], null, "Aucun changement pour l'instant.", 4); });
   $("btn-ch-csv").addEventListener("click", changesCsv);
   $("btn-test-reset").addEventListener("click", () => { testState = {}; readTest(); });
