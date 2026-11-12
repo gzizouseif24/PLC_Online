@@ -73,6 +73,13 @@ the program. Same list, download and import as the Programme tab, CSV files.
   machine:** reading the axis members (fallback: raw symbolic read, and axes found by probing when
   the tag list upload stops on a system type), the status word bits, the fault names (only those
   checked against 2198-UM001 are named, other bits show their code).
+- **Mitsubishi FX1N (12/11), demo only so far** (programming port, SC-09 cable, 9600 7E1; see
+  `docs/mitsubishi.md`): Etat (CPU from D8001, RUN from M8000, error flags M8061 / M8064..M8067 with
+  codes and step, scan time, clock), Diagnostic (special M / D, I/O per unit: base + expansions given
+  at connection, numbered in octal), Surveillance (D / T / C / X / Y / M / S, write D T C by command 1,
+  bits by force), Donnees (D0..D511), RUN / STOP (M8035..M8037), clock (M8015 + D8013..D8019).
+  `tools/mitsubishi.py`: info, lire, ecrire, test-entrees, programme (read-only copy from 8000h).
+  **To confirm on the PLC:** everything (frames match the documented examples), D512+ not readable yet.
 
 ## Order
 

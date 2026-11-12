@@ -64,6 +64,7 @@ function renderSettings() {
   $("hint-delta").hidden = key !== "delta";
   $("hint-panasonic").hidden = key !== "panasonic";
   $("hint-logix").hidden = key !== "logix";
+  $("hint-mitsubishi").hidden = key !== "mitsubishi";
   $("pana-chercher").hidden = key !== "panasonic";
   if (key === "wago") loadCards();
 }
@@ -104,19 +105,22 @@ function applyBrand(key) {
   const pana = family === "panasonic";
   const logix = family === "logix";
   $("btn-stop").textContent = pana ? "Passer en PROG" : "Passer en STOP";
-  const dataLike = family === "delta" || pana;        // .csv data copies of this tool
+  const mitsu = family === "mitsubishi";
+  const dataLike = family === "delta" || pana || mitsu;        // .csv data copies of this tool
   $("watch-hint").textContent = logix
     ? "Nom du tag, comme dans Studio 5000 : Recipe_Speed, Recipe[3].Temp, Program:Main.Count. Ecriture : BOOL, entiers, REAL, STRING (pas les tags de securite)."
     : pana
     ? "DT100, WX0 / WY0 / WR10 (mots), X0, X1F, Y3, R901C (bits : mot decimal + bit hexa). Ecriture : DT, WY, WR, Y, R. Format dint pour les compteurs 32 bits."
     : family === "delta"
     ? "D100, M10, X17 et Y0 (en octal), T5 / C2 (valeur), S0. Ecriture : D, M, Y, T, C, S. Le format se change sur chaque ligne."
+    : mitsu
+    ? "D0..D511, D8000.., M0..M1023, M8000.., X27 et Y17 (en octal), T5 / C2 (valeur, C200..C255 sur 32 bits), S0. Ecriture : D, T, C, M, Y, S."
     : family === "wago"
     ? "IW0 (mot d'entree), QW0 (mot de sortie), I0 (bit d'entree), Q0 (bit de sortie). Ecriture : QW et Q. Format Pt100 pour le 750-461."
     : tsx
     ? "%MW, %MD, %KW, %KD, %SW, %M, %S (le % est facultatif). Ecriture : %MW et %MD. Le format se change sur chaque ligne."
     : "E/I, A/Q, M, DB10.DBW2, T5, Z2. Le format se change sur chaque ligne.";
-  $("ajout-adresse").placeholder = logix ? "Recipe_Speed, Program:Main.Count" : pana ? "DT100, WX0, X0, Y0, R10" : family === "delta" ? "D100, M10, X0, Y0" : family === "wago" ? "IW0, QW0, I0, Q0" : tsx ? "%MW10, %MD4, %M5, %I1.0" : "MW10, E0.0, DB10.DBD4";
+  $("ajout-adresse").placeholder = logix ? "Recipe_Speed, Program:Main.Count" : pana ? "DT100, WX0, X0, Y0, R10" : family === "delta" ? "D100, M10, X0, Y0" : mitsu ? "D100, M8000, X27, Y0" : family === "wago" ? "IW0, QW0, I0, Q0" : tsx ? "%MW10, %MD4, %M5, %I1.0" : "MW10, E0.0, DB10.DBD4";
   $("titre-params").textContent = logix ? "Automate" : dataLike ? "Automate" : family === "wago" ? "Image process" : tsx ? "Automate" : "Parametres CPU";
   const head = $("table-rack").tHead.rows[0].cells;
   head[0].textContent = tsx || family === "wago" ? "Position" : dataLike ? "" : "Empl.";
@@ -126,6 +130,8 @@ function applyBrand(key) {
     ? "Copie de tous les registres DT (recettes, compteurs, reglages), sans le programme. Environ 1 a 2 minutes a 9600 bauds."
     : family === "delta"
     ? "Copie de tous les registres D (recettes, compteurs, reglages), sans le programme."
+    : mitsu
+    ? "Copie des registres D0..D511 (zone lisible par le port de programmation), sans le programme."
     : "Copie de tous les mots internes %MW et des constantes %KW (recettes, compteurs, reglages), sans le programme.";
   $("data-import-texte").textContent = dataLike ? "Importer un .csv" : "Importer un .dat ou .csv";
   $("data-import-hint").textContent = dataLike ? "Fichier deja sur le PC (.csv de cet outil) :"
@@ -672,7 +678,7 @@ function saveData(ev) {
 }
 
 async function planData(b) {
-  const zn = family === "delta" ? "D" : family === "panasonic" ? "DT" : "%MW";
+  const zn = family === "delta" || family === "mitsubishi" ? "D" : family === "panasonic" ? "DT" : "%MW";
   setDataMsg(`Lecture des ${zn} de l'automate...`);
   let plan;
   try {
@@ -729,7 +735,7 @@ async function planData(b) {
 }
 
 async function importData(fileList) {
-  const files = [...fileList].filter((f) => (family === "delta" || family === "panasonic" ? /\.csv$/i : /\.(dat|csv)$/i).test(f.name));
+  const files = [...fileList].filter((f) => (["delta", "panasonic", "mitsubishi"].includes(family) ? /\.csv$/i : /\.(dat|csv)$/i).test(f.name));
   if (!files.length) {
     setDataMsg("Aucun fichier .dat ou .csv dans la selection.", true);
     return;
@@ -762,7 +768,7 @@ function formatsFor(adresse) {
   const a = adresse.toUpperCase();
   if (family === "logix") return [];
   if (family === "wago") return /^[IQ]W\d+$/.test(a) ? ["dec", "pt100", "ud", "hex", "bin"] : [];
-  if (family === "delta") return /^[DTC]\d+$/.test(a) ? ["dec", "ud", "hex", "bin"] : [];
+  if (family === "delta" || family === "mitsubishi") return /^[DTC]\d+$/.test(a) ? ["dec", "ud", "hex", "bin"] : [];
   if (family === "panasonic") return /^DT\d+$/.test(a) ? ["dec", "ud", "hex", "bin", "dint"]
     : /^W[XYR]\d+$/.test(a) ? ["dec", "ud", "hex", "bin"] : [];
   if (family === "tsx") {
@@ -1220,6 +1226,7 @@ function renderDiagnostic(d) {
   $("diag-info").textContent = family === "logix" ? "Automate, modules du chassis 1756 emplacement par emplacement, axes en defaut."
     : family === "panasonic" ? "Relais et registres speciaux (R9000.., DT90000..), entrees / sorties integrees."
     : family === "delta" ? "Relais et registres speciaux (M1000.., D1000..), entrees / sorties."
+    : family === "mitsubishi" ? "Relais et registres speciaux (M8000.., D8000..), entrees / sorties par unite (octal)."
     : family === "wago" ? "Modules lus dans le coupleur, valeurs de l'image process."
     : d.systeme ? "Bits et mots systeme de l'automate."
     : d.config_compilee ? "Configuration materielle compilee le " + d.config_compilee + "."

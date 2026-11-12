@@ -17,6 +17,7 @@ from plc_online.protocols.delta import DeltaError
 from plc_online.protocols.modbus import ModbusError, PlcRefused
 from plc_online.protocols.mewtocol import MewtocolError, PlcRefused as MewtocolRefused
 from plc_online.protocols.logix import LogixError, TagRefused
+from plc_online.protocols.melsec_fx import FxError, FxRefused
 from plc_online.protocols.s7 import BLOCK_TYPES, S7300, S7Error, parse_block, parse_sdb1_modules
 from plc_online.protocols.s7_catalogue import catalog_name
 from plc_online.protocols.s7_names import address_range, cpu_parameter_lines, module_text
@@ -416,7 +417,7 @@ class DemoS7:
 
 DEFAULT_BACKUPS = Path.home() / "PLC Online" / "sauvegardes" / "s7-300"
 DEFAULT_TSX_BACKUPS = Path.home() / "PLC Online" / "sauvegardes" / "tsx"
-LINK_ERRORS = (S7Error, UniteError, OSError, ModbusError, MewtocolError, LogixError)
+LINK_ERRORS = (S7Error, UniteError, OSError, ModbusError, MewtocolError, LogixError, FxError)
 BACKUP_ID = re.compile(r"^[\w\-. ]+$")
 
 
@@ -605,10 +606,11 @@ WAGO_FEATURES = ["chercher"]
 DELTA_FEATURES = ["donnees", "horloge"]
 FP0R_FEATURES = ["donnees", "runstop"]
 LOGIX_FEATURES = ["axes"]
+FX_FEATURES = ["donnees", "horloge", "runstop"]
 
 
 def _brands():
-    from plc_online.web import delta_web, logix_web, panasonic_web, tsx_web, wago_web
+    from plc_online.web import delta_web, logix_web, melsec_web, panasonic_web, tsx_web, wago_web
     return {
         "s7-300": {"nom": "Siemens S7-300", "disponible": True, "famille": "s7", "fonctions": S7_FEATURES,
                    "reglages": [{"cle": "mpi", "nom": "Adresse MPI", "defaut": 2},
@@ -632,6 +634,10 @@ def _brands():
                   "fonctions": LOGIX_FEATURES, "reglages": logix_web.SETTINGS},
         "demo-logix": {"nom": "Demo (GuardLogix 5580 + Kinetix 5500 simules)", "disponible": True, "famille": "logix",
                        "fonctions": LOGIX_FEATURES, "reglages": []},
+        "mitsubishi": {"nom": "Mitsubishi FX1N (port de programmation)", "disponible": True, "famille": "mitsubishi",
+                       "fonctions": FX_FEATURES, "reglages": melsec_web.SETTINGS},
+        "demo-mitsubishi": {"nom": "Demo (Mitsubishi FX1N-40MR simule)", "disponible": True, "famille": "mitsubishi",
+                            "fonctions": FX_FEATURES, "reglages": []},
         "omron": {"nom": "Omron CJ1M", "disponible": False, "reglages": []},
         "panasonic": {"nom": "Panasonic FP0R", "disponible": True, "famille": "panasonic",
                       "fonctions": FP0R_FEATURES, "reglages": panasonic_web.SETTINGS},
@@ -652,6 +658,7 @@ class Session:
         from plc_online.web.delta_web import DeltaOps
         from plc_online.web.panasonic_web import Fp0rOps
         from plc_online.web.logix_web import LogixOps
+        from plc_online.web.melsec_web import FxOps
         self.lock = threading.Lock()
         self.plc, self.brand, self.settings = None, None, {}
         self.opener = opener or open_plc
@@ -662,6 +669,7 @@ class Session:
         self.delta = DeltaOps(self)
         self.fp0r = Fp0rOps(self)
         self.logix = LogixOps(self)
+        self.fx = FxOps(self)
         self.job = None                   # long operation running in the background
         self.last_status = None
 
@@ -686,7 +694,8 @@ class Session:
 
     def _ops(self):
         """TsxOps when a TSX is connected, None for the S7-300 (methods of this class)."""
-        return {"tsx": self.tsx, "wago": self.wago, "delta": self.delta, "panasonic": self.fp0r, "logix": self.logix}.get(self.family)
+        return {"tsx": self.tsx, "wago": self.wago, "delta": self.delta, "panasonic": self.fp0r, "logix": self.logix,
+                "mitsubishi": self.fx}.get(self.family)
 
     def busy(self) -> str:
         j = self.job
@@ -887,11 +896,11 @@ class Session:
                     self._close()
                     raise DriverError(f"Liaison perdue : {e}") from None
                 raise DriverError(f"Refuse par l'automate : {e}") from None
-            except (PlcRefused, MewtocolRefused, TagRefused) as e:
+            except (PlcRefused, MewtocolRefused, TagRefused, FxRefused) as e:
                 raise DriverError(f"Refuse : {e}") from None
             except DeltaError as e:
                 raise DriverError(str(e)) from None
-            except (S7Error, OSError, ModbusError, MewtocolError, LogixError) as e:
+            except (S7Error, OSError, ModbusError, MewtocolError, LogixError, FxError) as e:
                 self._close()
                 raise DriverError(f"Liaison perdue : {e}") from None
 
@@ -899,12 +908,12 @@ class Session:
 
     def _tsx_only(self):
         """Ops of the brands with a Donnees tab (TSX, Delta)."""
-        if self.family not in ("tsx", "delta", "panasonic"):
-            raise DriverError("Sauvegarde des donnees : TSX, Delta et Panasonic seulement pour l'instant")
+        if self.family not in ("tsx", "delta", "panasonic", "mitsubishi"):
+            raise DriverError("Sauvegarde des donnees : TSX, Delta, Panasonic et Mitsubishi seulement pour l'instant")
         return self._ops()
 
     def _data_ops(self):
-        return {"delta": self.delta, "panasonic": self.fp0r}.get(self.family, self.tsx)
+        return {"delta": self.delta, "panasonic": self.fp0r, "mitsubishi": self.fx}.get(self.family, self.tsx)
 
     def data_list(self) -> dict:
         return self._data_ops().data_list()
@@ -964,6 +973,9 @@ def open_plc(brand: str, settings: dict):
     if brand in ("delta", "demo-delta"):
         from plc_online.web import delta_web
         return delta_web.demo_delta() if brand == "demo-delta" else delta_web.open_delta(settings)
+    if brand in ("mitsubishi", "demo-mitsubishi"):
+        from plc_online.web import melsec_web
+        return melsec_web.demo_fx() if brand == "demo-mitsubishi" else melsec_web.open_fx(settings)
     if brand in ("logix", "demo-logix"):
         from plc_online.web import logix_web
         return logix_web.DemoLogix() if brand == "demo-logix" else logix_web.open_logix(settings)
