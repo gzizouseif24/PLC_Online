@@ -622,6 +622,14 @@ const I18N = (() => {
     "les entrees X ne s'ecrivent pas (l'automate les relit a chaque cycle)": "X inputs cannot be written (the PLC reads them every scan)",
     "Le selecteur RUN / STOP de l'automate peut l'emporter : essayer avec le selecteur sur STOP.": "The PLC's RUN / STOP switch can take priority: try with the switch on STOP.",
     "Voyant ERROR allume : erreur programme ou parametre, voir Diagnostic.": "ERROR LED on: program or parameter error, see Diagnostic.",
+    "saut sans destination (CJ / CALL : pointeur P absent ou apres END)": "jump without destination (CJ / CALL: pointer P missing or after END)",
+    "plus de 5 CALL imbriques": "more than 5 nested CALLs", "plus de 2 interruptions imbriquees": "more than 2 nested interrupts",
+    "plus de 5 FOR / NEXT imbriques": "more than 5 nested FOR / NEXT", "operande d'un type non accepte par l'instruction": "operand of a type the instruction does not accept",
+    "operande hors zone (souvent un index V / Z trop grand, ou un nombre de mots n trop grand : BMOV, FMOV...)":
+      "operand out of range (often an index V / Z too large, or a word count n too large: BMOV, FMOV...)",
+    "registre fichier hors de la zone reglee": "file register outside the set area",
+    "erreur FROM / TO (bloc special absent ou mal numerote)": "FROM / TO error (special block missing or wrong number)",
+    "autre erreur (IRET / SRET manquant, FOR / NEXT mal places)": "other error (IRET / SRET missing, FOR / NEXT misplaced)",
     // short words, used inside longer texts
     "entrees": "inputs", "sorties": "outputs", "entree": "input", "sortie": "output", "voies": "channels", "voie": "channel",
     "mots": "words", "octets": "bytes", "octet": "byte", "alerte(s)": "alert(s)", "differents": "different",

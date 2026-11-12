@@ -42,6 +42,7 @@ COM4 Y10-Y13, COM5 Y14-Y17.
 | M8035 / M8036 / M8037 | forced RUN mode / forced RUN / forced STOP (used for remote RUN / STOP) |
 | M8061 / D8061 | hardware error (6101 RAM, 6103 I/O bus, 6104 expansion 24 V, 6105 watchdog) |
 | M8064..M8067 / D8064..D8067 | parameter, syntax, structure, runtime error codes; step in D8069 |
+| D8067 runtime codes | 6701 jump without destination, 6705 wrong operand type, 6706 operand out of range (index V / Z, count n), 6708 FROM / TO; the PLC keeps running (manual 6.18) |
 | D8001 | CPU type + version (26100 = FX1N V1.00) |
 | D8002 / D8003 | memory capacity (8 = 8k steps) / memory type (10h = built-in) |
 | D8010..D8012 | scan current / min / max, x 0.1 ms |

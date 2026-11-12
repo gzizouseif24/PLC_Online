@@ -36,6 +36,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(fx.cpu_text(26100), "FX1N V1.00")
         self.assertIn("bus", fx.error_text(8061, 6103))
         self.assertEqual(fx.error_text(8067, 0), "aucune")
+        self.assertIn("index V / Z", fx.error_text(8067, 6706))
 
     def test_nak_and_bad_sum(self):
         port = mw.DemoPort()

@@ -249,6 +249,14 @@ PARAMETER_ERRORS = {6401: "somme de controle du programme fausse", 6402: "capaci
                     6403: "zone des memoires maintenues mal reglee", 6404: "zone de commentaires mal reglee",
                     6405: "zone des registres fichiers mal reglee", 6409: "autre erreur de parametre"}
 
+RUNTIME_ERRORS = {
+    6701: "saut sans destination (CJ / CALL : pointeur P absent ou apres END)",
+    6702: "plus de 5 CALL imbriques", 6703: "plus de 2 interruptions imbriquees", 6704: "plus de 5 FOR / NEXT imbriques",
+    6705: "operande d'un type non accepte par l'instruction",
+    6706: "operande hors zone (souvent un index V / Z trop grand, ou un nombre de mots n trop grand : BMOV, FMOV...)",
+    6707: "registre fichier hors de la zone reglee", 6708: "erreur FROM / TO (bloc special absent ou mal numerote)",
+    6709: "autre erreur (IRET / SRET manquant, FOR / NEXT mal places)"}
+
 
 def error_text(register: int, code: int) -> str:
     if not code:
@@ -262,7 +270,7 @@ def error_text(register: int, code: int) -> str:
     if register == 8066:
         return f"erreur de structure du programme {code} (LD / ANB, MC / MCR, FOR / NEXT, saut...)"
     if register == 8067:
-        return f"erreur d'execution {code} (operande hors zone, division par 0...)"
+        return RUNTIME_ERRORS.get(code, f"erreur d'execution {code} (PID : 6730..6752, voir le manuel)")
     return str(code)
 
 
