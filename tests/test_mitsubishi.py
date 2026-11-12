@@ -144,6 +144,40 @@ class FxWebTests(unittest.TestCase):
         data = self.s.plc.read_program_memory(2000)
         self.assertEqual((len(data), data[:4]), (92 + 4000 + 4, bytes([0x10, 0, 0xAB, 0xCD])))
 
+    def test_program_copy_compare_import(self):
+        self.s.save_program("avant")
+        saved = self.wait()
+        self.assertEqual(saved["comptes"], "8000 pas, 16096 octets")
+        self.assertEqual(self.s.list_backups()["sauvegardes"][0]["note"], "avant")
+        self.s.compare(saved["id"])
+        self.assertTrue(self.wait()["identique"])
+        self.s.plc.ser.mem[0x8000 + 92 + 2 * 120] = 0x55           # step 120 changed
+        self.s.plc.ser.mem[0x8000 + 92 + 2 * 121 + 1] = 0x55       # step 121
+        self.s.compare(saved["id"])
+        r = self.wait()
+        self.assertEqual((r["identique"], r["differences"][0]["detail"]), (False, "pas 120..121"))
+        name, data = self.s.export_backup(saved["id"])
+        self.assertEqual(self.s.import_backup([(name, data)], "")["comptes"], "8000 pas, 16096 octets")
+        with self.assertRaises(DriverError):
+            self.s.restore_plan(saved["id"], False)
+        self.s.delete_backup(saved["id"])
+        self.assertEqual(len(self.s.list_backups()["sauvegardes"]), 1)
+
+    def test_program_protected(self):
+        orig = self.s.plc.ser.write
+        self.s.plc.ser.write = lambda req: (orig(req), setattr(self.s.plc.ser, "buf", fx.NAK)
+                                            if req[2:3] == b"8" and req[1:2] == b"0" else None)
+        self.s.save_program("")
+        while not self.s.job_state()["fini"]:
+            time.sleep(0.02)
+        self.assertIn("mot-cle", self.s.job_state()["erreur"])
+
+    def test_step_ranges(self):
+        a = bytes(200)
+        b = bytearray(a)
+        b[3], b[92], b[93], b[96], b[150] = 1, 1, 1, 1, 1
+        self.assertEqual(mw.step_ranges(a, bytes(b)), ["parametres", "pas 0", "pas 2", "pas 29"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -92,15 +92,20 @@ function applyBrand(key) {
   features = b.fonctions || [];
   for (const e of document.querySelectorAll("[data-fonction]")) e.hidden = !features.includes(e.dataset.fonction);
   const tsx = family === "tsx";
-  $("prog-hint").textContent = tsx
+  const fxp = family === "mitsubishi";
+  $("prog-hint").textContent = fxp
+    ? "Copie de la memoire programme (parametres + programme), en lecture seule : a garder et a comparer. Environ 1 minute. Rechargement : GX Developer / GX Works."
+    : tsx
     ? "Copie de l'application de l'automate (programme et configuration), comme le transfert automate -> PC de PL7."
     : "Copie de tous les blocs (OB, FB, FC, DB) et de la configuration materielle (SDB).";
-  $("import-hint").textContent = tsx
+  $("import-hint").textContent = fxp
+    ? "Copie deja sur le PC : .zip de cette page ou .bin de tools/mitsubishi.py :"
+    : tsx
     ? "Programme deja sur le PC : fichier PL7 .stx, copie .tsxbak (outil terminal) ou .zip de cette page :"
     : "Sauvegarde deja sur le PC (autre dossier, cle USB, terminal) ou projet STEP 7 V5 (dossier du .s7p, ou archive .zip) :";
-  $("import-fichiers-texte").textContent = tsx ? "Importer un .stx, .tsxbak ou .zip" : "Importer un .zip ou des blocs .bin";
+  $("import-fichiers-texte").textContent = tsx ? "Importer un .stx, .tsxbak ou .zip" : fxp ? "Importer un .zip ou un .bin" : "Importer un .zip ou des blocs .bin";
   $("import-fichiers").accept = tsx ? ".stx,.tsxbak,.zip" : ".zip,.bin";
-  $("btn-sauver").textContent = tsx ? "Sauvegarder le programme de l'automate" : "Sauvegarder le programme de la CPU";
+  $("btn-sauver").textContent = tsx || fxp ? "Sauvegarder le programme de l'automate" : "Sauvegarder le programme de la CPU";
   $("col-contenu").textContent = tsx ? "Contenu" : "Blocs";
   const pana = family === "panasonic";
   const logix = family === "logix";
@@ -422,8 +427,8 @@ async function loadBackups() {
       const tr = el("tr");
       const actions = el("div", "row-actions");
       for (const [text, fn] of [["Comparer", () => compareBackup(b)],
-                                ["Restaurer", () => (family === "tsx" ? planRestoreTsx(b) : planRestore(b, false))],
-                                [family === "tsx" ? "Details" : "Blocs", () => showBlocks(b)]]) {
+                                ...(family === "mitsubishi" ? [] : [["Restaurer", () => (family === "tsx" ? planRestoreTsx(b) : planRestore(b, false))]]),
+                                [family === "tsx" || family === "mitsubishi" ? "Details" : "Blocs", () => showBlocks(b)]]) {
         const btn = el("button", "btn small", text);
         btn.type = "button";
         btn.addEventListener("click", fn);

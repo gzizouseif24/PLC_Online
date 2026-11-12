@@ -606,7 +606,7 @@ WAGO_FEATURES = ["chercher"]
 DELTA_FEATURES = ["donnees", "horloge"]
 FP0R_FEATURES = ["donnees", "runstop"]
 LOGIX_FEATURES = ["axes"]
-FX_FEATURES = ["donnees", "horloge", "runstop"]
+FX_FEATURES = ["donnees", "horloge", "runstop", "programme"]
 
 
 def _brands():
@@ -865,7 +865,7 @@ class Session:
     def delete_backup(self, backup_id) -> dict:
         if self.busy():
             raise DriverError(f"Operation en cours : {self.busy()}")
-        return delete_copy(self.tsx.programs if self._ops() else self.backups, backup_id)
+        return delete_copy(getattr(self._ops(), "programs", self.tsx.programs) if self._ops() else self.backups, backup_id)
 
     def data_delete(self, backup_id) -> dict:
         if self.busy():

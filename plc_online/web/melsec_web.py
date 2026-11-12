@@ -1,7 +1,11 @@
 """Mitsubishi FX (FX1N first) in the web interface: status, special M / D, I/O by unit (base + expansions
 given at connection), watch table, D0..D511 data copies, RUN / STOP by the forced RUN / STOP flags."""
 import datetime
+import hashlib
+import io
+import json
 import re
+import zipfile
 import time
 from pathlib import Path
 
@@ -432,6 +436,64 @@ def write_values(plc, items) -> dict:
     return {"resultats": results, "run": bool(plc.read_bits("M", 8000, 1)[0])}
 
 
+# ---- program copies (read only: parameters + program memory from 8000h) ----
+
+PROGRAM_FILE = "programme_fx.bin"
+PARAMETER_BYTES = 92
+
+
+def program_steps(plc) -> int:
+    d8002 = plc.read_words("D", 8002, 1)[0]
+    return d8002 * 1000 if d8002 in (2, 4, 8) else 8000
+
+
+def read_program(plc, progress) -> bytes:
+    steps = program_steps(plc)
+    try:
+        return plc.read_program_memory(steps, lambda n, total: progress(f"lecture du programme : {n} / {total} octets",
+                                                                         n, total))
+    except fx.FxRefused:
+        raise _drv().DriverError("Lecture du programme refusee par l'automate : programme protege par mot-cle "
+                                 "(les D / M / X / Y restent lisibles)") from None
+
+
+def save_program_copy(folder: Path, blob: bytes, automate: str, note: str, cpu: str = "") -> dict:
+    target = _drv()._new_folder(folder, "fx")
+    target.mkdir(parents=True)
+    (target / PROGRAM_FILE).write_bytes(blob)
+    steps = (len(blob) - PARAMETER_BYTES - 4) // 2
+    meta = {"date": time.strftime("%Y-%m-%d %H:%M:%S"), "automate": automate, "cible": cpu, "taille": len(blob),
+            "sha256": hashlib.sha256(blob).hexdigest(), "note": note.strip()[:200],
+            "resume": f"{steps} pas, {len(blob)} octets"}
+    tsx_web._write_meta(target, meta)
+    return {"id": target.name, "comptes": meta["resume"]}
+
+
+def step_ranges(a: bytes, b: bytes) -> list:
+    """Differing bytes -> ['parametres', 'pas 120..135', ...] (step = (offset - 92) / 2)."""
+    out, start, prev = [], None, None
+    names = []
+    for i in range(min(len(a), len(b))):
+        if a[i] == b[i]:
+            continue
+        key = "parametres" if i < PARAMETER_BYTES else (i - PARAMETER_BYTES) // 2
+        names.append(key)
+    for k in names:
+        if k == "parametres":
+            if "parametres" not in out:
+                out.append("parametres")
+            continue
+        if start is not None and k <= prev + 1:
+            prev = k
+            continue
+        if start is not None:
+            out.append(f"pas {start}" if start == prev else f"pas {start}..{prev}")
+        start = prev = k
+    if start is not None:
+        out.append(f"pas {start}" if start == prev else f"pas {start}..{prev}")
+    return out
+
+
 # ---- data copies (D0..D511) ----
 
 def read_all_d(plc, progress=None) -> list:
@@ -466,6 +528,87 @@ class FxOps:
     @property
     def data(self) -> Path:
         return self.s.tsx_backups.parent / "mitsubishi" / "donnees"
+
+    @property
+    def programs(self) -> Path:
+        return self.s.tsx_backups.parent / "mitsubishi" / "programmes"
+
+    # program (read only)
+
+    def list_backups(self):
+        return {"dossier": str(self.programs), "sauvegardes": tsx_web.list_copies(self.programs, PROGRAM_FILE)}
+
+    def _image(self, backup_id) -> bytes:
+        return (_drv().backup_path(self.programs, backup_id) / PROGRAM_FILE).read_bytes()
+
+    def save_program(self, note):
+        def work(plc, progress):
+            cpu = fx.cpu_text(plc.read_words("D", 8001, 1)[0])
+            return save_program_copy(self.programs, read_program(plc, progress), plc.nom, note, cpu)
+        return self.s.start_job("sauvegarde du programme", work)
+
+    def compare(self, backup_id):
+        saved = self._image(backup_id)
+
+        def work(plc, progress):
+            now = read_program(plc, progress)
+            if now == saved:
+                return {"id": backup_id, "identique": True, "differences": [], "valeurs_db": []}
+            ranges = step_ranges(now, saved)
+            detail = ", ".join(ranges[:15]) + (f" (+ {len(ranges) - 15} autres)" if len(ranges) > 15 else "")
+            if len(now) != len(saved):
+                detail = f"automate {len(now)} octets, copie {len(saved)} octets" + (f" ; {detail}" if detail else "")
+            return {"id": backup_id, "identique": False, "valeurs_db": [],
+                    "differences": [{"bloc": "programme", "type": "", "numero": 0, "verdict": "modifie",
+                                     "detail": detail}]}
+        return self.s.start_job("comparaison avec l'automate", work)
+
+    def backup_blocks(self, backup_id):
+        meta = tsx_web._meta(_drv().backup_path(self.programs, backup_id))
+        blob = self._image(backup_id)
+        rows = [("CPU", meta.get("cible", "")), ("automate", meta.get("automate", "")),
+                ("programme", f"{(len(blob) - PARAMETER_BYTES - 4) // 2} pas"), ("taille", f"{len(blob)} octets"),
+                ("sha256", hashlib.sha256(blob).hexdigest()[:16] + "...")]
+        return {"id": backup_id, "blocs": [{"bloc": k, "taille": v, "date": "", "somme": ""} for k, v in rows if v]}
+
+    def restore_plan(self, backup_id, with_db=False):
+        raise _drv().DriverError("Rechargement d'un programme dans un FX : pas encore valide, utiliser GX Developer / "
+                                 "GX Works. La copie sert a comparer et a garder une trace.")
+
+    restore = restore_plan
+
+    def export_backup(self, backup_id):
+        return _drv().export_zip(self.programs, backup_id, "programme_fx")
+
+    def import_backup(self, files, note):
+        self.programs.mkdir(parents=True, exist_ok=True)
+        made, ignored = [], []
+        for name, data in files:
+            base = Path(name.replace("\\", "/")).name
+            low = base.lower()
+            if low.endswith(".zip") and data[:4] == b"PK\x03\x04":
+                with zipfile.ZipFile(io.BytesIO(data)) as z:
+                    inner = {Path(n).name: n for n in z.namelist()}
+                    if PROGRAM_FILE not in inner:
+                        ignored.append(base)
+                        continue
+                    meta = {}
+                    if "info.json" in inner:
+                        try:
+                            meta = json.loads(z.read(inner["info.json"]).decode("utf-8"))
+                        except (ValueError, UnicodeDecodeError):
+                            pass
+                    made.append(save_program_copy(self.programs, z.read(inner[PROGRAM_FILE]),
+                                                  str(meta.get("automate", "")),
+                                                  note or meta.get("note") or f"copie importee ({base})",
+                                                  str(meta.get("cible", ""))))
+            elif low.endswith(".bin") and (len(data) - PARAMETER_BYTES - 4) // 2 in (2000, 4000, 8000):
+                made.append(save_program_copy(self.programs, data, "", note or f"importe de {base}"))
+            else:
+                ignored.append(base)
+        if not made:
+            raise _drv().DriverError("Aucune copie de programme FX (.zip de cette page ou .bin de tools/mitsubishi.py)")
+        return {"id": made[-1]["id"], "comptes": ", ".join(m["comptes"] for m in made), "ignores": ignored}
 
     def status(self, plc):
         return fx_status(plc)
@@ -559,5 +702,4 @@ class FxOps:
         return delta_web.import_data_files(self.data, files, note)
 
     def __getattr__(self, name):
-        raise _drv().DriverError("Fonction pas encore disponible pour Mitsubishi FX "
-                                 "(programme : python tools/mitsubishi.py programme, lecture seule)")
+        raise _drv().DriverError("Fonction pas encore disponible pour Mitsubishi FX")

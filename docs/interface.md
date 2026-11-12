@@ -77,7 +77,9 @@ the program. Same list, download and import as the Programme tab, CSV files.
   `docs/mitsubishi.md`): Etat (CPU from D8001, RUN from M8000, error flags M8061 / M8064..M8067 with
   codes and step, scan time, clock), Diagnostic (special M / D, I/O per unit: base + expansions given
   at connection, numbered in octal), Surveillance (D / T / C / X / Y / M / S, write D T C by command 1,
-  bits by force), Donnees (D0..D511), RUN / STOP (M8035..M8037), clock (M8015 + D8013..D8019).
+  bits by force), Donnees (D0..D511), Programme (read-only copy of the program memory from 8000h: save,
+  compare by step range, export / import; no load back, refused if keyword-protected), RUN / STOP
+  (M8035..M8037), clock (M8015 + D8013..D8019).
   `tools/mitsubishi.py`: info, lire, ecrire, test-entrees, programme (read-only copy from 8000h).
   **To confirm on the PLC:** everything (frames match the documented examples), D512+ not readable yet.
 

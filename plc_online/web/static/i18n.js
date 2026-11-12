@@ -630,6 +630,15 @@ const I18N = (() => {
     "registre fichier hors de la zone reglee": "file register outside the set area",
     "erreur FROM / TO (bloc special absent ou mal numerote)": "FROM / TO error (special block missing or wrong number)",
     "autre erreur (IRET / SRET manquant, FOR / NEXT mal places)": "other error (IRET / SRET missing, FOR / NEXT misplaced)",
+    "Copie de la memoire programme (parametres + programme), en lecture seule : a garder et a comparer. Environ 1 minute. Rechargement : GX Developer / GX Works.":
+      "Copy of the program memory (parameters + program), read only: to keep and compare. About 1 minute. Loading back: GX Developer / GX Works.",
+    "Copie deja sur le PC : .zip de cette page ou .bin de tools/mitsubishi.py :": "Copy already on the PC: .zip from this page or .bin from tools/mitsubishi.py:",
+    "Importer un .zip ou un .bin": "Import a .zip or a .bin",
+    "Lecture du programme refusee par l'automate : programme protege par mot-cle (les D / M / X / Y restent lisibles)":
+      "Program read refused by the PLC: program protected by a keyword (D / M / X / Y stay readable)",
+    "Rechargement d'un programme dans un FX : pas encore valide, utiliser GX Developer / GX Works. La copie sert a comparer et a garder une trace.":
+      "Loading a program into an FX: not validated yet, use GX Developer / GX Works. The copy is for comparing and keeping a record.",
+    "parametres": "parameters",
     // short words, used inside longer texts
     "entrees": "inputs", "sorties": "outputs", "entree": "input", "sortie": "output", "voies": "channels", "voie": "channel",
     "mots": "words", "octets": "bytes", "octet": "byte", "alerte(s)": "alert(s)", "differents": "different",
@@ -686,7 +695,8 @@ const I18N = (() => {
     [/^Supprimer (.+) \?$/, "Delete $1?"],
     [/^(Erreur materiel|Erreur de parametre|Erreur de syntaxe|Erreur de structure du programme|Erreur d'execution) \(M(\d+)\) : (.*)$/,
       (m, k, n, rest) => `${{"Erreur materiel": "Hardware error", "Erreur de parametre": "Parameter error", "Erreur de syntaxe": "Syntax error", "Erreur de structure du programme": "Program structure error", "Erreur d'execution": "Runtime error"}[k]} (M${n}): ${phrases(rest.replace(/, au pas (\d+) \(D8069\)/, ", at step $1 (D8069)"))}`],
-    [/^FX1N V(.+)$/, "FX1N V$1"], [/^Bloc special n° (\d+)$/, "Special block no. $1"], [/^Extension (\d)$/, "Expansion $1"],
+    [/^FX1N V(.+)$/, "FX1N V$1"], [/^lecture du programme : (\d+) \/ (\d+) octets$/, "reading the program: $1 / $2 bytes"],
+    [/^pas (\d+)(\.\.(\d+))?$/, (m, a, r, b) => b ? `steps ${a}..${b}` : `step ${a}`], [/^Bloc special n° (\d+)$/, "Special block no. $1"], [/^Extension (\d)$/, "Expansion $1"],
     [/^Extension (\d) (entree|sortie)$/, (m, n, k) => `Expansion ${n} ${k === "entree" ? "input" : "output"}`],
     [/^Unite de base (entree|sortie)$/, (m, k) => `Base unit ${k === "entree" ? "input" : "output"}`],
     [/^(\S+) : hors de la zone lisible par le port de programmation \((.+)\)$/, (m, a, z) => `${a}: outside the area readable through the programming port (${z.replace(/ et /g, " and ")})`],
