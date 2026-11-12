@@ -91,6 +91,9 @@ function applyBrand(key) {
   family = b.famille || "s7";
   features = b.fonctions || [];
   for (const e of document.querySelectorAll("[data-fonction]")) e.hidden = !features.includes(e.dataset.fonction);
+  fillZones(key);
+  testState = {};
+  chLog = [];
   const tsx = family === "tsx";
   const fxp = family === "mitsubishi";
   $("prog-hint").textContent = fxp
@@ -231,6 +234,131 @@ function showTab(id) {
   if (id === "vue-prog") loadBackups();
   if (id === "vue-data") loadData();
   if (id === "vue-axes") startAxes(); else stopAxes();
+  if (id === "vue-test") startTest(); else stopTest();
+  if (id !== "vue-changements") stopChanges();
+}
+
+// ---- Changements: one range read again and again, changes logged ----
+
+let chTimer = null, chBusy = false, chLast = null, chLog = [];
+
+function fillZones(key) {
+  const zones = (brands[key] || {}).zones || [];
+  const sel = $("ch-zone");
+  sel.replaceChildren(...zones.map((z) => { const o = el("option", "", z); o.value = z; return o; }));
+}
+
+function stopChanges() {
+  if (chTimer) clearInterval(chTimer);
+  chTimer = null;
+  $("btn-ch").textContent = "Demarrer";
+}
+
+function toggleChanges(ev) {
+  ev.preventDefault();
+  if (chTimer) { stopChanges(); return; }
+  chLast = null;
+  $("btn-ch").textContent = "Arreter";
+  readChanges();
+  chTimer = setInterval(readChanges, 500);
+}
+
+async function readChanges() {
+  if (chBusy) return;
+  chBusy = true;
+  try {
+    const r = await api("POST", "/api/bloc", { zone: $("ch-zone").value, debut: Number($("ch-debut").value),
+                                                nombre: Number($("ch-nombre").value) });
+    const now = new Date().toLocaleTimeString("fr-FR");
+    const changed = new Set();
+    if (chLast && chLast.adresses.join() === r.adresses.join()) {
+      r.valeurs.forEach((v, i) => {
+        if (v !== chLast.valeurs[i]) {
+          chLog.unshift({ heure: now, adresse: r.adresses[i], avant: chLast.valeurs[i], apres: v });
+          changed.add(i);
+        }
+      });
+      chLog = chLog.slice(0, 1000);
+    }
+    chLast = r;
+    rows($("table-ch").tBodies[0], chLog.slice(0, 200), (c) => {
+      const tr = el("tr");
+      tr.append(cell(c.heure), cell(c.adresse, "mono"), cell(String(c.avant), "mono"), cell(String(c.apres), "mono"));
+      return tr;
+    }, "Aucun changement pour l'instant.", 4);
+    $("ch-valeurs").replaceChildren(...r.adresses.map((a, i) => {
+      const d = el("span", "es" + (changed.has(i) ? " flash" : ""), a + " = " + r.valeurs[i]);
+      return d;
+    }));
+    $("ch-msg").textContent = "Lu a " + now;
+    $("ch-msg").className = "msg";
+  } catch (e) {
+    $("ch-msg").textContent = e.message;
+    $("ch-msg").className = "msg err";
+    stopChanges();
+  } finally {
+    chBusy = false;
+  }
+}
+
+function changesCsv() {
+  const lines = ["heure;adresse;avant;apres", ...chLog.slice().reverse().map((c) => [c.heure, c.adresse, c.avant, c.apres].join(";"))];
+  const a = el("a");
+  a.href = URL.createObjectURL(new Blob([lines.join("\n") + "\n"], { type: "text/csv" }));
+  a.download = "changements_" + new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-") + ".csv";
+  a.click();
+}
+
+// ---- Test E/S: each input seen at 1 then back at 0 ----
+
+let testTimer = null, testBusy = false, testState = {};
+
+function startTest() {
+  stopTest();
+  readTest();
+  testTimer = setInterval(readTest, 200);
+}
+
+function stopTest() {
+  if (testTimer) clearInterval(testTimer);
+  testTimer = null;
+}
+
+async function readTest() {
+  if (testBusy) return;
+  testBusy = true;
+  try {
+    const r = await api("GET", "/api/entrees");
+    $("test-cablage").textContent = r.cablage || "";
+    $("test-notes").textContent = (r.notes || []).join(" ");
+    let total = 0, done = 0;
+    const missing = [];
+    $("test-unites").replaceChildren(...r.unites.map((u) => {
+      const box = el("div", "es-unite");
+      box.append(el("h4", "", u.nom));
+      const grid = el("div", "es-grille");
+      for (const e of u.entrees) {
+        let s = testState[e.adresse];
+        if (!s) s = testState[e.adresse] = { stuck: e.valeur === 1, seen: e.valeur === 1, ok: false };
+        if (e.valeur === 1) s.seen = true;
+        else { if (s.seen) s.ok = true; s.stuck = false; }
+        total += 1;
+        if (s.ok) done += 1; else missing.push(e.adresse);
+        grid.append(el("span", "es" + (e.valeur === 1 ? " on" : "") + (s.ok ? " ok" : "") + (s.stuck ? " stuck" : ""),
+                       e.adresse));
+      }
+      box.append(grid);
+      return box;
+    }));
+    $("test-compte").textContent = `${done} / ${total} entrees testees` + (missing.length && missing.length <= 24 ? " - pas vues : " + missing.join(", ") : "");
+    $("test-msg").textContent = "";
+  } catch (e) {
+    $("test-msg").textContent = e.message;
+    $("test-msg").className = "msg err";
+    stopTest();
+  } finally {
+    testBusy = false;
+  }
 }
 
 // ---- Allen-Bradley: Kinetix axes ----
@@ -1302,6 +1430,8 @@ function setConnected(connected) {
   if (!connected) {
     stopWatch();
     stopAxes();
+    stopTest();
+    stopChanges();
     $("etat-vide").hidden = false;
     for (const v of document.querySelectorAll(".vue")) v.hidden = true;
     diagLoaded = false;
@@ -1392,6 +1522,10 @@ async function init() {
   $("btn-deconnecter").addEventListener("click", disconnect);
   $("btn-diag").addEventListener("click", loadDiagnostic);
   $("btn-chercher").addEventListener("click", searchWago);
+  $("form-changements").addEventListener("submit", toggleChanges);
+  $("btn-ch-effacer").addEventListener("click", () => { chLog = []; rows($("table-ch").tBodies[0], [], null, "Aucun changement pour l'instant.", 4); });
+  $("btn-ch-csv").addEventListener("click", changesCsv);
+  $("btn-test-reset").addEventListener("click", () => { testState = {}; readTest(); });
   renderErrorObs();
   $("btn-ob-erreur").addEventListener("click", loadErrorObs);
   $("btn-auto").addEventListener("click", autoSearch);

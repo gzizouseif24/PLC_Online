@@ -309,3 +309,13 @@ a.btn { text-decoration: none; display: inline-block; }
 .ob-liste label { display: flex; gap: 8px; align-items: center; }
 
 #table-axes tr.ligne-defaut td:first-child { border-left: 3px solid var(--fault); }
+
+/* Changements / Test E/S */
+.es-grille { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 14px; }
+.es { font-family: Consolas, monospace; font-size: 13px; border: 1px solid var(--line); border-radius: 6px;
+      padding: 3px 8px; min-width: 52px; text-align: center; background: var(--surface, transparent); }
+.es.on { background: color-mix(in srgb, #e5b400 30%, transparent); border-color: #c99a00; }
+.es.ok { background: color-mix(in srgb, var(--run) 22%, transparent); border-color: var(--run); }
+.es.stuck { border-color: var(--alert-text); color: var(--alert-text); }
+.es.flash { outline: 2px solid var(--stop); }
+.es-unite h4 { margin: 12px 0 4px; }

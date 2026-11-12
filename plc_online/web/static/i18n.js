@@ -639,6 +639,26 @@ const I18N = (() => {
     "Rechargement d'un programme dans un FX : pas encore valide, utiliser GX Developer / GX Works. La copie sert a comparer et a garder une trace.":
       "Loading a program into an FX: not validated yet, use GX Developer / GX Works. The copy is for comparing and keeping a record.",
     "parametres": "parameters",
+    // Changements / Test E/S
+    "Changements": "Changes", "Test E/S": "I/O test",
+    "Relit une plage de l'automate en continu et note chaque valeur qui change, avec l'heure : pour trouver le registre d'un reglage ou suivre un defaut fugitif. Lecture seule.":
+      "Reads a range of the PLC again and again and logs every value that changes, with the time: to find the register of a setting or follow an intermittent fault. Read only.",
+    "Debut": "Start", "Nombre (max 256)": "Count (max 256)", "Demarrer": "Start", "Arreter": "Stop",
+    "Effacer le journal": "Clear the log", "Journal en .csv": "Log as .csv", "Journal": "Log",
+    "(le plus recent en haut)": "(most recent first)", "Valeurs": "Values", "Avant": "Before", "Apres": "After",
+    "Aucun changement pour l'instant.": "No change so far.",
+    "Mettre chaque entree a 1 puis la relacher : elle passe au vert. Lecture toutes les 0,2 s, rien n'est ecrit. Les unites viennent des reglages de connexion (modele de CPU et extensions).":
+      "Switch each input to 1 then release it: it turns green. Read every 0.2 s, nothing is written. The units come from the connection settings (CPU model and expansions).",
+    "Recommencer": "Start again",
+    "Gris : pas encore vue. Jaune : a 1 maintenant. Vert : vue a 1 puis a 0. Rouge : deja a 1 au depart (a relacher, ou entree en court-circuit).":
+      "Grey: not seen yet. Yellow: at 1 now. Green: seen at 1 then at 0. Red: already at 1 at the start (to release, or a shorted input).",
+    "Entrees integrees": "Built-in inputs", "Entrees d'extension": "Expansion inputs",
+    "CPU (C10, C14, C16, C32 ; vide = inconnue)": "CPU (C10, C14, C16, C32; empty = unknown)",
+    "Modele de CPU non renseigne : X0..XF affichees (C10 : X0..X5, C14 / C16 : X0..X7).": "CPU model not given: X0..XF shown (C10: X0..X5, C14 / C16: X0..X7).",
+    "Entrees 24 V DC, polarite libre sur COM (8 entrees par commun, les deux bornes COM sont reliees). Connecteur E16P : X0 X1 / X2 X3 / X4 X5 / X6 X7 / COM COM (docs/fp0r.md).":
+      "24 V DC inputs, either polarity on COM (8 inputs per common, the two COM pins are joined). E16P connector: X0 X1 / X2 X3 / X4 X5 / X6 X7 / COM COM (docs/fp0r.md).",
+    "Entrees sur le commun S/S (manuel materiel FX1N 5.1.2). NPN ou contact vers 0V : S/S relie au 24V. PNP ou contact vers +24V : S/S relie au 0V.":
+      "Inputs on the S/S common (FX1N hardware manual 5.1.2). NPN or contact to 0V: S/S to 24V. PNP or contact to +24V: S/S to 0V.",
     // short words, used inside longer texts
     "entrees": "inputs", "sorties": "outputs", "entree": "input", "sortie": "output", "voies": "channels", "voie": "channel",
     "mots": "words", "octets": "bytes", "octet": "byte", "alerte(s)": "alert(s)", "differents": "different",
@@ -695,7 +715,10 @@ const I18N = (() => {
     [/^Supprimer (.+) \?$/, "Delete $1?"],
     [/^(Erreur materiel|Erreur de parametre|Erreur de syntaxe|Erreur de structure du programme|Erreur d'execution) \(M(\d+)\) : (.*)$/,
       (m, k, n, rest) => `${{"Erreur materiel": "Hardware error", "Erreur de parametre": "Parameter error", "Erreur de syntaxe": "Syntax error", "Erreur de structure du programme": "Program structure error", "Erreur d'execution": "Runtime error"}[k]} (M${n}): ${phrases(rest.replace(/, au pas (\d+) \(D8069\)/, ", at step $1 (D8069)"))}`],
-    [/^FX1N V(.+)$/, "FX1N V$1"], [/^lecture du programme : (\d+) \/ (\d+) octets$/, "reading the program: $1 / $2 bytes"],
+    [/^FX1N V(.+)$/, "FX1N V$1"],
+    [/^(\d+) \/ (\d+) entrees testees( - pas vues : (.*))?$/, (m, a, b, r, l) => `${a} / ${b} inputs tested` + (l ? " - not seen: " + l : "")],
+    [/^Extension (\d) : type non renseigne, pas testee\.$/, "Expansion $1: type not given, not tested."],
+    [/^Extension (\d) \((.+)\)$/, "Expansion $1 ($2)"], [/^lecture du programme : (\d+) \/ (\d+) octets$/, "reading the program: $1 / $2 bytes"],
     [/^pas (\d+)(\.\.(\d+))?$/, (m, a, r, b) => b ? `steps ${a}..${b}` : `step ${a}`], [/^Bloc special n° (\d+)$/, "Special block no. $1"], [/^Extension (\d)$/, "Expansion $1"],
     [/^Extension (\d) (entree|sortie)$/, (m, n, k) => `Expansion ${n} ${k === "entree" ? "input" : "output"}`],
     [/^Unite de base (entree|sortie)$/, (m, k) => `Base unit ${k === "entree" ? "input" : "output"}`],

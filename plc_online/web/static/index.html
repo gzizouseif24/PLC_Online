@@ -91,9 +91,49 @@
         <button type="button" role="tab" class="tab" data-tab="vue-diag" aria-selected="false">Diagnostic</button>
         <button type="button" role="tab" class="tab" data-tab="vue-axes" aria-selected="false" data-fonction="axes">Axes</button>
         <button type="button" role="tab" class="tab" data-tab="vue-watch" aria-selected="false">Surveillance</button>
+        <button type="button" role="tab" class="tab" data-tab="vue-changements" aria-selected="false" data-fonction="changements">Changements</button>
+        <button type="button" role="tab" class="tab" data-tab="vue-test" aria-selected="false" data-fonction="test_entrees">Test E/S</button>
         <button type="button" role="tab" class="tab" data-tab="vue-prog" aria-selected="false" data-fonction="programme">Programme</button>
         <button type="button" role="tab" class="tab" data-tab="vue-data" aria-selected="false" data-fonction="donnees">Donnees</button>
       </nav>
+
+      <div id="vue-changements" class="vue" hidden>
+        <p class="hint">Relit une plage de l'automate en continu et note chaque valeur qui change, avec l'heure : pour
+          trouver le registre d'un reglage ou suivre un defaut fugitif. Lecture seule.</p>
+        <form id="form-changements" class="ajout" autocomplete="off">
+          <label class="field"><span>Zone</span><select id="ch-zone"></select></label>
+          <label class="field"><span>Debut</span><input id="ch-debut" type="number" min="0" value="0"></label>
+          <label class="field"><span>Nombre (max 256)</span><input id="ch-nombre" type="number" min="1" max="256" value="100"></label>
+          <button type="submit" class="btn btn-primary" id="btn-ch">Demarrer</button>
+          <button type="button" class="btn" id="btn-ch-effacer">Effacer le journal</button>
+          <button type="button" class="btn" id="btn-ch-csv">Journal en .csv</button>
+        </form>
+        <p id="ch-msg" class="msg" role="status"></p>
+        <h3>Journal <span class="hint">(le plus recent en haut)</span></h3>
+        <div class="table-wrap">
+          <table class="table" id="table-ch">
+            <thead><tr><th>Heure</th><th>Adresse</th><th>Avant</th><th>Apres</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <h3>Valeurs</h3>
+        <div id="ch-valeurs" class="es-grille"></div>
+      </div>
+
+      <div id="vue-test" class="vue" hidden>
+        <p class="hint">Mettre chaque entree a 1 puis la relacher : elle passe au vert. Lecture toutes les 0,2 s, rien
+          n'est ecrit. Les unites viennent des reglages de connexion (modele de CPU et extensions).</p>
+        <p class="hint" id="test-cablage"></p>
+        <p id="test-notes" class="msg"></p>
+        <div class="ajout">
+          <button type="button" class="btn" id="btn-test-reset">Recommencer</button>
+          <span id="test-compte" class="hint"></span>
+        </div>
+        <p id="test-msg" class="msg" role="status"></p>
+        <div id="test-unites"></div>
+        <p class="hint">Gris : pas encore vue. Jaune : a 1 maintenant. Vert : vue a 1 puis a 0. Rouge : deja a 1 au
+          depart (a relacher, ou entree en court-circuit).</p>
+      </div>
 
       <div id="vue-axes" class="vue" hidden>
         <p class="hint">Axes Kinetix lus dans l'automate (tags AXIS_CIP_DRIVE), toutes les secondes. Lecture seule :

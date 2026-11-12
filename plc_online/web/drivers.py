@@ -601,12 +601,12 @@ def import_files(folder: Path, files: list, note: str = "") -> dict:
 
 
 S7_FEATURES = ["horloge", "rack", "evenements", "db", "projet_step7", "programme", "runstop", "ob_erreur"]
-TSX_FEATURES = ["donnees", "horloge", "programme", "runstop"]
+TSX_FEATURES = ["donnees", "horloge", "programme", "runstop", "changements"]
 WAGO_FEATURES = ["chercher"]
-DELTA_FEATURES = ["donnees", "horloge"]
-FP0R_FEATURES = ["donnees", "runstop"]
+DELTA_FEATURES = ["donnees", "horloge", "changements", "test_entrees"]
+FP0R_FEATURES = ["donnees", "runstop", "changements", "test_entrees"]
 LOGIX_FEATURES = ["axes"]
-FX_FEATURES = ["donnees", "horloge", "runstop", "programme"]
+FX_FEATURES = ["donnees", "horloge", "runstop", "programme", "changements", "test_entrees"]
 
 
 def _brands():
@@ -647,6 +647,16 @@ def _brands():
 
 
 BRANDS = _brands()
+
+
+def _add_zones():
+    from plc_online.web.tools_web import BLOCK_ZONES
+    for b in BRANDS.values():
+        if b.get("famille") in BLOCK_ZONES:
+            b["zones"] = [z for z, _ in BLOCK_ZONES[b["famille"]]]
+
+
+_add_zones()
 
 
 class Session:
@@ -946,6 +956,16 @@ class Session:
             out["run"] = bool(plc.leds().get("RUN", (0, 0))[0])
             return out
         return self._call(run)
+
+    def block(self, zone, start, count) -> dict:
+        from plc_online.web import tools_web
+        family = self.family
+        return self._call(lambda plc: tools_web.read_block(family, plc, zone, int(start), int(count)))
+
+    def inputs(self) -> dict:
+        from plc_online.web import tools_web
+        family = self.family
+        return self._call(lambda plc: tools_web.inputs(family, plc))
 
     def axes(self) -> dict:
         if self.family != "logix":

@@ -25,6 +25,8 @@ JSON API:
     POST /api/cpu/arreter                      CPU to STOP
     POST /api/cpu/horloge                      CPU clock set to the PC time
     GET  /api/ports                            serial ports of the PC (TSX)
+    GET  /api/entrees                          inputs per unit (input test)
+    POST /api/bloc {zone, debut, nombre}       one range of one zone (Changements tab)
     GET  /api/axes                             Allen-Bradley: Kinetix axes (state, faults, inhibits) + history
     POST /api/panasonic/chercher {"port"}      FP0R tool port settings (speed, parity, bits, station; ~40 s)
     POST /api/wago/chercher {"ip"}             Modbus TCP devices on the PC's networks (WAGO identified)
@@ -119,6 +121,8 @@ def make_handler(session: Session):
                 return
             if path == "/api/axes":
                 return self.api(session.axes)
+            if path == "/api/entrees":
+                return self.api(session.inputs)
             if path == "/api/programme/blocs":
                 query = urllib.parse.parse_qs(self.path.partition("?")[2])
                 return self.api(lambda: session.backup_blocks((query.get("id") or [""])[0]))
@@ -145,6 +149,16 @@ def make_handler(session: Session):
                 return self.api(connect)
             if path == "/api/valeurs":
                 return self.api(lambda: session.values(list(self.read_json().get("adresses") or [])))
+            if path == "/api/bloc":
+                def block():
+                    req = self.read_json()
+                    try:
+                        start, count = int(req.get("debut") or 0), int(req.get("nombre") or 0)
+                    except (TypeError, ValueError):
+                        from plc_online.web.drivers import DriverError
+                        raise DriverError("Debut et nombre : des nombres") from None
+                    return session.block(str(req.get("zone") or ""), start, count)
+                return self.api(block)
             if path == "/api/ecrire":
                 return self.api(lambda: session.write(list(self.read_json().get("ecritures") or [])))
             if path == "/api/programme/sauvegarder":
