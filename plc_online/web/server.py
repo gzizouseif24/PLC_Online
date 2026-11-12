@@ -1,0 +1,251 @@
+"""Local web server (Python standard library only: runs in the 32-bit Python the S7 driver needs).
+
+    py -3.14-32 -m plc_online.web            then http://localhost:8000 opens in the browser
+
+JSON API:
+    GET  /api/marques       brands and their connection settings
+    POST /api/connexion     {"marque": "s7-300", "reglages": {"mpi": 2}}  -> status
+    GET  /api/etat          status of the connected PLC ({"connecte": false} if none)
+    GET  /api/diagnostic    diagnostic buffer, rack (configured vs plugged in), CPU parameters
+    POST /api/valeurs       {"adresses": ["MW10", "EB0:bin"]} -> {"valeurs": {...}, "erreurs": {...}}
+    POST /api/ecrire        {"ecritures": [{"adresse": "MW10", "valeur": "5"}]} -> old / read back
+    GET  /api/tache         progress of the long operation running (save, compare, restore)
+    GET  /api/programme/sauvegardes            program copies kept on the laptop
+    GET  /api/programme/blocs?id=...           blocks of one copy
+    POST /api/programme/sauvegarder {"note"}   copy the CPU program (background, see /api/tache)
+    POST /api/programme/comparer {"id"}        CPU vs a copy (background)
+    POST /api/programme/plan {"id", "avec_db"}  what a restore would load / leave
+    POST /api/programme/restaurer {"id", "avec_db", "supprimer_en_trop"}   (background, CPU to STOP)
+    GET  /api/programme/telecharger?id=...     one copy as a .zip
+    POST /api/programme/supprimer {"id"}       delete one copy from the PC (/api/donnees/supprimer too)
+    POST /api/programme/importer {"fichiers": [{"nom", "contenu" (base64)}], "note"}   .bin files, a .zip,
+                                               or a STEP 7 V5 project (nom = path inside the folder)
+    POST /api/programme/ob-erreur {"ob": [122, 85]}   empty error OBs the CPU lacks (background)
+    POST /api/cpu/demarrer                     CPU to RUN (warm restart)
+    POST /api/cpu/arreter                      CPU to STOP
+    POST /api/cpu/horloge                      CPU clock set to the PC time
+    GET  /api/ports                            serial ports of the PC (TSX)
+    GET  /api/axes                             Allen-Bradley: Kinetix axes (state, faults, inhibits) + history
+    POST /api/panasonic/chercher {"port"}      FP0R tool port settings (speed, parity, bits, station; ~40 s)
+    POST /api/wago/chercher {"ip"}             Modbus TCP devices on the PC's networks (WAGO identified)
+    POST /api/wago/auto                        ARP table + scan + DHCP / BootP requests heard (about 15 s)
+    POST /api/wago/donner {"carte", "mac", "ip", "ip_pc"}   give the coupler an address (DHCP / BootP)
+    POST /api/wago/balayer {"carte"}           PC in the usual networks for a scan (admin prompt)
+    GET  /api/reseau/cartes                    network adapters of the PC
+    POST /api/reseau/adresse {"carte", "ip"}   PC fixed address on that adapter (admin prompt)
+    POST /api/reseau/auto {"carte"}            adapter back to automatic (DHCP)
+    GET  /api/donnees/sauvegardes              TSX data copies (%MW, %KW)
+    POST /api/donnees/sauvegarder {"note"}     read %MW / %KW to a copy (background)
+    POST /api/donnees/plan {"id"}              how many %MW differ from the copy
+    POST /api/donnees/restaurer {"id"}         write the changed %MW back (background)
+    GET  /api/donnees/telecharger?id=...       one data copy as a .zip
+    POST /api/donnees/importer {"fichiers", "note"}   PL7 .dat or .csv
+    POST /api/deconnexion
+Errors: {"erreur": "message for the technician"} with HTTP 400 (bad request), 409 (not
+connected), 502 (the PLC did not answer), 503 (a long operation is running).
+"""
+import base64
+import json
+import mimetypes
+import urllib.parse
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+from plc_online.web.drivers import BRANDS, DriverError, Session
+
+STATIC = Path(__file__).resolve().parent / "static"
+
+
+def make_handler(session: Session):
+    class Handler(BaseHTTPRequestHandler):
+        server_version = "PLCOnline"
+
+        def log_message(self, fmt, *args):          # keep the console quiet
+            pass
+
+        def send_json(self, code, obj):
+            body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def read_json(self):
+            n = int(self.headers.get("Content-Length") or 0)
+            if n > 90 * 1024 * 1024:            # a STEP 7 project, base64
+                raise DriverError("Requete trop grosse")
+            try:
+                return json.loads(self.rfile.read(n) or b"{}")
+            except json.JSONDecodeError:
+                raise DriverError("Requete illisible") from None
+
+        def do_GET(self):
+            path = self.path.split("?", 1)[0]
+            if path == "/api/marques":
+                return self.send_json(200, BRANDS)
+            if path == "/api/etat":
+                if not session.connected:
+                    return self.send_json(200, {"connecte": False})
+                return self.api(lambda: session.status())
+            if path == "/api/diagnostic":
+                return self.api(lambda: session.diagnostic())
+            if path == "/api/tache":
+                return self.send_json(200, session.job_state())
+            if path == "/api/programme/sauvegardes":
+                return self.api(lambda: session.list_backups())
+            if path == "/api/reseau/cartes":
+                from plc_online.web.wago_web import adapters
+                return self.api(adapters)
+            if path == "/api/ports":
+                from plc_online.web.tsx_web import list_ports
+                return self.send_json(200, {"ports": list_ports()})
+            if path == "/api/donnees/sauvegardes":
+                return self.api(lambda: session.data_list())
+            if path in ("/api/programme/telecharger", "/api/donnees/telecharger"):
+                query = urllib.parse.parse_qs(self.path.partition("?")[2])
+                export = session.export_backup if path.startswith("/api/programme") else session.data_export
+                try:
+                    name, data = export((query.get("id") or [""])[0])
+                except DriverError as e:
+                    return self.send_json(400, {"erreur": str(e)})
+                self.send_response(200)
+                self.send_header("Content-Type", "application/zip")
+                self.send_header("Content-Disposition", f'attachment; filename="{name}"')
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
+            if path == "/api/axes":
+                return self.api(session.axes)
+            if path == "/api/programme/blocs":
+                query = urllib.parse.parse_qs(self.path.partition("?")[2])
+                return self.api(lambda: session.backup_blocks((query.get("id") or [""])[0]))
+            if path == "/":
+                path = "/index.html"
+            file = (STATIC / path.lstrip("/")).resolve()
+            if STATIC not in file.parents or not file.is_file():
+                return self.send_json(404, {"erreur": "Page introuvable"})
+            body = file.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", (mimetypes.guess_type(file.name)[0] or "application/octet-stream")
+                             + ("; charset=utf-8" if file.suffix in (".html", ".js", ".css") else ""))
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_POST(self):
+            path = self.path.split("?", 1)[0]
+            if path == "/api/connexion":
+                def connect():
+                    req = self.read_json()
+                    return session.connect(str(req.get("marque", "")), dict(req.get("reglages") or {}))
+                return self.api(connect)
+            if path == "/api/valeurs":
+                return self.api(lambda: session.values(list(self.read_json().get("adresses") or [])))
+            if path == "/api/ecrire":
+                return self.api(lambda: session.write(list(self.read_json().get("ecritures") or [])))
+            if path == "/api/programme/sauvegarder":
+                return self.api(lambda: session.save_program(str(self.read_json().get("note") or "")))
+            if path == "/api/programme/comparer":
+                return self.api(lambda: session.compare(str(self.read_json().get("id") or "")))
+            if path == "/api/programme/plan":
+                def plan():
+                    req = self.read_json()
+                    return session.restore_plan(str(req.get("id") or ""), bool(req.get("avec_db")))
+                return self.api(plan)
+            if path == "/api/programme/restaurer":
+                def restore():
+                    req = self.read_json()
+                    return session.restore(str(req.get("id") or ""), bool(req.get("avec_db")),
+                                           bool(req.get("supprimer_en_trop")))
+                return self.api(restore)
+            if path == "/api/wago/chercher":
+                def find():
+                    from plc_online.web.wago_web import search
+                    ip = str(self.read_json().get("ip") or "").strip()
+                    return search([ip] if ip else [])
+                return self.api(find)
+            if path in ("/api/wago/auto", "/api/wago/donner", "/api/wago/balayer", "/api/reseau/adresse",
+                        "/api/reseau/auto"):
+                from plc_online.web import wago_web
+
+                def network():
+                    req = self.read_json()
+                    card = str(req.get("carte") or "")
+                    if path == "/api/wago/auto":
+                        return wago_web.auto_search()
+                    if path == "/api/wago/donner":
+                        return wago_web.give_address(card, str(req.get("mac") or ""), str(req.get("ip") or ""),
+                                                     str(req.get("ip_pc") or ""))
+                    if path == "/api/wago/balayer":
+                        return wago_web.sweep(card)
+                    if path == "/api/reseau/adresse":
+                        return wago_web.set_pc_address(card, str(req.get("ip") or ""))
+                    return wago_web.pc_auto(card)
+                return self.api(network)
+            if path == "/api/panasonic/chercher":
+                def find_fp0r():
+                    from plc_online.web.drivers import DriverError
+                    from plc_online.web.panasonic_web import search
+                    if session.connected:
+                        raise DriverError("Deconnecter d'abord : le port COM est utilise par la connexion en cours")
+                    port = str(self.read_json().get("port") or "").strip()
+                    if not port:
+                        raise DriverError("Port COM a renseigner")
+                    return search(port)
+                return self.api(find_fp0r)
+            if path == "/api/programme/ob-erreur":
+                return self.api(lambda: session.load_error_obs(list(self.read_json().get("ob") or [])))
+            if path == "/api/cpu/demarrer":
+                return self.api(lambda: session.start_cpu())
+            if path == "/api/cpu/arreter":
+                return self.api(lambda: session.stop_cpu())
+            if path == "/api/cpu/horloge":
+                return self.api(lambda: session.set_clock())
+            if path == "/api/programme/supprimer":
+                return self.api(lambda: session.delete_backup(str(self.read_json().get("id") or "")))
+            if path == "/api/donnees/supprimer":
+                return self.api(lambda: session.data_delete(str(self.read_json().get("id") or "")))
+            if path == "/api/donnees/sauvegarder":
+                return self.api(lambda: session.data_save(str(self.read_json().get("note") or "")))
+            if path == "/api/donnees/plan":
+                return self.api(lambda: session.data_plan(str(self.read_json().get("id") or "")))
+            if path == "/api/donnees/restaurer":
+                return self.api(lambda: session.data_restore(str(self.read_json().get("id") or "")))
+            if path in ("/api/programme/importer", "/api/donnees/importer"):
+                target = session.import_backup if path.startswith("/api/programme") else session.data_import
+
+                def do_import():
+                    req = self.read_json()
+                    files = []
+                    for f in req.get("fichiers") or []:
+                        try:
+                            files.append((str(f.get("nom", "")), base64.b64decode(f.get("contenu", ""), validate=True)))
+                        except (ValueError, TypeError):
+                            raise DriverError(f"{f.get('nom', '?')} : contenu illisible") from None
+                    return target(files, str(req.get("note") or ""))
+                return self.api(do_import)
+            if path == "/api/deconnexion":
+                return self.api(lambda: (session.disconnect(), {"ok": True})[1])
+            return self.send_json(404, {"erreur": "Action inconnue"})
+
+        def api(self, action):
+            try:
+                return self.send_json(200, action())
+            except DriverError as e:
+                text = str(e)
+                code = (409 if text == "Pas connecte" else 503 if text.startswith("Operation en cours")
+                        else 502 if "Liaison" in text or "CPU" in text else 400)
+                return self.send_json(code, {"erreur": text})
+            except Exception as e:                    # never leave the page without an answer
+                return self.send_json(500, {"erreur": f"Erreur interne : {e}"})
+
+    return Handler
+
+
+def serve(port=8000, session=None, host="127.0.0.1", backups=None):
+    """Local only (127.0.0.1): the PLC is not reachable from the network through the laptop."""
+    return ThreadingHTTPServer((host, port), make_handler(session or Session(backups=backups)))

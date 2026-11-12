@@ -45,7 +45,7 @@ class FakeFp0r:
             self.dt[a] = decode_words(cmd[13:17])[0]
             reply = f"{head}$WD"
         elif cmd == "RT":
-            reply = f"{head}$RT" + "4B21" + "0120" + "0003" + "01"
+            reply = f"{head}$RT" + "46" + "27" + "16" + "81" + "00" + "00" + "0000"
         elif cmd.startswith("RP"):
             a, b = int(cmd[2:7]), int(cmd[7:12])
             steps = [self.program[i] if i < len(self.program) else 0xFFFF for i in range(a, b + 1)]
@@ -119,7 +119,7 @@ class Fp0rTests(unittest.TestCase):
 
     def test_status(self):
         s = self.plc.read_status()
-        self.assertEqual((s["model"], s["capacity_k"], s["mode"]), ("4B21", 3, "RUN"))
+        self.assertEqual((s["model"], s["version"], s["capacity_k"], s["mode"], s["remote"]), ("46", "2.7", 16, "RUN", True))
 
     def test_program_stops_at_ffff_fill(self):
         words = self.plc.read_program(5000, pause=0)

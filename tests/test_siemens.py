@@ -1,8 +1,95 @@
 """Siemens driver checks that run anywhere (the real link needs Windows + STEP 7)."""
 import ctypes
+import importlib.util
+import io
+import struct
 import unittest
+from contextlib import redirect_stdout
+from pathlib import Path
 
-from plc_online.protocols.s7 import DEFAULT_DLL, S7Error, load_dll, word_be
+from plc_online.protocols.s7 import (
+    DEFAULT_DLL, S7300, S7Error, compare_blocks, load_dll, parse_block, parse_cpu_parameters, parse_identity, parse_protection, parse_sdb1_modules,
+    parse_szl, word_be)
+
+
+def szl(szl_id, index, records):
+    """SZL answer as the manual describes it: SZL-ID, INDEX, LENTHDR, N_DR, records."""
+    size = len(records[0]) if records else 2
+    return struct.pack(">HHHH", szl_id, index, size, len(records)) + b"".join(records)
+
+
+def text(s, n):
+    return s.encode("latin-1").ljust(n, b"\x00")
+
+
+class FakeNodave:
+    """Stands in for libnodave.dll: answers daveReadSZL from a table of SZL answers,
+    built from the record layouts of Siemens manual A5E02790053-01, chapter 34."""
+
+    def __init__(self):
+        order = text("6ES7 314-6CG03-0AB0 ", 20)
+        self.lists = {
+            (0x0111, 1): szl(0x0111, 1, [struct.pack(">H", 1) + order + struct.pack(">HHH", 0, 3, 0)]),
+            (0x0111, 6): szl(0x0111, 6, [struct.pack(">H", 6) + order + struct.pack(">HHH", 0, 0x5602, 0x0600)]),
+            (0x0111, 7): szl(0x0111, 7, [struct.pack(">H", 7) + bytes(20) + struct.pack(">HHH", 0, 0x5602, 0x060B)]),
+            (0x011C, 2): szl(0x011C, 2, [struct.pack(">H", 2) + text("CPU 314C-2 DP", 32)]),
+            (0x011C, 5): szl(0x011C, 5, [struct.pack(">H", 5) + text("S C-X4U421302009", 32)]),
+            (0x0232, 4): szl(0x0232, 4, [struct.pack(">11H", 4, 1, 0, 1, 2, 0, 1, 0x1234, 0x5678, 0x9ABC, 0xDEF0)
+                                          + bytes(16)]),
+        }
+        # two diagnostic buffer entries, most recent first: DP station failure, then STOP by switch
+        self.lists[(0x00A0, 0)] = szl(0x00A0, 0, [
+            bytes.fromhex("39C4 C4 01 0001 0000 0003 0000") + bytes.fromhex("26 10 31 09 15 42 12 35"),
+            bytes.fromhex("4303 FF 84 4304 0000 0000 0000") + bytes.fromhex("26 10 31 08 59 07 00 05"),
+        ])
+        # rack 0 as on the bench: CPU slot 2, SM 321 slot 4 (inputs at 0), SM 322 slot 5 (outputs at 4)
+        rec = lambda slot, addr, typ, eastat: struct.pack(">8H", 0, slot << 8, addr, typ, typ, 0, eastat, 0x0011)
+        self.lists[(0x0D91, 0)] = szl(0x0D91, 0, [rec(2, 0x7FFF, 0x00C0, 0xB402), rec(4, 0, 0x9FC3, 0xB402),
+                                                  rec(5, 4, 0xAFC8, 0xB503)])
+        self.led_state = {1: (0, 0), 4: (1, 0), 5: (0, 0), 6: (0, 0), 8: (0, 0), 11: (0, 0)}  # no BUS2F
+        self.answer_len = 0
+        self.calls = []
+
+    def daveReadSZL(self, dc, szl_id, index, buf, buflen):
+        self.calls.append((szl_id, index))
+        if szl_id == 0x0174 and index in self.led_state:
+            data = szl(0x0174, index, [bytes([0, index]) + bytes(self.led_state[index])])
+        elif (szl_id, index) in self.lists:
+            data = self.lists[(szl_id, index)]
+        else:
+            return 0x8104            # object does not exist
+        ctypes.memmove(buf, data, len(data))
+        self.answer_len = len(data)
+        return 0
+
+    blocks = {0x42: {0: b"\x70\x70" + bytes(60), 1: bytes(range(200)), 1000: b"SDB1000" * 10}}
+
+    def daveListBlocksOfType(self, dc, kind, entries):
+        numbers = sorted(self.blocks.get(kind, {}))
+        for i, n in enumerate(numbers):
+            entries[i].number = n
+            entries[i].type[0], entries[i].type[1] = 0x30, kind
+        return len(numbers)
+
+    def daveGetProgramBlock(self, dc, kind, number, buf, length_ref):
+        data = self.blocks.get(kind, {}).get(number)
+        if data is None:
+            return 0x8104
+        ctypes.memmove(buf, data, len(data))
+        length_ref._obj.value = len(data)
+        return 0
+
+    def daveGetAnswLen(self, dc):
+        return self.answer_len
+
+    def daveStrerror(self, code):
+        return b"the desired item is not available in the PLC"
+
+
+def connected(fake):
+    plc = S7300()
+    plc.nd, plc.dc = fake, object()
+    return plc
 
 
 class SiemensTests(unittest.TestCase):
@@ -17,6 +104,314 @@ class SiemensTests(unittest.TestCase):
     def test_clear_error_outside_32bit_windows(self):
         with self.assertRaises(S7Error):
             load_dll()
+
+
+class SzlTests(unittest.TestCase):
+    def setUp(self):
+        self.fake = FakeNodave()
+        self.plc = connected(self.fake)
+
+    def test_parse_header_and_records(self):
+        index, recs = parse_szl(szl(0x0174, 4, [b"\x00\x04\x01\x00"]), 0x0174)
+        self.assertEqual((index, recs), (4, [b"\x00\x04\x01\x00"]))
+
+    def test_wrong_szl_id_is_rejected(self):
+        with self.assertRaises(S7Error):
+            parse_szl(szl(0x0111, 1, [b"\x00\x01"]), 0x0174)
+
+    def test_identity(self):
+        info = self.plc.identity()
+        self.assertEqual(info["reference"], "6ES7 314-6CG03-0AB0")
+        self.assertEqual(info["materiel"], "V2.6.0")
+        self.assertEqual(info["firmware"], "V2.6.11")
+        self.assertEqual(info["nom_module"], "CPU 314C-2 DP")
+        self.assertEqual(info["numero_serie"], "S C-X4U421302009")
+        self.assertNotIn("nom_automate", info)        # index 1 not answered: skipped
+
+    def test_identity_of_old_cpu_315_2af03(self):
+        """Raw answers from the bench CPU 315-2DP (6ES7 315-2AF03-0AB0), 31/10/2026."""
+        idx1 = bytes.fromhex("0111 0001 001c 0001 0000 3645 5337 2033 3135 2d32 4146 3033 2d30 4142 3020 00c0 0001 0000")
+        idx7 = bytes.fromhex("0111 0001 001c 0001 0007 2020 2020 2020 2020 2020 2020 2020 2020 2020 2020 00c0 5601 0200")
+        info = parse_identity(parse_szl(idx1, 0x0111)[1], 1)
+        info6 = parse_identity(parse_szl(idx1, 0x0111)[1], 6)          # index 6 answered like index 1
+        info.update(parse_identity(parse_szl(idx7, 0x0111)[1], 7))
+        self.assertEqual(info["reference"], "6ES7 315-2AF03-0AB0")
+        self.assertEqual(info["firmware"], "V1.2.0")
+        self.assertNotIn("materiel", info6)
+
+    def test_protection_of_old_cpu(self):
+        raw = bytes.fromhex("0232 0004 0028 0001 0004 0001 0000 0001 0002 0000 0000 5656 2a00 6647 0600 16d8"
+                            + "00" * 16)
+        p = parse_protection(parse_szl(raw, 0x0232)[1])
+        self.assertEqual((p["cle"], p["protection_effective"], p["sommes_valides"]), ("RUN-P", 1, False))
+        self.assertEqual(p["somme_programme"], (0x6647, 0x0600))
+
+    def test_short_record_is_skipped(self):
+        self.assertEqual(parse_identity([b"\x00\x01"]), {})
+
+    def test_leds_only_those_the_cpu_has(self):
+        leds = self.plc.leds()
+        self.assertEqual(leds["RUN"], (1, 0))
+        self.assertNotIn("BUS2F", leds)
+
+    def test_protection_and_checksums(self):
+        p = self.plc.protection()
+        self.assertEqual(p["cle"], "RUN-P")
+        self.assertEqual((p["protection_cle"], p["protection_parametree"], p["protection_effective"]), (1, 0, 1))
+        self.assertEqual(p["somme_programme"], (0x9ABC, 0xDEF0))
+        self.assertEqual(p["somme_config_materielle"], (0x1234, 0x5678))
+
+    def test_diagnostic_buffer(self):
+        d = self.plc.diagnostic_buffer()
+        self.assertEqual(len(d), 2)
+        self.assertEqual(d[0]["texte"], "Distributed I/Os: station failure, entering state")
+        self.assertEqual(d[0]["date"], "31/10/2026 09:15:42.123")
+        self.assertTrue(d[0]["entrant"])
+        self.assertEqual(d[1]["texte"], "STOP caused by stop switch being activated")
+        self.assertEqual(d[1]["classe"], "changement de mode")
+
+    def test_diagnostic_buffer_of_bench_cpu(self):
+        """First two entries read from the bench CPU 315-2DP on 31/10/2026 (CPU clock set to 2005)."""
+        raw = bytes.fromhex("00a0 0000 0014 0002"
+                            "4302 ff68 c700 0000 0b13 7713 0504 2104 0145 0095"
+                            "1381 fe64 c772 4303 0b13 7713 0504 2104 0145 0095")
+        from plc_online.protocols.s7 import parse_diag_entry
+        entries = [parse_diag_entry(r) for r in parse_szl(raw, 0x00A0)[1]]
+        self.assertEqual(entries[0]["texte"], "Mode transition from STARTUP to RUN")
+        self.assertEqual(entries[0]["date"], "21/04/2005 04:01:45.009")
+        self.assertEqual(entries[1]["texte"], "Request for manual warm restart")
+
+    def test_unknown_event_and_old_dates(self):
+        from plc_online.protocols.s7 import parse_date_and_time, parse_diag_entry
+        self.assertEqual(parse_date_and_time(bytes.fromhex("98 01 02 03 04 05 99 90")), "02/01/1998 03:04:05.999")
+        e = parse_diag_entry(bytes.fromhex("A123" + "00" * 10) + bytes.fromhex("26 10 31 00 00 00 00 00"))
+        self.assertEqual((e["texte"], e["classe"]), ("", "evenement utilisateur libre"))
+
+    def test_modules_of_bench_rack_with_wrong_config(self):
+        """Bench 31/10/2026: CPU 315-2DP, SM 321 + SM 322 plugged, HW config loaded is different."""
+        raw = bytes.fromhex("0d91 0000 0010 0003"
+                            "0000 0200 7fff 00c0 00c0 0000 b402 0011"
+                            "0000 0400 0000 afd8 9fc3 0000 b506 0011"
+                            "0000 0500 0004 afc8 0000 0000 b506 0011")
+        from plc_online.protocols.s7 import parse_module
+        mods = [parse_module(r) for r in parse_szl(raw, 0x0D91)[1]]
+        self.assertEqual(mods[0]["etat"], "ok")
+        self.assertTrue(mods[1]["different"])
+        self.assertEqual((mods[1]["type_config"], mods[1]["type_reel"]), (0xAFD8, 0x9FC3))
+        self.assertEqual(mods[1]["etat"], "TYPE DIFFERENT DE LA CONFIG, non disponible")
+
+    def test_modules(self):
+        mods = self.plc.modules()
+        self.assertEqual([(m["emplacement"], m["type"], m["adresse"]) for m in mods],
+                         [(2, "CPU", 0x7FFF), (4, "entrees", 0), (5, "sorties", 4)])
+        self.assertEqual(mods[1]["etat"], "ok")
+        self.assertEqual(mods[2]["etat"], "ERREUR (alarme de diagnostic)")
+
+    def test_list_and_upload_sdb(self):
+        self.assertEqual(self.plc.list_blocks("SDB"), [0, 1, 1000])
+        self.assertEqual(self.plc.upload_block("SDB", 1), bytes(range(200)))
+        with self.assertRaises(S7Error):
+            self.plc.upload_block("SDB", 7)
+
+    def test_no_block_of_a_type_is_an_empty_list(self):
+        self.fake.daveListBlocksOfType = lambda dc, kind, entries: -0xD20E
+        self.fake.daveStrerror = lambda code: b"no block present"
+        self.assertEqual(self.plc.list_blocks("FB"), [])
+
+    def test_unsupported_list_raises(self):
+        with self.assertRaisesRegex(S7Error, "SZL 0424"):
+            self.plc.read_szl(0x0424, 0)
+
+
+SDB_DIR = Path(__file__).resolve().parents[1] / "research" / "siemens" / "sdb"
+
+
+class SdbTests(unittest.TestCase):
+    """Real SDBs from the bench 315-2AF03: before / after fixing HW Config (31/10/2026)."""
+
+    def sdb(self, folder, n):
+        return (SDB_DIR / folder / f"SDB{n}.bin").read_bytes()
+
+    def test_block_header_and_footer(self):
+        b = parse_block(self.sdb("2_config_correcte", 1))
+        self.assertEqual((b["type"], b["numero"], b["longueur"]), (0x0B, 1, 202))
+        self.assertEqual(b["date"], "2026-10-31 10:48:29")
+        self.assertEqual(len(b["corps"]), 130)
+        self.assertEqual((b["nom"], b["somme"]), ("STEP 7", 0xA83C))
+
+    def test_padded_sdb0(self):
+        b = parse_block(self.sdb("2_config_correcte", 0))
+        self.assertEqual((b["numero"], len(b["corps"]), b["nom"]), (0, 158, "STEP 7"))
+
+    def test_sdb1_modules(self):
+        old = parse_sdb1_modules(self.sdb("1_config_fausse", 1))
+        new = parse_sdb1_modules(self.sdb("2_config_correcte", 1))
+        self.assertEqual([(m["emplacement"], m["type"], m["adresse"], m["octets"], m["code"]) for m in old],
+                         [(2, "CPU", 0x7FFF, 0, 0x00C0), (4, "sorties", 0, 4, 0xAFD8), (5, "sorties", 4, 1, 0xAFC8)])
+        self.assertEqual([(m["emplacement"], m["type"], m["adresse"], m["octets"], m["code"]) for m in new],
+                         [(2, "CPU", 0x7FFF, 0, 0x00C0), (4, "entrees", 0, 4, 0x9FC3), (5, "sorties", 4, 2, 0xAFD0)])
+
+    def test_cpu_parameters_one_change_at_a_time(self):
+        base = parse_cpu_parameters(self.sdb("2_config_correcte", 0))
+        self.assertEqual((base["surveillance_cycle_ms"], base["charge_communication"]), (150, 20))
+        self.assertNotIn("mem_cadence", base)
+        self.assertEqual(parse_cpu_parameters(self.sdb("3_cpu_cycle200", 0))["surveillance_cycle_ms"], 200)
+        self.assertEqual(parse_cpu_parameters(self.sdb("4_cpu_horloge_mb100", 0))["mem_cadence"], 100)
+        self.assertEqual(parse_cpu_parameters(self.sdb("5_cpu_remanent", 0))["remanence"], {"MB": 32, "T": 0, "Z": 8})
+        ob = parse_cpu_parameters(self.sdb("6_cpu_ob35_200", 0))["alarmes_cycliques"]
+        self.assertEqual((ob[35], ob[30], ob[38]), ((200, 0), (5000, 0), (10, 0)))
+
+    def test_not_a_block(self):
+        with self.assertRaises(S7Error):
+            parse_block(b"\x00" * 100)
+
+
+def make_block(btype, number, body, day=0x3D1C, ms=0x0251B448):
+    """S7 block laid out like the bench uploads: header, body, footer with "STEP 7"."""
+    total = 72 + len(body)
+    head = (b"\x70\x70\x03\x02\x07" + bytes([btype]) + struct.pack(">HI", number, total) + b"\x80\x00\x00\x00"
+            + struct.pack(">IH", ms, day) + bytes(6) + struct.pack(">HHI", 0, 0, len(body)))
+    foot = b"STEP 7".ljust(24) + b"\x00\x00\x12\x34" + bytes(8)
+    return head + body + foot
+
+
+class ProgramTests(unittest.TestCase):
+    def setUp(self):
+        self.ref = {("OB", 1): make_block(0x08, 1, b"\x01" * 20), ("FC", 5): make_block(0x0C, 5, b"\x02" * 10),
+                    ("DB", 10): make_block(0x0A, 10, b"\x00" * 8), ("SDB", 0): make_block(0x0B, 0, b"\x03" * 4)}
+
+    def test_block_dates_and_padding(self):
+        data = self.ref[("OB", 1)] + bytes(50)          # uploads can carry zero padding
+        b = parse_block(data)
+        self.assertEqual((b["numero"], b["longueur"], len(b["corps"]), b["somme"]), (1, 92, 20, 0x1234))
+        self.assertEqual(b["date"], "2026-10-31 10:48:29")
+
+    def test_identical(self):
+        self.assertEqual(compare_blocks(self.ref, dict(self.ref)), [])
+
+    def test_changes(self):
+        now = dict(self.ref)
+        now[("FC", 5)] = make_block(0x0C, 5, b"\x02" * 12, day=0x3D1D)
+        now[("DB", 10)] = make_block(0x0A, 10, b"\x07" * 8)    # same header, other values
+        del now[("SDB", 0)]
+        now[("FB", 2)] = make_block(0x0E, 2, b"\x05")
+        got = [(k, n, v) for k, n, v, _ in compare_blocks(self.ref, now)]
+        self.assertEqual(got, [("FB", 2, "ajoute"), ("FC", 5, "modifie"), ("DB", 10, "valeurs"),
+                               ("SDB", 0, "supprime")])
+
+
+class SiemensCliTests(unittest.TestCase):
+    def setUp(self):
+        path = Path(__file__).resolve().parents[1] / "tools" / "siemens.py"
+        spec = importlib.util.spec_from_file_location("siemens_cli", path)
+        self.cli = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.cli)
+        self.fake = FakeNodave()
+
+    def etat(self):
+        out = io.StringIO()
+        with redirect_stdout(out):
+            self.cli.cmd_etat(connected(self.fake))
+        return out.getvalue()
+
+    def test_etat_running_without_fault(self):
+        out = self.etat()
+        self.assertIn("6ES7 314-6CG03-0AB0   CPU 314C-2 DP", out)
+        self.assertIn("firmware V2.6.11", out)
+        self.assertIn("Mode       : RUN", out)
+        self.assertIn("aucun voyant de defaut allume", out)
+        self.assertIn("Cle        : RUN-P", out)
+        self.assertIn("sans mot de passe", out)
+        self.assertIn("programme 9ABC-DEF0", out)
+
+    def test_diagnostic_command(self):
+        out = io.StringIO()
+        with redirect_stdout(out):
+            self.cli.cmd_diagnostic(connected(self.fake))
+        out = out.getvalue()
+        self.assertIn("2 evenement(s)", out)
+        self.assertIn("31/10/2026 09:15:42.123  39C4  Distributed I/Os: station failure, entering state", out)
+
+    def test_modules_command(self):
+        out = io.StringIO()
+        with redirect_stdout(out):
+            self.cli.cmd_modules(connected(self.fake))
+        out = out.getvalue()
+        self.assertIn("emplacement 4   entrees  adresse 0     type 9FC3 / 9FC3   ok", out)
+        self.assertIn("!! emplacement 5   sorties  adresse 4     type AFC8 / AFC8   ERREUR", out)
+        self.assertNotIn("ne correspond pas", out)
+
+    def test_config_compares_with_rack(self):
+        sdb1 = (SDB_DIR / "1_config_fausse" / "SDB1.bin").read_bytes()
+        actual = [{"emplacement": 4, "type_reel": 0x9FC3}, {"emplacement": 5, "type_reel": 0xAFD0}]
+        out = io.StringIO()
+        with redirect_stdout(out):
+            self.cli.cmd_config(sdb1, actual)
+        out = out.getvalue()
+        self.assertIn("emplacement 4   sorties  AB0..AB3     type AFD8", out)
+        self.assertIn("!! en place : 9FC3", out)
+        self.assertIn("2 emplacement(s) different(s)", out)
+
+    def test_config_shows_cpu_parameters(self):
+        folder = SDB_DIR / "6_cpu_ob35_200"
+        out = io.StringIO()
+        with redirect_stdout(out):
+            self.cli.cmd_config((folder / "SDB1.bin").read_bytes(), sdb0=(folder / "SDB0.bin").read_bytes())
+        out = out.getvalue()
+        self.assertIn("Surveillance du cycle  : 200 ms", out)
+        self.assertIn("Memento de cadence     : MB100", out)
+        self.assertIn("Remanence              : MB0..MB31, aucune temporisation, Z0..Z7", out)
+        self.assertIn("Alarme cyclique OB35   : toutes les 200 ms", out)
+        self.assertNotIn("autres alarmes", out)
+
+    def test_config_from_backup_matches(self):
+        sdb1 = (SDB_DIR / "2_config_correcte" / "SDB1.bin").read_bytes()
+        actual = [{"emplacement": 4, "type_reel": 0x9FC3}, {"emplacement": 5, "type_reel": 0xAFD0}]
+        out = io.StringIO()
+        with redirect_stdout(out):
+            self.cli.cmd_config(sdb1, actual)
+        self.assertIn("conformes a la configuration", out.getvalue())
+
+    def test_sauvegarder_programme_then_comparer(self):
+        import tempfile
+        self.fake.blocks = {0x38: {1: make_block(0x08, 1, b"\x01" * 20)}, 0x41: {10: make_block(0x0A, 10, bytes(8))},
+                            0x42: {0: make_block(0x0B, 0, b"\x03" * 4)}}
+        with tempfile.TemporaryDirectory() as d:
+            out = io.StringIO()
+            with redirect_stdout(out):
+                self.cli.cmd_sauvegarder_programme(connected(self.fake), Path(d) / "p")
+            files = sorted(f.name for f in (Path(d) / "p").iterdir())
+            ref = self.cli.load_program(Path(d) / "p")
+        self.assertEqual(files, ["DB10.bin", "OB1.bin", "SDB0.bin", "programme.txt"])
+        self.assertIn("1 OB, 1 DB, 1 SDB", out.getvalue())
+        self.fake.blocks[0x41][10] = make_block(0x0A, 10, b"\x09" * 8)
+        out = io.StringIO()
+        with redirect_stdout(out):
+            self.cli.cmd_comparer(ref, self.cli.upload_program(connected(self.fake), progress=False), "p", "CPU")
+        self.assertIn("PROGRAMME IDENTIQUE", out.getvalue())
+        self.assertIn("1 DB avec d'autres valeurs actuelles", out.getvalue())
+
+    def test_sauvegarder_config(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            out = io.StringIO()
+            with redirect_stdout(out):
+                self.cli.cmd_sauvegarder_config(connected(self.fake), Path(d) / "cfg")
+            files = sorted(p.name for p in (Path(d) / "cfg").iterdir())
+            summary = (Path(d) / "cfg" / "resume.txt").read_text(encoding="utf-8")
+            sdb1 = (Path(d) / "cfg" / "SDB1.bin").read_bytes()
+        self.assertEqual(files, ["SDB0.bin", "SDB1.bin", "SDB1000.bin", "resume.txt"])
+        self.assertEqual(sdb1, bytes(range(200)))
+        self.assertIn("3 SDB dans la CPU : 0, 1, 1000", out.getvalue())
+        self.assertIn("emplacement 4: entrees adresse 0 type 9FC3/9FC3", summary)
+
+    def test_etat_shows_faults_and_forces(self):
+        self.fake.led_state.update({1: (1, 0), 6: (1, 0), 11: (0, 1)})
+        out = self.etat()
+        self.assertIn("!! SF", out)
+        self.assertIn("!! FRCE   FORCAGE ACTIF", out)
+        self.assertIn("!! BUS1F", out)
+        self.assertIn("(clignote)", out)
 
 
 if __name__ == "__main__":

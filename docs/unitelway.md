@@ -385,3 +385,94 @@ PC → PLC transfer, as PL7 does it (category 07):
    Unit-tested with the captured frames.
 3. Mirror test (`FA`), like the Omron `TS` echo.
 4. Read %MW, %M, then %I / %Q once the codes are confirmed.
+
+## 5u. PL7 capture of 02/11/2026 (Portmon-style log, full frames; bench TSX 3721)
+
+Sequence: PLC without application → PL7 download of a new (empty-config) application → RUN →
+animation table with %I1.0 → PC ← PLC transfer. Frames decoded with
+`research/tsx` helpers (log parsed with unitelway.Parser on each direction).
+
+- **CPU state confirmed:** READ_CPU `4F 07` → `7F 00 <state> <x> ...`, state **04 = no
+  application** (`04 08`), **01 = STOP** (`01 0A`, after the download), **02 = RUN** (`02 0B`,
+  after `24 07`). The identification answer carries the same byte: `... 08 05 04 30`,
+  `08 06 01 30`, `08 03 02 30`. Used by the web interface (Etat, mode pill).
+- `2D 07 FF FF` → same `7F` answer as `4F` (with the application name and signature once loaded).
+- RESERVE `1D 07 FF FE 32 6B`: last two bytes differ from the earlier captures (`90 36`,
+  `80 0F`): probably a session value, not the operation.
+- `92 07 0C 02 00` → `C2 0C 00 <2 bytes>` (a checksum or signature word?).
+- **Animation table (%I1.0):** PL7 does not read %I directly. It writes a request list into a
+  PLC buffer (`92 07 02 70 00 00 00 09 07 01 F9 03 68 00 94 02 02`: subcode 02 = write, segment
+  70, offset 0000, 9 bytes) and polls `92 07 01 70 00 F9 03 07` (subcode 01 = read, offset 03F9,
+  7 bytes) → `C2 01 00 00 08 00 04 02 01 00`; `93 07 04 70 00 00 00 04` → `C3 04 00` in a loop.
+  Not decodable from this capture: %I1.0 never changed and the application had **no module
+  configured**. Next capture: real modules configured in PL7, an input toggled while animated,
+  and the module debug screens.
+- No clock setting in this capture.
+
+## 5v. Second capture (02/11/2026): modules configured, DEZ unpowered
+
+Application with TSX DEZ 32D2 (positions 1-2) and TSX AEZ 414 (position 3); the first input
+module not powered, "surveillance defaut alimentation" ticked, then unticked and downloaded again.
+
+- **State byte flag 0x20 = I/O fault:** READ_CPU / identification state `21` (STOP + I/O fault)
+  while the unpowered module was monitored, `01` after the supply monitoring was unticked.
+- **Fault per rack position:** `93 07 02 68 00 04 02 10` → `C3 02 00` + 16 bytes, one per
+  position: `00 01 01 00 ...` = positions 1 and 2 (the unpowered DEZ 32D2, a 32-channel module
+  takes two positions) in fault, position 3 fine. All zeros with the empty configuration.
+  `Tsx.read_io_faults()`; to confirm on the bench by powering the module (expect all zeros).
+- **Configured modules in the application image** (EXE/CONF/BAC.BIN, end of the upload):
+  `04 00 "TSX 3721"` for the CPU, then `FF <position> "TSX DEZ 32D2" 00 ...` per position.
+  Client .stx: DEZ 32D2 at 1-2, DSZ 32R5 at 3-4. `parse_config()`.
+- Still no %I / %Q animation or clock setting in the captures.
+
+## 5w. Clock (capture of 02/11/2026 + PL7 behaviour)
+
+- A %SW written from an animation table: `92 07 02 58 00 B4 00 02 00 45` → `C2 02 00`
+  (debug memory, subcode 02 = write, segment 58, offset 0x00B4 = %SW50 → %SWn at 0x50 + 2n,
+  2 bytes, value 16#4500 = 45 s). The seconds read 45 once, then the clock's own value again:
+  %SW50..53 are refreshed from the real-time clock unless %S50 = 1.
+- Debug memory format: `92 07 <01 read | 02 write> <segment> 00 <offset lo> <offset hi> <n>
+  [data]`; read answer `C2 01 00 <data>`, write answer `C2 02 00`.
+- Implemented (`unitelway.set_clock`, `tsx.py horloge`, button on the web Etat tab): %S50 = 1
+  with WRITE_SYSTEM_BIT `11` (code from the PL7 request list; read back to check), %SW50..53 in
+  BCD with WRITE_OBJECTS `37` on the system word segment, falling back to the debug write above,
+  then %S50 = 0, clock read back. **Not run on the bench yet.**
+
+## 5x. Client TSX 37 (02/11/2026): first use on a real machine
+
+- Web interface, read-only plus clock: Etat, Diagnostic (system bits; rack with the fault per
+  position read after the `93 07 0B` retry: DEZ 32D2 at 1-2 and DSZ 08T2 at 5 in fault, DSZ 32R5
+  at 3-4 OK; %S10 = 0, %S16 = 0; %S51 = 1 clock lost; %SW96 = 0042 valid Flash backup).
+- **Clock set from the web: works** (%S50 / %SW50..53, `unitelway.set_clock`).
+- **Data save (%MW / %KW) from the web: works.**
+
+## 5y. Module status (capture on the client TSX 3722, 02/11/2026)
+
+PL7 online, hardware configuration, modules opened at positions 1 and 5:
+- **READ_STATUS_MODULE `44 07 02 00 <position>`** →
+  - position 1 (DEZ 32D2, unpowered, "alimentation ou actionneur" in PL7):
+    `74 01 03 04 00 10 09 04 00 10 09 02 02 30 FF 00` = configured type 1009, type in place 1009,
+    then a fault detail (`02 02 30 FF 00`, to decode);
+  - position 5 (DSZ 08T2 configured, nothing plugged, "module absent ou different" in PL7):
+    `74 01 02 04 00 10 1B` = configured type 101B only, no module in place.
+- Type codes are in the configuration after the 16-byte name field: `04 xx <type>`: DEZ 32D2 =
+  1009, DSZ 32R5 = 1018, DSZ 08T2 = 101B, AEZ 414 = 1064.
+- READ_IO_CHANNEL `43 07 03 00 <position> FF 01 <n> 00 00 00 00` → `73 00 01 01 00 09 00 04 80 88
+  88 88 ...` for position 1 (channel status, to decode).
+- The fault byte per position (`93 07 02 68 ...`) is 01 in both cases: it does not tell them apart.
+- RUN (`24 07`) answered FD: state stayed `21` (STOP + I/O fault), already before the module was
+  removed. Likely a RUN/STOP input configured on the unpowered DEZ (to check in PL7).
+- Deleting a module in PL7 rewrites the configuration (entry, header byte 0x12, checksum word at
+  0x2C `6B 93` → `67 93`) **and the program part** (PL7.BIN 96 bytes shorter): not reproducible
+  by the tool, left to PL7.
+- Web rack: "En place" from 44 (same type / other type / absent), state named accordingly.
+
+## 5z. Reservation left held (client TSX 3722, 02/11/2026)
+
+- After the PL7 sessions of the day, RESERVE (`1D`) answered FD to the tool although PL7 was
+  closed: a reservation left by an interrupted session. **Switching the PLC off and on freed it**;
+  the rack then read normally.
+- The 92/0A application info answer changes between two reads (`... 3B 3D ...` / `... 7B 3D ...`):
+  not usable as a cache key. The configuration is kept under `92 07 0C 02 00` / `92 07 0C 01 00`
+  (configuration / program checksums), and taken from a matching program copy on the PC when the
+  PLC cannot be reserved.

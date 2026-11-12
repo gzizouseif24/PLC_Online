@@ -149,6 +149,71 @@ def error_log_text(code: int) -> str:
     }.get(code, "voir le manuel de la CPU ou CX-Programmer")
 
 
+BAUDS = {0x00: 9600, 0x01: 300, 0x02: 600, 0x03: 1200, 0x04: 2400, 0x05: 4800, 0x06: 9600,
+         0x07: 19200, 0x08: 38400, 0x09: 57600, 0x0A: 115200}
+
+
+def _port_setup(w, base):
+    """Serial port words (W393 §7-1-2): +base mode/format, +base+1 speed, +base+3 unit number."""
+    mode_word = w[base]
+    if not mode_word >> 15:
+        return "reglages standard (Host Link, 9600 bauds, 7 bits, parite paire, 2 stop)"
+    mode = mode_word >> 8 & 0x0F
+    mode_text = {0x0: "Host Link", 0x5: "Host Link"}.get(mode, f"autre mode (code {mode:X})")
+    parity = {0: "paire", 1: "impaire", 2: "aucune"}.get(mode_word & 3, "?")
+    return (f"{mode_text}, {BAUDS.get(w[base + 1] & 0xFF, '?')} bauds, "
+            f"{8 if mode_word >> 3 & 1 else 7} bits, parite {parity}, "
+            f"{1 if mode_word >> 2 & 1 else 2} stop, unite {w[base + 3] & 0xFF}")
+
+
+# Registered I/O table (FINS 0201, area 8012): one word per slot, rack 0 first, 10 slots per
+# rack (format not in the manuals). Codes confirmed on the bench by comparing with
+# CX-Programmer's I/O table window. Add a line here for each new card seen.
+#   code: (model, kind, words of CIO used)
+IO_UNIT_CODES = {
+    0x0402: ("CJ1W-ID211", "16 entrees CC", 1),       # bench 30/10/2026
+    0x0450: ("CJ1W-OC211", "16 sorties relais", 1),   # bench 30/10/2026
+}
+SLOTS_PER_RACK = 10
+
+
+def rack_layout(table: list, first_word: int = 0) -> list:
+    """Registered I/O table words -> cards with their CIO words (allocated in slot order).
+
+    Stops allocating CIO words at the first unknown card: its size is unknown."""
+    cards, cio, known = [], first_word, True
+    for i, code in enumerate(table[:4 * SLOTS_PER_RACK]):
+        if not code:
+            continue
+        model, kind, words = IO_UNIT_CODES.get(code, (None, None, None))
+        card = {"rack": i // SLOTS_PER_RACK, "slot": i % SLOTS_PER_RACK, "code": code,
+                "model": model or f"carte inconnue (code {code:04X})", "kind": kind or "",
+                "cio": cio if known and model else None, "words": words}
+        if model and known:
+            cio += words
+        else:
+            known = False
+        cards.append(card)
+    return cards
+
+
+def decode_plc_setup(w: list) -> list:
+    """The PLC Setup settings useful for diagnostics, as (label, text) pairs.
+    Word numbers are the 'Programming Console address' of W393 §7-1-2."""
+    watch = w[209]
+    return [
+        ("Mode au demarrage (+81)", f"{w[81]:04X} (codes non detailles dans le manuel : voir CX-Programmer)"),
+        ("Attendre les unites au demarrage (+83.15)", "non" if w[83] >> 15 & 1 else "oui"),
+        ("Detection defaut pile (+128.15)", "NON (desactivee)" if w[128] >> 15 & 1 else "oui"),
+        ("Detection erreur tache d'interruption (+128.14)", "non" if w[128] >> 14 & 1 else "oui"),
+        ("Port peripherique (+144..147)", _port_setup(w, 144)),
+        ("Port RS-232C (+160..163)", _port_setup(w, 160)),
+        ("Temps de cycle minimum (+208)", f"{w[208]} ms" if w[208] else "aucun (cycle variable)"),
+        ("Temps de cycle maxi surveille (+209)",
+         f"{(watch & 0x7FFF) * 10} ms" if watch >> 15 else "1000 ms (defaut)"),
+    ]
+
+
 class HostLinkError(Exception):
     """Missing, corrupted or unexpected reply."""
 
@@ -171,11 +236,26 @@ class FinsRefused(HostLinkError):
         self.code = code
 
 
-def open_port(port: str, baud: int = 9600, timeout: float = 2.0):
-    """Open the serial port with the Host Link 'Standard' settings (7, E, 2)."""
+def open_port(port: str, baud: int = 9600, timeout: float = 2.0, wait: float = 3.0):
+    """Open the serial port with the Host Link 'Standard' settings (7, E, 2).
+
+    Windows can keep a USB serial port busy for a moment after the previous program
+    closed it ('Accès refusé'): retry for up to `wait` seconds before giving up.
+    """
+    import time
     import serial  # imported here so the rest of the module works without pyserial
 
-    return serial.Serial(port, baud, bytesize=7, parity="E", stopbits=2, timeout=timeout)
+    deadline = time.monotonic() + wait
+    while True:
+        try:
+            return serial.Serial(port, baud, bytesize=7, parity="E", stopbits=2, timeout=timeout)
+        except serial.SerialException as e:
+            busy = "denied" in str(e).lower() or "refus" in str(e).lower() or "PermissionError" in str(e)
+            if not busy or time.monotonic() > deadline:
+                raise HostLinkError(f"impossible d'ouvrir {port} : "
+                                    + ("port occupé (CX-Programmer ou une autre fenêtre ouverte dessus ?)"
+                                       if busy else str(e))) from None
+            time.sleep(0.3)
 
 
 def decode_words(hexdata: str) -> list:
@@ -224,10 +304,15 @@ class Cj1m:
 
     brand = "omron"
 
-    def __init__(self, ser, unit: int = 0, retries: int = 2):
+    def __init__(self, ser, unit: int = 0, retries: int = 2, trace: bool = False):
         self.ser = ser
         self.unit = unit
         self.retries = retries
+        self.trace = trace
+
+    def _log(self, direction: str, data: str):
+        if self.trace:
+            print(f"      {direction} {data!r}")
 
     # ---- framing ----
 
@@ -238,8 +323,10 @@ class Cj1m:
     def _exchange(self, frame: str) -> str:
         """Send one frame, return the reply as one frame (multi-frame replies are joined)."""
         self.ser.reset_input_buffer()
+        self._log("->", frame)
         self.ser.write(frame.encode("ascii"))
         reply = self.ser.read_until(b"\r").decode("ascii", "replace")
+        self._log("<-", reply)
         if not reply.endswith("\r") or reply.endswith("*\r") or len(reply) < 4:
             return reply
         # Long reply: each intermediate frame ends with FCS + CR (no '*'); a CR asks for the next.
@@ -249,8 +336,10 @@ class Cj1m:
             if xor_checksum(text) != fcs.upper():
                 raise HostLinkError(f"FCS faux dans une trame intermédiaire : {reply!r}")
             parts.append(text)
+            self._log("->", "\r")
             self.ser.write(b"\r")
             reply = self.ser.read_until(b"\r").decode("ascii", "replace")
+            self._log("<-", reply)
             if not reply:
                 raise HostLinkError("réponse en plusieurs trames : trame suivante manquante")
             if reply.endswith("*\r"):
@@ -525,6 +614,46 @@ class Cj1m:
                 break
             first += got
         return records
+
+    # ---- FINS: parameter areas (PLC Setup, I/O table) and units ----
+
+    def parameter_area(self, area: int, words: int, block: int = 200) -> list:
+        """FINS 0201 PARAMETER AREA READ (W342 §5-3-7). area: 0x8010 PLC Setup (512 words),
+        0x8012 registered I/O table (1280 words). Read-only; works in every mode."""
+        out = []
+        while len(out) < words:
+            n = min(block, words - len(out))
+            data = self.fins("0201", f"{area:04X}{len(out):04X}{n:04X}", accept=(0x1104,))
+            if len(data) < 12 or int(data[0:4], 16) != area or int(data[4:8], 16) != len(out):
+                raise HostLinkError(f"réponse 0201 inattendue : {data[:24]!r}")
+            got = decode_words(data[12:])
+            if (int(data[8:12], 16) & 0x7FFF) != len(got):
+                raise HostLinkError(f"réponse 0201 : {len(got)} mots reçus, annoncé {int(data[8:12], 16) & 0x7FFF}")
+            out += got
+            if not got or int(data[8:12], 16) & 0x8000:
+                break
+        return out
+
+    def plc_setup(self) -> list:
+        return self.parameter_area(0x8010, 512)
+
+    def io_table(self, words: int = 1280) -> list:
+        return self.parameter_area(0x8012, words)
+
+    def units(self) -> list:
+        """FINS 0502 CONNECTION DATA READ: [(unit address, model)] for the CPU, CPU Bus Units
+        (10-1F), Special I/O Units (20-7F) and Inner Board (E1). Basic I/O Units are not listed."""
+        raw = bytes.fromhex(self.fins("0502", "0019"))
+        count = raw[1] & 0x7F if len(raw) >= 2 else 0
+        units = []
+        for i in range(count):
+            r = raw[2 + 21 * i:23 + 21 * i]
+            if len(r) < 21:
+                break
+            units.append((r[0], r[1:21].split(b"\x00")[0].decode("ascii", "replace").strip()))
+        if not units:     # format not as read in W342 §5-3-16: show the raw reply to decode it
+            raise HostLinkError(f"réponse 0502 non décodée ({len(raw)} octets) : {raw.hex().upper()}")
+        return units
 
     # ---- FINS: program read (experimental) ----
 

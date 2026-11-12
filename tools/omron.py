@@ -3,6 +3,7 @@
 
     python tools/omron.py etat                          modele, mode, defauts, pile, horloge
     python tools/omron.py erreurs                       journal d'erreurs de l'automate
+    python tools/omron.py parametres [FICHIER]          reglages automate, unites, table E/S (lecture)
     python tools/omron.py lire D 100 20                 lire D100..D119   (zones : CIO W H A D T C)
     python tools/omron.py lire CIO 0 2                  entrees / sorties : mots + bits
     python tools/omron.py surveiller CIO 0 4            afficher ce qui change, bit par bit (Ctrl+C)
@@ -13,7 +14,7 @@
     python tools/omron.py sauvegarder [FICHIER]         copier le programme dans un fichier (experimental)
     python tools/omron.py comparer FICHIER              le programme a-t-il change ? (experimental)
 
-Options : --port COM6, --baud 9600, --unite 0.
+Options : --port COM6, --baud 9600, --unite 0, --trace (affiche les trames).
 Adresse aussi possible comme dans CX-Programmer : lire D100 20, surveiller W10 2.
 
 Reglages automate (rapport §4.2) : port peripherique en Host Link, 9600 7-E-2, unite 0, DIP 4 ON.
@@ -30,7 +31,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from plc_online.protocols.hostlink import (  # noqa: E402
-    AREAS, FATAL_BITS, FINS_MODES, NON_FATAL_BITS, Cj1m, FinsRefused, HostLinkError,
+    AREAS, FATAL_BITS, FINS_MODES, NON_FATAL_BITS, decode_plc_setup, rack_layout, Cj1m, FinsRefused, HostLinkError,
     PlcRefused,
     error_log_text, open_port, parse_address, signed16)
 
@@ -100,6 +101,7 @@ def cmd_etat(plc):
     except HostLinkError:
         c, source = plc.clock_area_a(), "   (lue dans A351..A354)"
     print(f"\nHorloge automate : {c['date']} {c['heure']}{source}")
+    show_cards(plc)
     n = len(read_error_log(plc)[0])
     print(f"Journal d'erreurs : {n} enregistrement(s){'  -> python tools/omron.py erreurs' if n else ''}")
 
@@ -120,6 +122,79 @@ def cmd_erreurs(plc):
     print(f"Journal d'erreurs : {len(records)} enregistrement(s)   (lu par {source})\n")
     for i, r in enumerate(records):
         print(f"   {i + 1:3d}   {r['date']}   code {r['code']:04X} / {r['code2']:04X}   {error_log_text(r['code'])}")
+
+
+def show_cards(plc):
+    """Cards of the registered I/O table, with their CIO word and its live value."""
+    try:
+        cards = rack_layout(plc.io_table(40))
+    except HostLinkError as e:
+        print(f"\nCartes : table E/S non lue ({e})")
+        return
+    print("\nCartes (table E/S enregistree) :")
+    if not cards:
+        print("   aucune carte enregistree")
+    for c in cards:
+        where = f"rack {c['rack']} emplacement {c['slot']:02d}"
+        if c["cio"] is None:
+            print(f"   {where}  {c['model']}")
+            continue
+        words = plc.read("CIO", c["cio"], c["words"])
+        for k, v in enumerate(words):
+            b = f"{v:016b}"
+            print(f"   {where}  {c['model']:<11} {c['kind']:<18} CIO {c['cio'] + k:<4}"
+                  f" = {b[0:4]} {b[4:8]} {b[8:12]} {b[12:16]}  (bits 15..0)")
+    if any(c["cio"] is None for c in cards):
+        print("   (carte inconnue : envoyer le code et le modele vu dans CX-Programmer pour l'ajouter)")
+
+
+def hexdump(words, per_line=8):
+    lines = []
+    for i in range(0, len(words), per_line):
+        chunk = words[i:i + per_line]
+        if any(chunk):
+            lines.append(f"   +{i:<5d} " + " ".join(f"{w:04X}" for w in chunk))
+    return lines
+
+
+UNIT_KINDS = [(0x00, 0x00, "CPU"), (0x10, 0x1F, "unite CPU Bus n°"), (0x20, 0x7F, "unite E/S speciale n°"),
+              (0xE1, 0xE1, "carte interne")]
+
+
+def cmd_parametres(plc, filename=None):
+    """PLC Setup, units and registered I/O table (read-only)."""
+    setup = plc.plc_setup()
+    print("Reglages automate (PLC Setup) :")
+    for label, text in decode_plc_setup(setup):
+        print(f"   {label:<48} {text}")
+
+    print("\nUnites declarees (CPU, CPU Bus, E/S speciales ; pas les cartes E/S simples) :")
+    try:
+        for addr, model in plc.units():
+            kind = next((f"{t}{addr - lo if lo else ''}" for lo, hi, t in UNIT_KINDS if lo <= addr <= hi),
+                        f"adresse {addr:02X}")
+            print(f"   {addr:02X}  {kind:<24} {model}")
+    except HostLinkError as e:
+        print(f"   non lues ({e})")
+
+    table = plc.io_table()
+    used = [i for i, w in enumerate(table) if w]
+    print(f"\nTable E/S enregistree : {len(used)} mots non nuls sur {len(table)} (format non documente,"
+          f" a comparer avec la table E/S de CX-Programmer)")
+    for c in rack_layout(table):
+        cio = f"CIO {c['cio']}" if c["cio"] is not None else "CIO ?"
+        print(f"   rack {c['rack']} emplacement {c['slot']:02d} : {c['code']:04X}  {c['model']} {c['kind']}  {cio}")
+    print("   Brut :")
+    for line in hexdump(table)[:16]:
+        print("   " + line)
+
+    filename = filename or f"omron_parametres_{time.strftime('%Y%m%d_%H%M%S')}.txt"
+    with open(filename, "w", encoding="utf-8") as f:
+        f.write(f"# date {time.strftime('%Y-%m-%d %H:%M:%S')}\n# PLC Setup (zone 8010), 512 mots, hex\n")
+        f.write("\n".join(hexdump(setup)) + "\n")
+        f.write("# Table E/S enregistree (zone 8012), 1280 mots, hex (lignes nulles omises)\n")
+        f.write("\n".join(hexdump(table)) + "\n")
+    print(f"\nCopie brute : {filename}")
 
 
 def cmd_lire(plc, area, start, count):
@@ -150,23 +225,50 @@ def confirm(question):
     return input(f"{question} (tapez OUI) > ").strip() == "OUI"
 
 
+def current_mode(plc):
+    try:
+        return FINS_MODES.get(plc.controller_status()["mode"], "?")
+    except HostLinkError:
+        return plc.status_cmode()["mode"]
+
+
+def make_writable(plc):
+    """Writes are refused in RUN (W342: end code 01). Offer MONITOR: the program keeps running.
+    Returns the mode to go back to afterwards ('RUN' or None), or False if the user declines."""
+    if current_mode(plc) != "RUN":
+        return None
+    print("L'automate est en RUN : il refuse les ecritures.")
+    if not confirm("Passer en MONITOR pour ecrire ? (le programme continue de tourner)"):
+        print("Annule, rien n'a ete ecrit.")
+        return False
+    plc.set_mode("monitor")
+    print(f"Mode : {current_mode(plc)}")
+    return "RUN"
+
+
+def back_to_run(plc, previous):
+    if previous == "RUN" and confirm("Remettre l'automate en RUN ?"):
+        plc.set_mode("run")
+        print(f"Mode : {current_mode(plc)}")
+    elif previous == "RUN":
+        print("L'automate reste en MONITOR (python tools/omron.py run pour revenir en RUN).")
+
+
 def cmd_ecrire(plc, area, addr, value):
     old = plc.read(area, addr, 1)[0]
     print(f"{area}{addr} actuel = {old} (signe {signed16(old)})")
     if not confirm(f"Ecrire {area}{addr} : {signed16(old)} -> {value} ? Machine en securite ?"):
         print("Annule, rien n'a ete ecrit.")
         return
-    try:
-        plc.write(area, addr, [value])
-    except PlcRefused as e:
-        if e.code == "01":
-            print("Refuse en mode RUN. Passer en MONITOR : python tools/omron.py monitor")
-            return
-        raise
+    previous = make_writable(plc)
+    if previous is False:
+        return
+    plc.write(area, addr, [value])
     back = plc.read(area, addr, 1)[0]
     ok = back == value & 0xFFFF
     print(f"Relu : {area}{addr} = {back} (signe {signed16(back)})  {'OK' if ok else '!! DIFFERENT'}")
     print(f"Pour revenir en arriere : python tools/omron.py ecrire {area} {addr} {signed16(old)}")
+    back_to_run(plc, previous)
 
 
 def cmd_mode(plc, mode):
@@ -255,9 +357,18 @@ def changed_runs(addrs):
     return runs
 
 
-def read_addresses(plc, area, addrs):
+def read_addresses(plc, area, addrs, show=False):
+    """Current values of the words from min(addrs) to max(addrs), with a progress counter."""
     lo, hi = min(addrs), max(addrs)
-    return dict(zip(range(lo, hi + 1), plc.read(area, lo, hi - lo + 1)))
+    values, t0 = [], time.time()
+    while lo + len(values) <= hi:
+        n = min(300, hi + 1 - lo - len(values))
+        values += plc.read(area, lo + len(values), n)
+        if show:
+            print(f"\rLecture {area} dans l'automate... {len(values)} / {hi - lo + 1} mots", end="", flush=True)
+    if show:
+        print(f"\rLecture {area} : {len(values)} mots en {time.time() - t0:.0f} s" + " " * 20)
+    return dict(zip(range(lo, hi + 1), values))
 
 
 def cmd_restaurer_donnees(plc, filename):
@@ -273,7 +384,7 @@ def cmd_restaurer_donnees(plc, filename):
         saved = {a: v for a, v in zones.get(area, {}).items() if a < AREAS[area]["size"]}
         if not saved:
             continue
-        current = read_addresses(plc, area, saved)
+        current = read_addresses(plc, area, saved, show=True)
         d = {a: v for a, v in saved.items() if current[a] != v}
         if d:
             diffs[area] = d
@@ -287,15 +398,12 @@ def cmd_restaurer_donnees(plc, filename):
     if not confirm(f"Ecrire ces {total} mots dans l'automate ? Machine en securite ?"):
         print("Annule, rien n'a ete ecrit.")
         return
-    try:
-        for area, d in diffs.items():
-            for start, length in changed_runs(d):
-                plc.write(area, start, [d[a] for a in range(start, start + length)])
-    except PlcRefused as e:
-        if e.code == "01":
-            print("Refuse en mode RUN. Passer en MONITOR (python tools/omron.py monitor) puis relancer.")
-            return
-        raise
+    previous = make_writable(plc)
+    if previous is False:
+        return
+    for area, d in diffs.items():
+        for start, length in changed_runs(d):
+            plc.write(area, start, [d[a] for a in range(start, start + length)])
     wrong = []
     for area, d in diffs.items():
         after = read_addresses(plc, area, d)
@@ -304,6 +412,7 @@ def cmd_restaurer_donnees(plc, filename):
         print(f"!! {len(wrong)} mots differents apres ecriture, premier : {wrong[0]}")
     else:
         print(f"Restauration OK : {total} mots ecrits et verifies.")
+    back_to_run(plc, previous)
 
 
 def do_upload(plc):
@@ -332,6 +441,12 @@ def cmd_sauvegarder(plc, filename=None):
 def cmd_comparer(plc, filename):
     with open(filename, "rb") as f:
         saved = f.read()
+    if filename.lower().endswith(".csv") or saved.startswith(b"# date;"):
+        print(f"{filename} est une sauvegarde de DONNEES (CSV), pas de programme.\n"
+              f"   comparer attend un fichier .cjbak (python tools/omron.py sauvegarder).\n"
+              f"   Pour les donnees : python tools/omron.py restaurer-donnees {filename} "
+              f"(montre les mots differents et demande avant d'ecrire).")
+        return
     blob = do_upload(plc)
     if blob == saved:
         print(f"IDENTIQUE : le programme de l'automate est le meme que {filename}")
@@ -369,7 +484,7 @@ def parse_target(p, cmd, args):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("commande", choices=["etat", "erreurs", "lire", "surveiller", "ecrire",
+    p.add_argument("commande", choices=["etat", "erreurs", "parametres", "lire", "surveiller", "ecrire",
                                         "run", "monitor", "programme",
                                         "sauvegarder-donnees", "restaurer-donnees", "sauvegarder", "comparer"])
     p.add_argument("args", nargs="*", help="zone, adresse, nombre ou valeur ; ou fichier")
@@ -377,6 +492,7 @@ def main():
     p.add_argument("--baud", type=int, default=9600)
     p.add_argument("--unite", type=int, default=0, help="numero d'unite Host Link")
     p.add_argument("--zones", default="D,H,W", help="sauvegarder-donnees : zones, ex. D,H,W,CIO,A")
+    p.add_argument("--trace", action="store_true", help="afficher les trames envoyees et recues")
     a = p.parse_args()
 
     if a.commande in ("lire", "surveiller", "ecrire"):
@@ -389,13 +505,18 @@ def main():
     if any(z not in AREAS for z in zones):
         p.error(f"--zones : zones possibles {' '.join(AREAS)}")
 
-    ser = open_port(a.port, a.baud)
-    plc = Cj1m(ser, a.unite)
+    try:
+        ser = open_port(a.port, a.baud)
+    except HostLinkError as e:
+        raise SystemExit(f"ECHEC : {e}")
+    plc = Cj1m(ser, a.unite, trace=a.trace)
     try:
         if a.commande == "etat":
             cmd_etat(plc)
         elif a.commande == "erreurs":
             cmd_erreurs(plc)
+        elif a.commande == "parametres":
+            cmd_parametres(plc, a.args[0] if a.args else None)
         elif a.commande == "lire":
             cmd_lire(plc, area, n1, n2)
         elif a.commande == "surveiller":

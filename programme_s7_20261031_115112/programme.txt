@@ -1,0 +1,8 @@
+date : 2026-10-31 11:51:12
+CPU  : 6ES7 315-2AF03-0AB0 firmware V1.2.0
+OB  1        114 octets  2026-10-31 11:48:42  somme D816
+SDB 0        230 octets  2026-10-31 10:48:29  somme DD16
+SDB 1        202 octets  2026-10-31 10:48:29  somme A83C
+SDB 2        356 octets  1994-01-01 00:00:00  somme 0F00
+SDB 3        142 octets  2026-10-31 10:48:29  somme 15BD
+SDB 4        160 octets  2026-10-31 10:48:29  somme 105B

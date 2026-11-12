@@ -9,6 +9,10 @@ Requirements (see README, "Siemens"):
   - SIMATIC Manager closed: only one program can own the interface.
 
 Data is big-endian and byte-addressed: MW0 = bytes 0-1, high byte first.
+
+CPU information comes from the system status lists (SSL / SZL). Formats from Siemens
+"System Software for S7-300/400, System and Standard Functions", vol. 2, chapter 34
+(A5E02790053-01, 05/2010).
 """
 import ctypes
 from pathlib import Path
@@ -25,11 +29,310 @@ AREAS = {
     "Q": 0x82,   # outputs (A)
     "M": 0x83,   # flags / merkers
     "DB": 0x84,  # data blocks
+    "C": 0x1C,   # counters (Z): start / count are counter numbers, 2 bytes each
+    "T": 0x1D,   # timers: start / count are timer numbers, 2 bytes each
 }
 
 
 class S7Error(Exception):
     """A libnodave call failed."""
+
+
+# ---- system status lists (SZL), manual chapter 34 ----
+
+def parse_szl(raw: bytes, szl_id: int):
+    """SZL answer -> (index, list of data records).
+
+    Layout: SZL-ID, INDEX, LENTHDR (bytes per record), N_DR, then the records (big-endian).
+    """
+    if len(raw) < 8:
+        raise S7Error(f"réponse SZL {szl_id:04X} trop courte : {raw.hex()}")
+    rid, index, size, count = (word_be(raw, i) for i in (0, 2, 4, 6))
+    if rid != szl_id or size == 0:
+        raise S7Error(f"réponse SZL inattendue (demandé {szl_id:04X}) : {raw[:16].hex()}")
+    body = raw[8:]
+    count = min(count, len(body) // size)
+    return index, [body[i * size:(i + 1) * size] for i in range(count)]
+
+
+def _text(b: bytes) -> str:
+    return b.split(b"\x00")[0].decode("latin-1").strip()
+
+
+def parse_identity(records: list, requested: int = 0) -> dict:
+    """SZL 0x0111 records (§34.5): index, order number (20 bytes), BGTyp, Ausbg1, Ausbg2.
+
+    Bench, CPU 315-2AF03: the record index is 0000 for index 1, and index 6 returns the
+    same record as index 1 (no "V"). So the requested index is used when the record has none,
+    and a version is only shown when it starts with "V".
+    """
+    out = {}
+    for r in records:
+        if len(r) < 28:
+            continue
+        index, a1, a2 = word_be(r, 0) or requested, word_be(r, 24), word_be(r, 26)
+        order = _text(r[2:22])
+        if order:
+            out.setdefault("reference", order)
+        if a1 >> 8 == ord("V") and index in (6, 7):
+            out["materiel" if index == 6 else "firmware"] = f"V{a1 & 0xFF}.{a2 >> 8}.{a2 & 0xFF}"
+        elif index == 1:
+            out["version_module"] = a1
+    return out
+
+
+COMPONENTS = {1: "nom_automate", 2: "nom_module", 3: "repere_installation", 5: "numero_serie"}
+
+
+def parse_component(records: list) -> dict:
+    """SZL 0x011C records (§34.10): index word, then up to 32 bytes of text."""
+    out = {}
+    for r in records:
+        if len(r) >= 4 and word_be(r, 0) & 0xFF in COMPONENTS:
+            out[COMPONENTS[word_be(r, 0) & 0xFF]] = _text(r[2:34])
+    return out
+
+
+LEDS = {1: "SF", 4: "RUN", 5: "STOP", 6: "FRCE", 8: "BAF", 11: "BUS1F", 12: "BUS2F"}
+
+
+def parse_led(records: list) -> tuple:
+    """SZL 0x0174 record (§34.20): LED id word, on (0/1), blink (0, 1 = 2 Hz, 2 = 0.5 Hz)."""
+    if not records or len(records[0]) < 4:
+        raise S7Error("état de voyant vide")
+    return records[0][2], records[0][3]
+
+
+def _bcd(b: int) -> int:
+    return (b >> 4) * 10 + (b & 0x0F)
+
+
+def parse_date_and_time(b: bytes) -> str:
+    """S7 DATE_AND_TIME, 8 bytes BCD: year, month, day, hour, minute, second, ms (3 digits), weekday."""
+    y = _bcd(b[0])
+    year = 1900 + y if y >= 90 else 2000 + y
+    ms = _bcd(b[6]) * 10 + (b[7] >> 4)
+    return f"{_bcd(b[2]):02d}/{_bcd(b[1]):02d}/{year} {_bcd(b[3]):02d}:{_bcd(b[4]):02d}:{_bcd(b[5]):02d}.{ms:03d}"
+
+
+def clock_bytes(when=None) -> bytes:
+    """10 bytes for 'set clock': 00, century, then DATE_AND_TIME (BCD; weekday 1 = Sunday)."""
+    import datetime
+    t = when or datetime.datetime.now()
+    bcd = lambda v: (v // 10) << 4 | v % 10
+    ms = t.microsecond // 1000
+    weekday = (t.isoweekday() % 7) + 1
+    return bytes([0, bcd(t.year // 100), bcd(t.year % 100), bcd(t.month), bcd(t.day), bcd(t.hour),
+                  bcd(t.minute), bcd(t.second), bcd(ms // 10), (ms % 10) << 4 | weekday])
+
+
+def parse_diag_entry(r: bytes) -> dict:
+    """Diagnostic buffer entry, SZL 0x00A0 (§34.29): event ID, 5 words of info, DATE_AND_TIME."""
+    from .s7_events import EVENT_CLASSES, event_details, event_text
+    event = word_be(r, 0)
+    return {
+        "details": event_details(event, bytes(r[2:12])),
+        "id": event,
+        "classe": EVENT_CLASSES.get(event >> 12, f"classe {event >> 12:X}"),
+        "texte": event_text(event),
+        "entrant": bool(event >> 8 & 1),      # bit 8: event entering (1) / leaving (0) state
+        "info": r[2:12].hex(" ").upper(),
+        "date": parse_date_and_time(r[12:20]),
+    }
+
+
+IO_KIND = {0xB4: "entrees", 0xB5: "sorties", 0xFF: "interface DP externe"}
+
+
+def parse_module(r: bytes) -> dict:
+    """Module status record, SZL 0x0D91 (§34.23): adr1, adr2, logadr, solltyp, isttyp,
+    reserved, eastat, ber_bgbr (8 words).
+
+    The manual says solltyp / isttyp are for PROFINET only, but the bench CPU 315-2AF03 fills
+    them for its central rack: configured type vs type of the module actually plugged in.
+    """
+    adr1, adr2, logadr, eastat, ber = word_be(r, 0), word_be(r, 2), word_be(r, 4), word_be(r, 12), word_be(r, 14)
+    expected, actual = word_be(r, 6), word_be(r, 8)
+    mismatch = logadr != 0x7FFF and expected and actual and expected != actual
+    status = []
+    if mismatch:
+        status.append("TYPE DIFFERENT DE LA CONFIG")
+    if eastat & 0x01:
+        status.append("ERREUR (alarme de diagnostic)")
+    if eastat & 0x04:
+        status.append("non disponible" if eastat & 0x02 else "ABSENT")
+    if eastat & 0x08:
+        status.append("desactive")
+    if eastat & 0x10:
+        status.append("ERREUR STATION")
+    if not status:
+        status.append("ok" if eastat & 0x02 else "?")
+    return {
+        "rack": adr1, "emplacement": adr2 >> 8, "adresse": logadr,
+        "type": "CPU" if logadr == 0x7FFF else IO_KIND.get(eastat >> 8, f"code {eastat >> 8:02X}"),
+        "etat": ", ".join(status), "present": bool(eastat & 0x02), "brut": r.hex(" ").upper(),
+        "type_config": expected, "type_reel": actual, "different": bool(mismatch),
+        "largeur": ber & 0x07,
+    }
+
+
+KEY_SWITCH = {1: "RUN", 2: "RUN-P", 3: "STOP", 4: "MRES", 0: "inconnue"}
+
+
+def parse_protection(records: list) -> dict:
+    """SZL 0x0232 index 4 record (§34.18): protection levels, key switch, checksums."""
+    if not records or len(records[0]) < 22:
+        raise S7Error("protection : enregistrement trop court")
+    w = [word_be(records[0], i) for i in range(0, 22, 2)]   # index + 10 words used
+    return {
+        "protection_cle": w[1], "protection_parametree": w[2], "protection_effective": w[3],
+        "cle": KEY_SWITCH.get(w[4], f"code {w[4]}"),
+        "sommes_valides": bool(w[6]),
+        # checksums are in Intel format (low byte first): kept as read, only compared
+        "somme_config_materielle": (w[7], w[8]),
+        "somme_programme": (w[9], w[10]),
+    }
+
+
+# libnodave block types (nodave.h)
+def _block_date(b: bytes) -> str:
+    """S7 block timestamp: 4 bytes ms since midnight + 2 bytes days since 1984-01-01."""
+    import datetime
+    ms, days = int.from_bytes(b[0:4], "big"), int.from_bytes(b[4:6], "big")
+    t = datetime.datetime(1984, 1, 1) + datetime.timedelta(days=days, milliseconds=ms)
+    return t.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def parse_block(data: bytes) -> dict:
+    """Uploaded S7 block: 36-byte header, body, 36-byte footer (bench SDBs, 31/10/2026).
+    Header: 70 70, block type at 5 (08 OB, 0A DB, 0B SDB, 0C FC, 0E FB), number at 6, total
+    length at 8 (the upload can be longer: zero padding), code timestamp at 16, interface
+    timestamp at 22. Footer: 24-byte name ("STEP 7" or author / family / name), checksum at 26."""
+    if len(data) < 72 or data[0:2] != b"\x70\x70":
+        raise S7Error("bloc S7 non reconnu (en-tete 70 70 absent)")
+    total = int.from_bytes(data[8:12], "big")
+    if not 72 <= total <= len(data):
+        raise S7Error(f"bloc S7 tronque ({len(data)} octets, {total} annonces)")
+    footer = data[total - 36:total]
+    return {
+        "type": data[5], "numero": word_be(data, 6), "longueur": total,
+        "date": _block_date(data[16:22]), "date_interface": _block_date(data[22:28]),
+        "corps": data[36:total - 36],
+        "nom": footer[:24].decode("latin-1").strip(" \x00"), "somme": word_be(footer, 26),
+    }
+
+
+SDB1_DIRECTION = {0x01: "entrees", 0x81: "sorties"}
+
+
+def parse_sdb1_modules(data: bytes) -> list:
+    """Module list of the central rack, from SDB 1 (decoded by comparing two bench configs).
+    Body: 24 bytes, module count (word), then 10 bytes per module: logical address (2),
+    28, 20 (?), 20 + slot, 00, bytes used, 01 input / 81 output, type code (2)."""
+    body = parse_block(data)["corps"]
+    if len(body) < 26:
+        raise S7Error("SDB 1 trop court")
+    count = word_be(body, 24)
+    mods = []
+    for i in range(count):
+        e = body[26 + 10 * i:36 + 10 * i]
+        if len(e) < 10 or e[2] != 0x28:
+            raise S7Error(f"SDB 1 : format inconnu a l'entree {i + 1} ({e.hex(' ')})")
+        logadr = word_be(e, 0)
+        cpu = logadr == 0x7FFF
+        mods.append({
+            "emplacement": e[4] & 0x1F, "adresse": logadr, "octets": e[6],
+            "type": "CPU" if cpu else SDB1_DIRECTION.get(e[7], f"code {e[7]:02X}"),
+            "code": word_be(e, 8), "brut": e.hex(" ").upper(),
+        })
+    return mods
+
+
+def compare_blocks(ref: dict, now: dict) -> list:
+    """Compare two block sets {("OB", 1): bytes}. Returns (kind, number, verdict, detail) for
+    every block that is not identical. A DB with the same header but other bytes only holds
+    other current values: reported apart, it is not a program change."""
+    out = []
+    for key in sorted(set(ref) | set(now), key=lambda k: (PROGRAM_KINDS.index(k[0]) if k[0] in PROGRAM_KINDS else 9, k[1])):
+        a, b = ref.get(key), now.get(key)
+        if a == b:
+            continue
+        if a is None:
+            out.append((*key, "ajoute", ""))
+            continue
+        if b is None:
+            out.append((*key, "supprime", ""))
+            continue
+        try:
+            ia, ib = parse_block(a), parse_block(b)
+        except S7Error:
+            out.append((*key, "modifie", "format non reconnu"))
+            continue
+        same_header = (ia["longueur"], ia["date"], ia["date_interface"]) == \
+                      (ib["longueur"], ib["date"], ib["date_interface"])
+        if key[0] == "DB" and same_header:
+            out.append((*key, "valeurs", "valeurs actuelles differentes, structure identique"))
+        else:
+            out.append((*key, "modifie", f"{ia['date']} -> {ib['date']}, {ia['longueur']} -> {ib['longueur']} octets"))
+    return out
+
+
+def parse_sdb0_records(data: bytes) -> dict:
+    """SDB 0 = CPU parameters. The body starts with dword-at-32 bytes of records
+    [length][id][data...] (length counts both header bytes); then a table not decoded yet.
+    A record is only present when its tab differs from the CPU defaults (bench 31/10/2026)."""
+    block = parse_block(data)
+    body, n = block["corps"], int.from_bytes(data[32:36], "big")
+    records, i = {}, 0
+    while i + 2 <= min(n, len(body)):
+        size = body[i]
+        if size < 2:
+            break
+        records[body[i + 1]] = body[i + 2:i + size]
+        i += size
+    return records
+
+
+def parse_cpu_parameters(data: bytes) -> dict:
+    """Known SDB 0 records, decoded by changing one HW Config setting at a time (bench 31/10):
+    02 cycle (comm load %, scan cycle monitoring ms), 06 retentive memory (MB, T, C),
+    07 clock memory (on, MB), 0D cyclic interrupts (OB30..OB38: interval ms, phase ms)."""
+    rec = parse_sdb0_records(data)
+    p = {"inconnus": sorted(k for k in rec if k not in (0x02, 0x06, 0x07, 0x0D))}
+    r = rec.get(0x02)
+    if r and len(r) >= 4:
+        p["charge_communication"] = r[0]
+        p["surveillance_cycle_ms"] = word_be(r, 2)
+    r = rec.get(0x06)
+    if r and len(r) >= 6:
+        p["remanence"] = {"MB": word_be(r, 0), "T": word_be(r, 2), "Z": word_be(r, 4)}
+    r = rec.get(0x07)
+    if r and len(r) >= 4:
+        p["mem_cadence"] = word_be(r, 2) if word_be(r, 0) else None
+    r = rec.get(0x0D)
+    if r:
+        p["alarmes_cycliques"] = {30 + r[k] - 7: (word_be(r, k + 2), word_be(r, k + 4))
+                                  for k in range(0, len(r) - 5, 6)}
+    return p
+
+
+PROGRAM_KINDS = ["OB", "FB", "FC", "DB", "SDB"]     # what a full program backup holds
+
+
+BLOCK_TYPES = {"OB": 0x38, "DB": 0x41, "SDB": 0x42, "FC": 0x43, "SFC": 0x44, "FB": 0x45, "SFB": 0x46}
+UPLOAD_BUFFER = 256 * 1024    # daveGetProgramBlock does not check the buffer size
+
+
+class _BlockEntry(ctypes.Structure):
+    """daveBlockEntry (nodave.h): number already swapped to PC byte order by libnodave."""
+    _fields_ = [("number", ctypes.c_ushort), ("type", ctypes.c_ubyte * 2)]
+
+
+class _PDU(ctypes.Structure):
+    """PDU helper of nodave.h: pointers into the received PDU."""
+    _fields_ = [("header", ctypes.c_void_p), ("param", ctypes.c_void_p), ("data", ctypes.c_void_p),
+                ("udata", ctypes.c_void_p), ("hlen", ctypes.c_int), ("plen", ctypes.c_int),
+                ("dlen", ctypes.c_int), ("udlen", ctypes.c_int)]
 
 
 class _OSserial(ctypes.Structure):
@@ -47,6 +350,7 @@ def load_dll(path=DEFAULT_DLL):
     nd.daveNewInterface.restype = ctypes.c_void_p
     nd.daveNewConnection.restype = ctypes.c_void_p
     nd.daveStrerror.restype = ctypes.c_char_p
+    nd.daveGetAnswLen.restype = ctypes.c_int
     return nd
 
 
@@ -55,13 +359,17 @@ def word_be(data: bytes, offset: int) -> int:
     return (data[offset] << 8) | data[offset + 1]
 
 
+def _quiet(msg):
+    pass
+
+
 class S7300:
     """Connection to one S7-300 CPU. Use as a context manager."""
 
     def __init__(self, mpi: int = 2, rack: int = 0, slot: int = 2, dll=DEFAULT_DLL, log=None):
         self.mpi, self.rack, self.slot = mpi, rack, slot
         self.dll_path = dll
-        self.log = log or (lambda msg: None)
+        self.log = log or _quiet
         self.nd = None
         self.handle = -1
         self.dc = None
@@ -71,6 +379,8 @@ class S7300:
 
     def open(self):
         self.nd = nd = load_dll(self.dll_path)
+        if self.log is _quiet:
+            nd.daveSetDebug(0)          # libnodave prints its own debug lines otherwise
 
         h = nd.openS7online(b"S7ONLINE", None)
         self.log(f"1. openS7online  -> {h}")
@@ -98,12 +408,181 @@ class S7300:
         return self
 
     def read_bytes(self, area: str, start: int, count: int, db: int = 0) -> bytes:
-        """Read `count` bytes from an area ("I", "Q", "M" or "DB" with db=number)."""
-        buf = ctypes.create_string_buffer(count)
+        """Read `count` bytes from an area ("I", "Q", "M" or "DB" with db=number).
+        For "T" / "C", `count` timers or counters: 2 bytes each."""
+        size = 2 * count if area in ("T", "C") else count
+        buf = ctypes.create_string_buffer(size)
         r = self.nd.daveReadBytes(self.dc, AREAS[area], db, start, count, buf)
         if r != 0:
-            raise S7Error(f"lecture {area}{db or ''} octets {start}..{start + count - 1} : {self._err(r)}")
-        return buf.raw
+            raise S7Error(f"lecture {area}{db or ''} {start}..{start + count - 1} : {self._err(r)}")
+        return buf.raw[:size]
+
+    def write_bytes(self, area: str, start: int, data: bytes, db: int = 0):
+        buf = ctypes.create_string_buffer(bytes(data), len(data))
+        r = self.nd.daveWriteBytes(self.dc, AREAS[area], db, start, len(data), buf)
+        if r != 0:
+            raise S7Error(f"ecriture {area}{db or ''} octet {start} : {self._err(r)}")
+
+    def write_bit(self, area: str, byte: int, bit: int, value: int, db: int = 0):
+        buf = ctypes.create_string_buffer(bytes([1 if value else 0]), 1)
+        r = self.nd.daveWriteBits(self.dc, AREAS[area], db, byte * 8 + bit, 1, buf)
+        if r != 0:
+            raise S7Error(f"ecriture {area}{db or ''} {byte}.{bit} : {self._err(r)}")
+
+    def userdata(self, group: int, subfunction: int, data) -> bytes:
+        """User data request (as daveReadSZL does), returns the user data of the answer.
+        data=None sends the 'no data' item libnodave uses for read-only requests (clock read)."""
+        pa = (ctypes.c_ubyte * 8)(0x00, 0x01, 0x12, 0x04, 0x11, 0x40 | group, subfunction, 0x00)
+        pdu = _PDU()
+        self.log(f"   userdata groupe {group} fonction {subfunction:02X} -> {bytes(data or b'').hex(' ')}")
+        if data is None:
+            r = self.nd.daveBuildAndSendPDU(self.dc, ctypes.byref(pdu), pa, 8, None, 1)
+        else:
+            ud = (ctypes.c_ubyte * max(len(data), 1))(*data)
+            r = self.nd.daveBuildAndSendPDU(self.dc, ctypes.byref(pdu), pa, 8, ud, len(data))
+        if r != 0:
+            raise S7Error(f"fonction {group}/{subfunction:02X} refusee : {self._err(r)} ({r:04X})")
+        answer = ctypes.string_at(pdu.udata, pdu.udlen) if pdu.udata and pdu.udlen > 0 else b""
+        self.log(f"   reponse {len(answer)} octets : {answer.hex(' ')}")
+        return answer
+
+    def read_clock(self) -> str:
+        """CPU clock (user data group 7 'time', function 1, as libnodave daveReadPLCTime):
+        2 bytes, then DATE_AND_TIME."""
+        answer = self.userdata(7, 0x01, None)
+        if len(answer) < 10:
+            raise S7Error(f"horloge : reponse trop courte ({answer.hex(' ')})")
+        return parse_date_and_time(answer[2:10])
+
+    def set_clock(self, when=None):
+        """Set the CPU clock (group 7, function 2, as daveSetPLCTime) to `when` (default: now)."""
+        self.userdata(7, 0x02, clock_bytes(when))
+
+    def forces(self) -> list:
+        """Active force jobs: [(sequence number, [(address, value bytes)])]. Read only."""
+        from plc_online.protocols import s7_forces as f
+        _, data = f.split_tis_answer(self.userdata(f.TIS_GROUP, f.SUB_READ_JOB_LIST,
+                                                   f.tis_request(data=bytes(4))))
+        jobs = f.parse_job_list(data)
+        self.log(f"   taches : {[(f.JOB_NAMES.get(fn, hex(fn)), seq) for fn, seq in jobs]}")
+        out = []
+        for function, seq in jobs:
+            if function != f.SUB_FORCE:
+                continue
+            answer = self.userdata(f.TIS_GROUP, f.SUB_READ_JOB, f.tis_request(data=bytes([function, seq])))
+            out.append((seq, f.parse_force_job(answer)))
+        return out
+
+    def stop(self):
+        r = self.nd.daveStop(self.dc)
+        if r != 0:
+            raise S7Error(f"passage en STOP refuse : {self._err(r)}")
+
+    def start(self):
+        """Warm restart (as the RUN-P switch / STEP 7 'Start')."""
+        r = self.nd.daveStart(self.dc)
+        if r != 0:
+            raise S7Error(f"demarrage refuse : {self._err(r)}")
+
+    def is_running(self) -> bool:
+        return bool(self.leds().get("RUN", (0, 0))[0])
+
+    def download_sequence(self):
+        """Raw PDU exchange for block download / delete (plc_online.protocols.s7_download)."""
+        from plc_online.protocols.s7_download import S7OnlineChannel, Sequence
+        return Sequence(S7OnlineChannel(self.handle, log=self.log), log=self.log)
+
+    def read_vars(self, variables) -> dict:
+        """{Var: bytes} for watch table variables (plc_online.protocols.s7_vars), grouped
+        into as few reads as possible. A refused read gives None for its variables."""
+        from plc_online.protocols.s7_vars import plan_reads, split_values
+        out = {}
+        for read in plan_reads(variables):
+            area, db, start, count, vs = read
+            try:
+                out.update(split_values(read, self.read_bytes(area, start, count, db)))
+            except S7Error as e:
+                self.log(f"   {e}")
+                out.update({v: None for v in vs})
+        return out
+
+    def write_var(self, var, data: bytes):
+        if var.bit is not None:
+            self.write_bit(var.area, var.start, var.bit, data[0], var.db)
+        else:
+            self.write_bytes(var.area, var.start, data, var.db)
+
+    def read_szl(self, szl_id: int, index: int = 0):
+        """Read one system status list. Returns (index, list of data records)."""
+        buf = ctypes.create_string_buffer(4096)
+        r = self.nd.daveReadSZL(self.dc, szl_id, index, buf, len(buf))
+        if r != 0:
+            raise S7Error(f"lecture SZL {szl_id:04X} index {index:04X} : {self._err(r)}")
+        n = self.nd.daveGetAnswLen(self.dc)
+        raw = buf.raw[:n if 0 < n <= len(buf) else len(buf)]
+        self.log(f"   SZL {szl_id:04X} index {index:04X} -> {n} octets : {raw[:48].hex(' ')}")
+        return parse_szl(raw, szl_id)
+
+    def identity(self) -> dict:
+        info = {}
+        for index in (1, 6, 7):
+            try:
+                info.update(parse_identity(self.read_szl(0x0111, index)[1], index))
+            except S7Error:
+                pass
+        for index in COMPONENTS:
+            try:
+                info.update(parse_component(self.read_szl(0x011C, index)[1]))
+            except S7Error:
+                pass
+        if not info:
+            raise S7Error("identification de la CPU non lue (SZL 0111 / 011C)")
+        return info
+
+    def leds(self) -> dict:
+        """{LED name: (on, blink)} for the LEDs this CPU has."""
+        out = {}
+        for led_id, name in LEDS.items():
+            try:
+                out[name] = parse_led(self.read_szl(0x0174, led_id)[1])
+            except S7Error:
+                pass
+        return out
+
+    def protection(self) -> dict:
+        return parse_protection(self.read_szl(0x0232, 4)[1])
+
+    def list_blocks(self, kind: str) -> list:
+        """Numbers of the blocks of one type in the CPU ("SDB", "OB", "FC"...)."""
+        entries = (_BlockEntry * 2048)()
+        n = self.nd.daveListBlocksOfType(self.dc, BLOCK_TYPES[kind], entries)
+        self.log(f"   liste {kind} -> {n}")
+        if n < 0:
+            text = self._err(-n)
+            if "no block" in text.lower():      # bench 31/10: CPU without FB answers "no block present"
+                return []
+            raise S7Error(f"liste des blocs {kind} : {text}")
+        return sorted(entries[i].number for i in range(min(n, len(entries))))
+
+    def upload_block(self, kind: str, number: int) -> bytes:
+        """Upload one block as the CPU stores it (what STEP 7 gets with 'upload to PG')."""
+        buf = ctypes.create_string_buffer(UPLOAD_BUFFER)
+        length = ctypes.c_int(0)
+        r = self.nd.daveGetProgramBlock(self.dc, BLOCK_TYPES[kind], number, buf, ctypes.byref(length))
+        self.log(f"   upload {kind}{number} -> {r}, {length.value} octets")
+        if r != 0:
+            raise S7Error(f"chargement {kind} {number} : {self._err(r)}")
+        if not 0 <= length.value <= UPLOAD_BUFFER:
+            raise S7Error(f"chargement {kind} {number} : longueur invalide {length.value}")
+        return buf.raw[:length.value]
+
+    def modules(self, rack: int = 0) -> list:
+        """Modules of a rack with their slot, first address and state (SZL 0x0D91)."""
+        return [parse_module(r) for r in self.read_szl(0x0D91, rack)[1] if len(r) >= 16]
+
+    def diagnostic_buffer(self) -> list:
+        """Diagnostic buffer entries, most recent first (S7-300: as many as set in HW Config)."""
+        return [parse_diag_entry(r) for r in self.read_szl(0x00A0, 0)[1] if len(r) >= 20]
 
     def close(self):
         if self.nd is None:

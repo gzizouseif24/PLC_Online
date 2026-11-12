@@ -1,0 +1,12 @@
+date : 2026-10-31 12:03:33
+CPU  : 6ES7 315-2AF03-0AB0 firmware V1.2.0
+SDB 0         460 octets  sha256 8d2618214372473f
+SDB 1         202 octets  sha256 00d20f93bbe0620d
+SDB 2         578 octets  sha256 a71cb509561a3355
+SDB 3         142 octets  sha256 82f24da0703a3d5e
+SDB 4         160 octets  sha256 4a4a2c20563b2e32
+
+Modules (SZL 0D91, type configure / reel) :
+   emplacement 2: CPU adresse 32767 type 00C0/00C0 ok
+   emplacement 4: entrees adresse 0 type 9FC3/9FC3 ok
+   emplacement 5: sorties adresse 4 type AFD0/AFD0 ok

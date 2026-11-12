@@ -39,8 +39,16 @@ class FakeCj1m:
         self.program_unit = 2          # bytes per program address
         self.errors = [(0x80C0, 0, (26, 10, 30, 14, 5, 7)), (0x4105, 0, (26, 10, 30, 14, 6, 0))]
         self.corrupt_next = 0
-        self.fa_end_code = False   # True: '@00FA00...' variant seen in some documents
+        self.fa_end_code = True    # bench CJ1M: '@00FA00 40...' (False: W342 diagram, no end code)
         self.battery = True
+        self.setup = [0] * 512
+        self.setup[128] = 0x8000              # battery errors not detected
+        self.setup[144] = 0x8000              # peripheral port: PLC Setup, Host Link, 7 bits, 2 stop, even
+        self.io_table = [0] * 1280
+        self.io_table[0:2] = [0x0402, 0x0450]       # bench: CJ1W-ID211, CJ1W-OC211
+        self.io_table[746:778] = [0x2020] * 32
+        self.io_table[988:990] = [0xBBBB, 0x0003]
+        self.unit_list = [(0x00, b"CJ1M_CPU11")]
         self.end_code = "00"
         self.cut_to = None   # return fewer words than asked
         self.requests = []
@@ -68,7 +76,7 @@ class FakeCj1m:
             if self.end_code != "00":
                 raise Refuse(self.end_code)
             answer = self.answer(header, text)
-            # W342 §3-5-3: no Host Link end code after 'FA' (unless fa_end_code is set)
+            # bench CJ1M sends '00' after 'FA'; the W342 §3-5-3 diagram shows none
             reply += answer if header == "FA" and not self.fa_end_code else "00" + answer
         except Refuse as e:
             reply += str(e)
@@ -139,6 +147,20 @@ class FakeCj1m:
             for i, w in enumerate(decode_words(p[12:])):
                 self.mem[area][addr + i] = w
             return 0, ""
+        if cmd == "0201":
+            area, start, count = int(p[0:4], 16), int(p[4:8], 16), int(p[8:12], 16)
+            table = {0x8010: self.setup, 0x8012: self.io_table}[area]
+            words = table[start:start + count]
+            last = 0x8000 if start + len(words) >= len(table) else 0
+            code = 0x1104 if start + count > len(table) else 0
+            return code, f"{area:04X}{start:04X}{len(words) | last:04X}" + "".join(f"{w:04X}" for w in words)
+        if cmd == "0502":
+            first, count = int(p[0:2], 16), int(p[2:4], 16)
+            units = [u for u in self.unit_list if u[0] >= first][:count]
+            raw = bytes([first, len(units) | 0x80])
+            for addr, model in units:
+                raw += bytes([addr]) + model.ljust(20, b" ")
+            return 0, raw.hex().upper()
         if cmd == "0501":
             return 0, (b"CJ1M-CPU12".ljust(20, b" ") + b"02.00".ljust(20, b" ") + bytes(40)).hex().upper()
         if cmd == "0601":
@@ -286,8 +308,8 @@ class OmronTests(unittest.TestCase):
         self.assertTrue(s["pile_presente"])
         self.assertEqual(s["message"], "DEFAUT CONVOYEUR")
 
-    def test_fa_reply_with_end_code_is_accepted_too(self):
-        self.fake.fa_end_code = True
+    def test_fa_reply_as_drawn_in_the_manual_is_accepted_too(self):
+        self.fake.fa_end_code = False
         self.assertEqual(self.plc.read("W", 0, 1), [0])
         self.assertEqual(self.plc.status()["mode"], "RUN")
 
@@ -330,6 +352,13 @@ class OmronTests(unittest.TestCase):
         self.assertEqual(error_log_text(0x80C0), "erreur bus E/S")
         self.assertEqual(error_log_text(0x4105), "FAL 5")
 
+    def test_parameter_area_is_read_in_blocks(self):
+        self.fake.setup[511] = 0x1234
+        setup = self.plc.plc_setup()
+        self.assertEqual(len(setup), 512)
+        self.assertEqual(setup[511], 0x1234)
+        self.assertEqual(len(self.plc.io_table()), 1280)
+
     # program
     def test_program_read(self):
         for unit in (1, 2, 4):
@@ -348,6 +377,44 @@ class OmronTests(unittest.TestCase):
         for bad in ("D100.1", "W1.16", "X5", "W600"):
             with self.assertRaises(ValueError):
                 parse_address(bad)
+
+
+class OpenPortTests(unittest.TestCase):
+    """Windows keeps a USB serial port busy for a moment after it is closed."""
+
+    def fake_serial(self, busy_times):
+        import sys
+        import types
+        mod = types.ModuleType("serial")
+
+        class SerialException(Exception):
+            pass
+
+        calls = []
+
+        def Serial(*a, **k):
+            calls.append(1)
+            if len(calls) <= busy_times:
+                raise SerialException("could not open port 'COM6': PermissionError(13, 'Accès refusé.', None, 5)")
+            return "port"
+
+        mod.SerialException, mod.Serial = SerialException, Serial
+        old = sys.modules.get("serial")
+        self.addCleanup(lambda: sys.modules.__setitem__("serial", old) if old else sys.modules.pop("serial", None))
+        sys.modules["serial"] = mod
+        return calls
+
+    def test_busy_port_is_retried(self):
+        from plc_online.protocols.hostlink import open_port
+        calls = self.fake_serial(busy_times=2)
+        self.assertEqual(open_port("COM6", wait=2), "port")
+        self.assertEqual(len(calls), 3)
+
+    def test_port_still_busy_gives_a_clear_message(self):
+        from plc_online.protocols.hostlink import open_port
+        self.fake_serial(busy_times=100)
+        with self.assertRaisesRegex(HostLinkError, "port occupé"):
+            open_port("COM6", wait=0.5)
 
 
 def load_cli():
@@ -389,6 +456,34 @@ class OmronCliTests(unittest.TestCase):
         self.assertIn("30/10/2026 14:05:09   (lue dans A351", out)
         self.assertIn("code modele 30", out)
 
+    def test_parametres(self):
+        with tempfile.TemporaryDirectory() as d:
+            name = os.path.join(d, "p.txt")
+            out = self.run_cmd(self.cli.cmd_parametres, name)
+            saved = Path(name).read_text(encoding="utf-8")
+        self.assertIn("Host Link, 9600 bauds, 7 bits, parite paire, 2 stop, unite 0", out)
+        self.assertIn("Detection defaut pile (+128.15)", out)
+        self.assertIn("NON (desactivee)", out)
+        self.assertIn("CJ1M_CPU11", out)
+        self.assertIn("36 mots non nuls", out)
+        self.assertIn("rack 0 emplacement 01 : 0450  CJ1W-OC211 16 sorties relais  CIO 1", out)
+        self.assertIn("+128   8000", saved)
+        self.assertIn("+0     0402 0450", saved)
+
+    def test_etat_lists_cards_with_live_cio(self):
+        self.fake.mem["CIO"][0] = 0b101
+        out = self.run_cmd(self.cli.cmd_etat)
+        self.assertIn("rack 0 emplacement 00  CJ1W-ID211  16 entrees CC      CIO 0    = 0000 0000 0000 0101", out)
+        self.assertIn("CJ1W-OC211  16 sorties relais  CIO 1", out)
+
+    def test_unknown_card_stops_cio_allocation(self):
+        from plc_online.protocols.hostlink import rack_layout
+        cards = rack_layout([0x0402, 0x9999, 0x0450] + [0] * 37)
+        self.assertEqual([c["cio"] for c in cards], [0, None, None])
+        self.assertIn("code 9999", cards[1]["model"])
+        cards = rack_layout([0] * 10 + [0x0402])            # rack 1, slot 0
+        self.assertEqual((cards[0]["rack"], cards[0]["slot"], cards[0]["cio"]), (1, 0, 0))
+
     def test_lire_shows_bits(self):
         self.fake.mem["CIO"][0] = 0b101
         out = self.run_cmd(self.cli.cmd_lire, "CIO", 0, 1)
@@ -414,17 +509,51 @@ class OmronCliTests(unittest.TestCase):
             self.fake.mem["D"][11] = 2
             self.fake.mem["W"][3] = 3
             self.fake.mem["CIO"][100] = 0xFFFF       # outputs: must not be restored
+            answers = iter([True, False])     # write: yes; switch to MONITOR: no
+            self.cli.confirm = lambda q: next(answers)
             out = self.run_cmd(self.cli.cmd_restaurer_donnees, name)
-            self.assertIn("MONITOR", out)            # refused in RUN, nothing written
+            self.assertIn("refuse les ecritures", out)   # in RUN: nothing written
             self.assertEqual(self.fake.mem["D"][10], 1)
-            self.fake.mode = 0x02
+            self.cli.confirm = lambda q: True          # yes to everything: MONITOR, write, back to RUN
             out = self.run_cmd(self.cli.cmd_restaurer_donnees, name)
             self.assertIn("Restauration OK : 3 mots", out)
             self.assertIn("ignorees : CIO", out)
+            self.assertIn("Lecture D : 1000 mots", out)
+            self.assertEqual(self.fake.mode, 0x04)     # back in RUN
         self.assertEqual(self.fake.mem["D"][10:12], [70, 77])
         self.assertEqual(self.fake.mem["W"][3], 0)
         self.assertEqual(self.fake.mem["CIO"][100], 0xFFFF)
         self.assertEqual(self.fake.mem["H"][5], 55)
+
+    def test_write_in_run_switches_to_monitor_and_back(self):
+        self.cli.confirm = lambda q: True
+        out = self.run_cmd(self.cli.cmd_ecrire, "D", 5, 1234)
+        self.assertIn("Relu : D5 = 1234", out)
+        self.assertEqual(self.fake.mode, 0x04)
+        self.assertIn("@00SC02", self.fake.requests)
+        self.assertIn("@00SC03", self.fake.requests)
+
+    def test_write_in_monitor_does_not_change_mode(self):
+        self.cli.confirm = lambda q: True
+        self.plc.set_mode("monitor")
+        self.fake.requests.clear()
+        self.run_cmd(self.cli.cmd_ecrire, "D", 5, 1)
+        self.assertFalse([r for r in self.fake.requests if r[3:5] == "SC"])
+        self.assertEqual(self.fake.mode, 0x02)
+
+    def test_compare_refuses_a_data_csv(self):
+        with tempfile.TemporaryDirectory() as d:
+            name = os.path.join(d, "omron_donnees.csv")
+            Path(name).write_text("# date;2026-10-30\nzone;adresse\n", encoding="utf-8")
+            out = self.run_cmd(self.cli.cmd_comparer, name)
+        self.assertIn("sauvegarde de DONNEES", out)
+        self.assertFalse([r for r in self.fake.requests if "0306" in r])   # program not read
+
+    def test_units_reply_not_understood_is_shown_raw(self):
+        self.fake.unit_list = []
+        out = self.run_cmd(self.cli.cmd_parametres, os.path.join(tempfile.mkdtemp(), "p.txt"))
+        self.assertIn("réponse 0502 non décodée", out)
+        self.assertIn("emplacement 00 : 0402  CJ1W-ID211", out)
 
     def test_backup_then_compare(self):
         with tempfile.TemporaryDirectory() as d:

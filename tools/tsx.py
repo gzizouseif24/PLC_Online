@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """TSX Micro / Premium par le port TER (Uni-Telway), sans PL7.
 
     python tools/tsx.py etat                          identification, defauts, pile, horloge
@@ -6,14 +5,17 @@
     python tools/tsx.py surveiller MW 0 100           afficher ce qui change (Ctrl+C pour arreter)
     python tools/tsx.py ecrire MW 10 1234             ecrire UN mot, avec confirmation et relecture
     python tools/tsx.py run | stop                    passer l'automate en RUN / STOP, avec confirmation
+    python tools/tsx.py horloge                       mettre l'horloge de l'automate a l'heure du PC
     python tools/tsx.py sauvegarder [FICHIER]         copier le programme de l'automate dans un fichier
     python tools/tsx.py comparer FICHIER              le programme a-t-il change depuis cette sauvegarde ?
-    python tools/tsx.py restaurer FICHIER             remettre un programme sauvegarde dans l'automate
+    python tools/tsx.py restaurer FICHIER             remettre un programme dans l'automate (.tsxbak ou .stx PL7)
     python tools/tsx.py sauvegarder-donnees [FICHIER] copier tous les %MW et %KW dans un fichier CSV
-    python tools/tsx.py restaurer-donnees FICHIER     remettre les %MW du fichier CSV dans l'automate
+    python tools/tsx.py restaurer-donnees FICHIER     remettre les %MW du fichier (CSV ou .dat PL7) dans l'automate
+    python tools/tsx.py chercher-es [POSITIONS]       trouver ou l'automate garde les %I (une entree a basculer)
 
 Options : --port COM6, --trace (octets), --adresses 1-3 (plus rapide, a l'essai : 1 par defaut).
 Fermer PL7 avant. Cable TSX PCX 1031 : meme position qu'avec PL7.
+Protocole : plc_online/protocols/unitelway.py.
 
 Confirme sur TSX 3721 : etat, lecture %S, %SW. Probable : %MW, %MD, %KW, %KD, %M.
 Teste sur TSX 3721 : toutes les commandes ci-dessus.
@@ -21,377 +23,18 @@ Teste sur TSX 3721 : toutes les commandes ci-dessus.
 pip install pyserial
 """
 import argparse
+import sys
 import time
+from pathlib import Path
 
-DLE, STX, EOT, ENQ, ACK, NAK = 0x10, 0x02, 0x04, 0x05, 0x06, 0x15
-MAX_LENGTH = 134
-
-# En-tete X-WAY d'une requete esclave -> automate : message standard (0x20),
-# puis adresse 5 niveaux de l'automate local : reseau 0, station 0xFE, porte 0, 0, 0.
-XWAY_TO_PLC = [0x20, 0x00, 0xFE, 0x00, 0x00, 0x00]
-
-MIRROR, IDENTIFICATION, STATUS = 0xFA, 0x0F, 0x31
-ANSWER = {MIRROR: 0xFB, IDENTIFICATION: 0x3F, STATUS: 0x61}
-NEGATIVE = 0xFD
-
-
-def hexs(data) -> str:
-    return " ".join(f"{x:02X}" for x in data)
-
-
-# ---------- trames ----------
-
-def build_frame(addr: int, payload: list) -> bytes:
-    """DLE STX adresse longueur [DLE] donnees (DLE doubles) BCC = somme modulo 256."""
-    frame = [DLE, STX, addr]
-    if len(payload) == DLE:
-        frame.append(DLE)
-    frame.append(len(payload))
-    for b in payload:
-        frame.append(b)
-        if b == DLE:
-            frame.append(DLE)
-    frame.append(sum(frame) % 256)
-    return bytes(frame)
-
-
-class Parser:
-    """Decoupe le flux recu : scrutation, trame, EOT, ACK, NAK, octet isole."""
-
-    def __init__(self):
-        self.buf = bytearray()
-
-    def feed(self, data: bytes) -> list:
-        self.buf += data
-        events = []
-        while self.buf:
-            ev, used = self._next()
-            if used == 0:
-                break
-            del self.buf[:used]
-            events.append(ev)
-        return events
-
-    def _next(self):
-        b = self.buf
-        if b[0] in (EOT, ACK, NAK):
-            return ({EOT: ("eot",), ACK: ("ack",), NAK: ("nak",)}[b[0]]), 1
-        if b[0] != DLE:
-            return ("stray", b[0]), 1
-        if len(b) < 2:
-            return None, 0
-        if b[1] == ENQ:
-            return (("poll", b[2]), 3) if len(b) >= 3 else (None, 0)
-        if b[1] != STX:
-            return ("stray", b[0]), 1
-        if len(b) < 4:
-            return None, 0
-        length, i = b[3], 4
-        if length == DLE:
-            if len(b) < 5:
-                return None, 0
-            if b[4] != DLE:
-                return ("stray", b[0]), 1
-            i = 5
-        if not 1 <= length <= MAX_LENGTH:
-            return ("stray", b[0]), 1
-        data = bytearray()
-        while len(data) < length:
-            if i >= len(b):
-                return None, 0
-            if b[i] == DLE:
-                if i + 1 >= len(b):
-                    return None, 0
-                if b[i + 1] != DLE:
-                    return ("stray", b[0]), 1
-                i += 1
-            data.append(b[i])
-            i += 1
-        if i >= len(b):
-            return None, 0
-        raw = bytes(b[:i + 1])
-        return ("frame", b[2], bytes(data), sum(raw[:-1]) % 256 == raw[-1], raw), i + 1
-
-
-class UniteError(Exception):
-    pass
-
-
-# ---------- esclave Uni-Telway ----------
-
-class Slave:
-    """Le PC repond aux scrutations de plusieurs adresses (comme PL7) : plus de requetes par cycle."""
-
-    def __init__(self, ser, addrs=(1,), category=0, trace=False):
-        self.ser, self.addrs, self.category, self.trace = ser, tuple(addrs), category, trace
-        self.parser = Parser()
-        self.t0 = time.time()
-
-    def log(self, direction, data):
-        if self.trace:
-            print(f"   {time.time() - self.t0:8.3f} {direction} {hexs(data)}")
-
-    def send(self, data: bytes):
-        self.log("PC  ->", data)
-        self.ser.write(data)
-
-    def request(self, unite: list, timeout: float = 10.0) -> list:
-        """Envoie une requete UNI-TE a la prochaine scrutation d'une de nos adresses."""
-        payload = XWAY_TO_PLC + list(unite)
-        state, frame, used = "attente scrutation", None, None
-        nak = resent = 0
-        deadline = time.time() + timeout
-        # Oublier les scrutations accumulees pendant l'attente (ex. saisie de OUI) :
-        # repondre a une scrutation perimee ferait parler le PC hors de son tour.
-        self.ser.reset_input_buffer()
-        self.parser = Parser()
-        while time.time() < deadline:
-            data = self.ser.read(self.ser.in_waiting or 1)
-            if data:
-                self.log("API ->", data)
-            for ev in self.parser.feed(data):
-                kind = ev[0]
-                if kind == "poll" and ev[1] == used and state == "attente ACK":
-                    resent += 1
-                    if resent > 2:
-                        raise UniteError(f"l'automate ne confirme pas la trame (adresse {used}, renvoyee 2 fois)")
-                    self.send(frame)  # scrute a nouveau sans ACK : trame perdue, on la renvoie
-                elif kind == "poll" and ev[1] in self.addrs and state == "attente reponse":
-                    self.send(bytes([EOT]))  # rien a dire : EOT, comme PL7 (cycle plus rapide)
-                elif kind == "poll" and ev[1] in self.addrs and state == "attente scrutation":
-                    used = ev[1]
-                    frame = build_frame(used, payload)
-                    self.send(frame)
-                    state = "attente ACK"
-                elif kind == "frame" and ev[4] == frame:
-                    pass  # echo de notre propre trame par le convertisseur RS-485
-                elif kind == "ack" and state == "attente ACK":
-                    state = "attente reponse"
-                elif kind == "nak" and state == "attente ACK":
-                    nak += 1
-                    if nak >= 3:
-                        raise UniteError("l'automate a refuse la trame 3 fois (NAK)")
-                    state = "attente scrutation"
-                elif kind == "frame" and ev[1] == used and state in ("attente ACK", "attente reponse"):
-                    if not ev[3]:
-                        self.send(bytes([NAK]))
-                        continue
-                    self.send(bytes([ACK]))
-                    return self._unwrap(ev[2])
-        raise UniteError(f"delai depasse, bloque a l'etape : {state}")
-
-    @staticmethod
-    def _unwrap(npdu: bytes) -> list:
-        if not npdu:
-            raise UniteError("trame vide")
-        if npdu[0] == 0x22:
-            raise UniteError(f"message refuse par X-WAY : {hexs(npdu)}")
-        if npdu[0] == 0x20 and len(npdu) >= 6:
-            return list(npdu[6:])
-        if npdu[0] == 0x00:
-            return list(npdu[1:])
-        raise UniteError(f"en-tete X-WAY inconnu : {hexs(npdu)}")
-
-
-# ---------- objets TSX ----------
-
-READ_BIT, READ_SYSTEM_BIT = 0x00, 0x01
-READ_OBJECTS, WRITE_OBJECTS = 0x36, 0x37
-RUN, STOP = 0x24, 0x25
-OK_ANSWER = 0xFE
-WORD, DWORD = 0x07, 0x08
-
-# Sauvegarde : requetes et parametres exactement comme PL7 (capture du 29/10/2026)
-PL7_CATEGORY = 0x07
-RESERVE, RELEASE, APP_INFO = 0x1D, 0x1E, 0x92
-OPEN_UPLOAD, READ_UPLOAD, CLOSE_UPLOAD = 0x3D, 0x3E, 0x3F
-OPEN_DOWNLOAD, WRITE_DOWNLOAD, CLOSE_DOWNLOAD = 0x3A, 0x3B, 0x3C
-DOWNLOAD_SEGMENT = 0x7A  # 122 octets par segment, comme PL7
-RESERVE_UPLOAD = [0xFF, 0xFE, 0x90, 0x36]    # parametres de RESERVE vus avant un upload PL7
-RESERVE_DOWNLOAD = [0xFF, 0xFE, 0x80, 0x0F]  # ... et avant un download PL7
-SEGMENT_SIZE = 0x77      # 119 octets par segment, comme PL7
-UPLOAD_LAST = 0x0F       # compte rendu du dernier segment
-MAX_SEGMENTS = 4000
-
-# zone -> (segment, type, taille en octets)
-WORD_ZONES = {
-    "MW": (0x68, WORD, 2), "MD": (0x68, DWORD, 4),
-    "KW": (0x69, WORD, 2), "KD": (0x69, DWORD, 4),
-    "SW": (0x6A, WORD, 2),
-}
-BIT_ZONES = {"M": READ_BIT, "S": READ_SYSTEM_BIT}
-WRITABLE = {"MW", "MD"}
-MAX_DATA = 120  # octets de donnees par requete (trame <= 134 octets)
-
-
-class Tsx:
-    def __init__(self, slave: Slave):
-        self.slave = slave
-
-    def _ask(self, unite, expect):
-        answer = self.slave.request(unite)
-        if not answer:
-            raise UniteError("reponse vide")
-        if answer[0] == NEGATIVE:
-            raise UniteError("refuse par l'automate (FD)")
-        if answer[0] != expect:
-            raise UniteError(f"reponse inattendue : {hexs(answer)}")
-        return answer[1:]
-
-    def identification(self) -> dict:
-        data = self._ask([IDENTIFICATION, self.slave.category], 0x3F)
-        n = data[3] if len(data) > 3 else 0
-        return {"nom": bytes(data[4:4 + n]).decode("ascii", "replace"), "brut": hexs(data)}
-
-    def read(self, zone: str, start: int, count: int) -> list:
-        if zone in BIT_ZONES:
-            return self._read_bits(zone, start, count)
-        seg, typ, size = WORD_ZONES[zone]
-        values = []
-        addr, end = start, start + count
-        while addr < end:
-            n = min(MAX_DATA // size, end - addr)
-            data = self._ask([READ_OBJECTS, self.slave.category, seg, typ,
-                              addr & 0xFF, addr >> 8, n & 0xFF, n >> 8], 0x66)
-            if not data or data[0] != typ or len(data) - 1 != n * size:
-                raise UniteError(f"reponse coupee ou inattendue : {hexs(data)}")
-            raw = data[1:]
-            for i in range(0, len(raw), size):
-                v = int.from_bytes(bytes(raw[i:i + size]), "little")
-                values.append(v)
-            addr += n
-        return values
-
-    def _read_bits(self, zone, start, count) -> list:
-        code = BIT_ZONES[zone]
-        values = {}
-        group = start - start % 8
-        while group < start + count:
-            data = self._ask([code, self.slave.category, group & 0xFF, group >> 8], code + 0x30)
-            byte = data[0]  # %S : 1 octet ; %M : valeur puis forcage (ordre a confirmer)
-            for i in range(8):
-                values[group + i] = byte >> i & 1
-            group += 8
-        return [values[a] for a in range(start, start + count)]
-
-    def write_words(self, zone: str, start: int, values: list) -> None:
-        """Ecrit des mots consecutifs (%MW), par blocs de 60 au plus."""
-        if zone != "MW":
-            raise UniteError(f"ecriture en bloc non autorisee sur %{zone}")
-        seg, typ, _ = WORD_ZONES[zone]
-        i = 0
-        while i < len(values):
-            chunk = values[i:i + MAX_DATA // 2]
-            addr = start + i
-            data = [b for v in chunk for b in (v & 0xFFFF).to_bytes(2, "little")]
-            self._ask([WRITE_OBJECTS, self.slave.category, seg, typ, addr & 0xFF, addr >> 8,
-                       len(chunk) & 0xFF, len(chunk) >> 8, *data], OK_ANSWER)
-            i += len(chunk)
-
-    def write(self, zone: str, addr: int, value: int) -> None:
-        if zone not in WRITABLE:
-            raise UniteError(f"ecriture non autorisee sur %{zone}")
-        seg, typ, size = WORD_ZONES[zone]
-        data = list((value & ((1 << 8 * size) - 1)).to_bytes(size, "little"))
-        self._ask([WRITE_OBJECTS, self.slave.category, seg, typ,
-                   addr & 0xFF, addr >> 8, 1, 0, *data], OK_ANSWER)
-
-    # ----- sauvegarde du programme (sequence relevee sur PL7) -----
-
-    def reserve(self, params=RESERVE_UPLOAD) -> None:
-        self._ask([RESERVE, PL7_CATEGORY, *params], OK_ANSWER)
-
-    def release(self) -> None:
-        self._ask([RELEASE, PL7_CATEGORY], OK_ANSWER)
-
-    def app_info(self) -> dict:
-        """Requete 92 bloc 0A (lue par PL7 avant le transfert) : nom et signature de l'application."""
-        data = self._ask([APP_INFO, PL7_CATEGORY, 0x0A, 0, 0, 0, 0, 0, 0, 0x60], APP_INFO + 0x30)
-        raw = bytes(data[2:])
-        name = raw[:raw.index(0)] if 0 in raw else raw
-        return {"nom": name.decode("ascii", "replace"), "brut": hexs(data)}
-
-    def upload(self, progress=None) -> bytes:
-        """Lit toute l'application : OPEN_UPLOAD, READ_UPLOAD segment par segment, CLOSE_UPLOAD."""
-        self._ask([OPEN_UPLOAD, PL7_CATEGORY, 0, 0, 0, 0, 0, 0, 0, 0, SEGMENT_SIZE, 0], OPEN_UPLOAD + 0x30)
-        blob = bytearray()
-        try:
-            seg = 1
-            while True:
-                data = self._ask([READ_UPLOAD, PL7_CATEGORY, seg & 0xFF, seg >> 8], READ_UPLOAD + 0x30)
-                if len(data) < 5:
-                    raise UniteError(f"segment {seg} : reponse trop courte {hexs(data)}")
-                status, got, length = data[0], data[1] | data[2] << 8, data[3] | data[4] << 8
-                chunk = bytes(data[5:])
-                if got != seg or len(chunk) != length:
-                    raise UniteError(f"segment {seg} : recu segment {got}, {len(chunk)} octets au lieu de {length}")
-                if status not in (0x00, UPLOAD_LAST):
-                    raise UniteError(f"segment {seg} : compte rendu {status:02X}")
-                blob += chunk
-                if progress:
-                    progress(seg, len(blob))
-                if status == UPLOAD_LAST:
-                    return bytes(blob)
-                seg += 1
-                if seg > MAX_SEGMENTS:
-                    raise UniteError("trop de segments : arret par securite")
-        finally:
-            try:
-                self._ask([CLOSE_UPLOAD, PL7_CATEGORY], CLOSE_UPLOAD + 0x30)
-            except UniteError:
-                pass
-
-    def download(self, blob: bytes, progress=None) -> None:
-        """Ecrit toute l'application : OPEN_DOWNLOAD, WRITE_DOWNLOAD par segment, CLOSE_DOWNLOAD.
-        L'automate doit etre en STOP et reserve."""
-        self._ask([OPEN_DOWNLOAD, PL7_CATEGORY, 0, 0, 0, 0, 0, 0, 0, 1], OPEN_DOWNLOAD + 0x30)
-        closed = False
-        try:
-            seg = 1
-            for i in range(0, len(blob), DOWNLOAD_SEGMENT):
-                chunk = blob[i:i + DOWNLOAD_SEGMENT]
-                data = self._ask([WRITE_DOWNLOAD, PL7_CATEGORY, seg & 0xFF, seg >> 8,
-                                  len(chunk) & 0xFF, len(chunk) >> 8, *chunk], WRITE_DOWNLOAD + 0x30)
-                if len(data) < 3 or data[0] != 0 or (data[1] | data[2] << 8) != seg:
-                    raise UniteError(f"segment {seg} refuse ou mal acquitte : {hexs(data)}")
-                if progress:
-                    progress(seg, i + len(chunk))
-                seg += 1
-            data = self._ask([CLOSE_DOWNLOAD, PL7_CATEGORY], CLOSE_DOWNLOAD + 0x30)
-            closed = True
-            if data[:1] != [0]:
-                raise UniteError(f"fermeture du chargement refusee : {hexs(data)}")
-        finally:
-            if not closed:
-                try:
-                    self._ask([CLOSE_DOWNLOAD, PL7_CATEGORY], CLOSE_DOWNLOAD + 0x30)
-                except UniteError:
-                    pass
-
-    def run(self) -> None:
-        self._ask([RUN, self.slave.category], OK_ANSWER)
-
-    def stop(self) -> None:
-        self._ask([STOP, self.slave.category], OK_ANSWER)
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from plc_online.protocols.unitelway import *  # noqa: E402,F401,F403  (protocole, partage avec l'interface web)
+from plc_online.protocols.unitelway import (  # noqa: E402
+    BIT_ZONES, SYSTEM_BITS, BACKUP_ERRORS, WORD_ZONES, Slave, Tsx, UniteError, changed_runs,
+    parse_addrs, read_data_csv, read_program_file, read_whole_zone, signed)
 
 
 # ---------- affichage ----------
-
-SYSTEM_BITS = {
-    10: ("defaut E/S", 0),
-    11: ("debordement chien de garde", 1),
-    16: ("defaut E/S dans la tache", 0),
-    19: ("depassement periode de tache", 1),
-    51: ("horloge temps reel perdue (heure fausse)", 1),
-    67: ("pile carte memoire", 1),
-    68: ("pile processeur", 1),
-}
-
-
-def signed(v, size):
-    bits = 8 * size
-    return v - (1 << bits) if v >> (bits - 1) & 1 else v
-
 
 def fmt(zone, addr, v):
     if zone in BIT_ZONES:
@@ -417,17 +60,6 @@ def cmd_etat(tsx):
           f"{sw[2] >> 8:02X}:{sw[2] & 0xFF:02X}:{sw[1] >> 8:02X}  (jour {sw[0]})")
     print(f"Chien de garde : {tsx.read('SW', 11, 1)[0]} ms")
     show_flash_backup(tsx.read("SW", 96, 2))
-
-
-BACKUP_ERRORS = {
-    1: "plus de %MW demandes que de %MW configures",
-    2: "nombre de %MW hors 0..1000",
-    3: "plus de %MW a restituer que de %MW configures",
-    4: "application en RAM > 15 Kmots",
-    5: "service interdit en RUN",
-    6: "cartouche Backup presente",
-    7: "defaut d'ecriture Flash EPROM",
-}
 
 
 def show_flash_backup(sw):
@@ -483,6 +115,22 @@ def cmd_ecrire(tsx, zone, addr, value):
     print(f"Pour revenir en arriere : python tools/tsx.py ecrire {zone} {addr} {old}")
 
 
+def cmd_horloge(tsx):
+    import datetime
+    from plc_online.protocols.unitelway import set_clock
+    sw = tsx.read("SW", 49, 5)
+    print(f"Horloge automate : {sw[3] & 0xFF:02X}/{sw[3] >> 8:02X}/{sw[4]:04X} "
+          f"{sw[2] >> 8:02X}:{sw[2] & 0xFF:02X}:{sw[1] >> 8:02X}")
+    now = datetime.datetime.now()
+    if not confirm(f"Mettre l'automate a l'heure du PC ({now:%d/%m/%Y %H:%M:%S}) ?"):
+        print("Annule.")
+        return
+    r = set_clock(tsx)
+    sw = tsx.read("SW", 49, 5)
+    print(f"Ecrit (requete {r['methode']}). Relu : {sw[3] & 0xFF:02X}/{sw[3] >> 8:02X}/{sw[4]:04X} "
+          f"{sw[2] >> 8:02X}:{sw[2] & 0xFF:02X}:{sw[1] >> 8:02X}")
+
+
 def cmd_run_stop(tsx, what):
     if not confirm(f"Passer l'automate en {what.upper()} ? Machine en securite ?"):
         print("Annule.")
@@ -528,19 +176,33 @@ def cmd_sauvegarder(tsx, filename=None):
 
 
 def cmd_restaurer(tsx, filename):
-    """Remet un .tsxbak dans l'automate, comme le transfert PC -> automate de PL7."""
-    with open(filename, "rb") as f:
-        blob = f.read()
+    """Remet un .tsxbak (ou un .stx PL7) dans l'automate, comme le transfert PC -> automate de PL7."""
+    blob, target = read_program_file(filename)
+    if target:
+        plc = tsx.identification()["nom"]
+        print(f"Application faite pour : {target}   automate connecte : {plc}")
+        if target.replace(" ", "") != plc.replace(" ", "") and not confirm(
+                "ATTENTION : automate different de celui de l'application. Continuer quand meme ?"):
+            print("Annule, rien n'a ete ecrit.")
+            return
     if len(blob) < 16 or not blob[:16].rstrip(b"\0 ").strip():
         raise UniteError(f"{filename} ne ressemble pas a une sauvegarde de programme")
     name = blob[:14].split(b"\0")[0].decode("ascii", "replace").strip()
     print(f"Fichier {filename} : {len(blob)} octets, application '{name}'")
-    print("Avant de remplacer le programme, sauvegarde automatique du programme actuel :")
-    cmd_sauvegarder(tsx, f"avant_restauration_{time.strftime('%Y%m%d_%H%M%S')}.tsxbak")
+    try:
+        state = tsx.read_cpu()[1] & 0x0F        # 1 STOP, 2 RUN, 4 pas d'application
+    except (UniteError, IndexError):
+        state = 0
+    if state == 4:
+        print("L'automate est vide (pas d'application) : rien a sauvegarder avant.")
+    else:
+        print("Avant de remplacer le programme, sauvegarde automatique du programme actuel :")
+        cmd_sauvegarder(tsx, f"avant_restauration_{time.strftime('%Y%m%d_%H%M%S')}.tsxbak")
     if not confirm("Remplacer le programme de l'automate ? Il passera en STOP. Machine en securite ?"):
         print("Annule, rien n'a ete ecrit.")
         return
-    tsx.stop()
+    if state not in (1, 4):                     # PL7 n'envoie pas STOP a un automate vide
+        tsx.stop()
     tsx.reserve(RESERVE_DOWNLOAD)
     try:
         t0 = time.time()
@@ -561,8 +223,7 @@ def cmd_restaurer(tsx, filename):
 
 
 def cmd_comparer(tsx, filename):
-    with open(filename, "rb") as f:
-        saved = f.read()
+    saved, _ = read_program_file(filename)
     _, _, blob = do_upload(tsx)
     if blob == saved:
         print(f"IDENTIQUE : le programme de l'automate est le meme que {filename}")
@@ -572,30 +233,6 @@ def cmd_comparer(tsx, filename):
           f"{len(diffs)} octets differents")
     if diffs:
         print(f"   premiere difference a l'octet {diffs[0]}, derniere a l'octet {diffs[-1]}")
-
-
-def read_whole_zone(tsx, zone, limit=32768):
-    """Lit une zone depuis l'adresse 0 jusqu'a ce que l'automate refuse (fin de la zone configuree)."""
-    values = []
-    addr = 0
-    while addr < limit:
-        n = min(60, limit - addr)
-        try:
-            values += tsx.read(zone, addr, n)
-            addr += n
-            continue
-        except UniteError as e:
-            if "FD" not in str(e):
-                raise
-        for a in range(addr, addr + n):       # la fin est dans ce bloc : mot par mot
-            try:
-                values += tsx.read(zone, a, 1)
-            except UniteError as e:
-                if "FD" in str(e):
-                    return values
-                raise
-        return values
-    return values
 
 
 def cmd_sauvegarder_donnees(tsx, filename=None):
@@ -615,32 +252,6 @@ def cmd_sauvegarder_donnees(tsx, filename=None):
             for i, v in enumerate(values):
                 f.write(f"%{zone};{i};{v};{signed(v, 2)};{v:04X}\n")
     print(f"Donnees : {filename}")
-
-
-def read_data_csv(filename):
-    """CSV de sauvegarder-donnees -> ({zone: {adresse: valeur}}, nom de l'automate)."""
-    zones, plc = {}, None
-    with open(filename, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if line.startswith("# automate;"):
-                plc = line.split(";", 1)[1]
-            if not line or line.startswith("#") or line.startswith("zone;"):
-                continue
-            zone, addr, value = line.split(";")[:3]
-            zones.setdefault(zone.lstrip("%").upper(), {})[int(addr)] = int(value) & 0xFFFF
-    return zones, plc
-
-
-def changed_runs(addrs):
-    """[3, 4, 5, 9] -> [(3, 3), (9, 1)] : suites d'adresses consecutives (debut, longueur)."""
-    runs = []
-    for a in sorted(addrs):
-        if runs and a == runs[-1][0] + runs[-1][1]:
-            runs[-1] = (runs[-1][0], runs[-1][1] + 1)
-        else:
-            runs.append((a, 1))
-    return runs
 
 
 def cmd_restaurer_donnees(tsx, filename):
@@ -679,18 +290,89 @@ def cmd_restaurer_donnees(tsx, filename):
         print(f"Restauration OK : {len(diffs)} %MW ecrits et verifies.")
 
 
-def parse_addrs(text):
-    if "-" in text:
-        a, b = text.split("-")
-        return tuple(range(int(a), int(b) + 1))
-    return tuple(int(x) for x in text.split(","))
+# ---- chercher-es : ou sont les %I / %Q ? (lecture seule) ----
+
+def probe_requests(positions, segments):
+    """Read-only requests whose answers may hold the %I image: READ_IO_CHANNEL (43) and
+    READ_STATUS_MODULE (44) per position, READ_OBJECTS (36) on unknown segments, debug memory
+    (92 01) on the segments that answered."""
+    out = []
+    for pos in positions:
+        for t in (1, 2, 3, 4):
+            out.append((f"43 type {t} position {pos}", [0x43, PL7_CATEGORY, t, 0, pos, 0xFF, 0x01, 0x08, 0, 0, 0, 0]))
+        out.append((f"44 position {pos}", [READ_STATUS_MODULE, PL7_CATEGORY, 0x02, 0x00, pos]))
+    out.append(("93 defauts rack", [MONITOR, PL7_CATEGORY, 0x02, 0x68, 0x00, 0x04, 0x02, 0x10]))
+    for seg in range(0x60, 0x70):
+        if seg in (0x68, 0x69, 0x6A):
+            continue
+        for typ in (5, 6, 7):
+            out.append((f"36 segment {seg:02X} type {typ}", [READ_OBJECTS, 0, seg, typ, 0, 0, 8, 0]))
+    for seg in segments:
+        for off in range(0, 0x400, 0x60):
+            out.append((f"92 segment {seg:02X} offset {off:03X}",
+                        [DEBUG_MEMORY, PL7_CATEGORY, 0x01, seg, 0x00, off & 0xFF, off >> 8, 0x60]))
+    return out
+
+
+def snapshot(tsx, requests):
+    answers = {}
+    for i, (name, req) in enumerate(requests):
+        print(f"\r   {i + 1}/{len(requests)}", end="", flush=True)
+        try:
+            answers[name] = hexs(tsx.slave.request(req, timeout=3))
+        except UniteError as e:
+            answers[name] = f"ERREUR {e}"
+    print()
+    return answers
+
+
+def cmd_chercher_es(tsx, positions):
+    print("Recherche des %I : lecture seule, rien n'est ecrit.\n"
+          "Il faut UNE entree que vous pouvez faire passer de 0 a 1 (24 V sur une voie d'un module d'entrees).")
+    try:
+        tsx.slave.request([MONITOR, PL7_CATEGORY, 0x0B], timeout=3)   # session de mise au point, comme PL7
+    except UniteError:
+        pass
+    print("Segments de memoire de mise au point...")
+    segments = []
+    for seg in range(0x50, 0x80):
+        try:
+            ans = tsx.slave.request([DEBUG_MEMORY, PL7_CATEGORY, 0x01, seg, 0x00, 0, 0, 0x10], timeout=3)
+            if ans and ans[0] == DEBUG_MEMORY + 0x30:
+                segments.append(seg)
+        except UniteError:
+            pass
+    print(f"   segments qui repondent : {' '.join(f'{s:02X}' for s in segments) or 'aucun'}")
+    requests = probe_requests(positions, segments)
+    log = [f"chercher-es {time.strftime('%Y-%m-%d %H:%M:%S')} positions {positions} segments {segments}"]
+    steps = [("A", "Entree a 0. Appuyer sur Entree pour lire"),
+             ("B", "Mettre l'entree a 1 (noter laquelle, ex. %I1.3), puis Entree"),
+             ("C", "Remettre l'entree a 0, puis Entree")]
+    shots = {}
+    for key, text in steps:
+        input(f"\n{text} > ")
+        shots[key] = snapshot(tsx, requests)
+    which = input("\nQuelle entree avez-vous basculee (ex. %I1.3) ? > ").strip()
+    log.append(f"entree basculee : {which}")
+    found = []
+    for name, _ in requests:
+        a, b, c = shots["A"][name], shots["B"][name], shots["C"][name]
+        log.append(f"{name}\n   A {a}\n   B {b}\n   C {c}")
+        if a == c and a != b and not a.startswith("ERREUR"):
+            found.append(name)
+    filename = f"chercher_es_{time.strftime('%Y%m%d_%H%M%S')}.txt"
+    Path(filename).write_text("\n".join(log) + "\n", encoding="utf-8")
+    print(f"\nReponses qui suivent l'entree (0 -> 1 -> 0) : {len(found)}")
+    for name in found:
+        print(f"   {name}\n      0 : {shots['A'][name]}\n      1 : {shots['B'][name]}")
+    print(f"\nJournal complet : {filename}  -> a envoyer")
 
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("commande", choices=["etat", "lire", "surveiller", "ecrire", "run", "stop",
-                                        "sauvegarder", "comparer", "sauvegarder-donnees",
-                                        "restaurer-donnees", "restaurer"])
+                                        "sauvegarder", "comparer", "sauvegarder-donnees", "horloge",
+                                        "restaurer-donnees", "restaurer", "chercher-es"])
     p.add_argument("args", nargs="*", help="zone, adresse, nombre ou valeur")
     p.add_argument("--port", default="COM6")
     p.add_argument("--baud", type=int, default=9600)
@@ -707,11 +389,11 @@ def main():
                     f"   (zones : {' '.join(zones)})")
         zone, n1, n2 = a.args[0].upper(), int(a.args[1]), int(a.args[2])
     if a.commande == "comparer" and len(a.args) != 1:
-        p.error("usage : comparer FICHIER.tsxbak")
+        p.error("usage : comparer FICHIER.tsxbak (ou .stx)")
     if a.commande == "restaurer" and len(a.args) != 1:
-        p.error("usage : restaurer FICHIER.tsxbak")
+        p.error("usage : restaurer FICHIER.tsxbak (ou .stx de PL7)")
     if a.commande == "restaurer-donnees" and len(a.args) != 1:
-        p.error("usage : restaurer-donnees FICHIER.csv")
+        p.error("usage : restaurer-donnees FICHIER.csv (ou .dat de PL7)")
 
     import serial
     ser = serial.Serial(a.port, a.baud, bytesize=8, parity=a.parite, stopbits=1, timeout=0.02)
@@ -725,6 +407,8 @@ def main():
             cmd_surveiller(tsx, zone, n1, n2)
         elif a.commande == "ecrire":
             cmd_ecrire(tsx, zone, n1, n2)
+        elif a.commande == "horloge":
+            cmd_horloge(tsx)
         elif a.commande == "sauvegarder":
             cmd_sauvegarder(tsx, a.args[0] if a.args else None)
         elif a.commande == "comparer":
@@ -735,6 +419,8 @@ def main():
             cmd_restaurer(tsx, a.args[0])
         elif a.commande == "restaurer-donnees":
             cmd_restaurer_donnees(tsx, a.args[0])
+        elif a.commande == "chercher-es":
+            cmd_chercher_es(tsx, [int(x) for x in a.args] or list(range(1, 9)))
         else:
             cmd_run_stop(tsx, a.commande)
     except UniteError as e:
