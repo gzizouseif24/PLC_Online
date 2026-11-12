@@ -1378,13 +1378,14 @@ async function init() {
   brands = await api("GET", "/api/marques");
   const select = $("marque");
   for (const [key, b] of Object.entries(brands)) {
+    if (b.cache) continue;                     // demo of a brand already tested on a real PLC
     const opt = el("option", "", b.nom + (b.disponible ? "" : " (bientot)"));
     opt.value = key;
     opt.disabled = !b.disponible;
     select.append(opt);
   }
   const saved = localStorageGet("marque");
-  if (saved && brands[saved]?.disponible) select.value = saved;
+  if (saved && brands[saved]?.disponible && !brands[saved].cache) select.value = saved;
   select.addEventListener("change", renderSettings);
   renderSettings();
   $("form-connexion").addEventListener("submit", connect);
