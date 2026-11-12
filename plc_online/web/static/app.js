@@ -86,6 +86,11 @@ async function loadPorts() {
 let family = "s7";
 let features = [];
 
+function fxpFamily() {
+  /** Brands whose program copy is read only (no restore button). */
+  return family === "mitsubishi" || family === "panasonic";
+}
+
 function applyBrand(key) {
   const b = brands[key] || {};
   family = b.famille || "s7";
@@ -95,14 +100,16 @@ function applyBrand(key) {
   testState = {};
   chLog = [];
   const tsx = family === "tsx";
-  const fxp = family === "mitsubishi";
-  $("prog-hint").textContent = fxp
+  const fxp = family === "mitsubishi" || family === "panasonic";
+  $("prog-hint").textContent = family === "panasonic"
+    ? "Copie des pas du programme (commande RP), en lecture seule : a garder et a comparer. Rechargement : FPWIN GR."
+    : fxp
     ? "Copie de la memoire programme (parametres + programme), en lecture seule : a garder et a comparer. Environ 1 minute. Rechargement : GX Developer / GX Works."
     : tsx
     ? "Copie de l'application de l'automate (programme et configuration), comme le transfert automate -> PC de PL7."
     : "Copie de tous les blocs (OB, FB, FC, DB) et de la configuration materielle (SDB).";
   $("import-hint").textContent = fxp
-    ? "Copie deja sur le PC : .zip de cette page ou .bin de tools/mitsubishi.py :"
+    ? "Copie deja sur le PC : .zip de cette page ou .bin de l'outil en ligne de commande :"
     : tsx
     ? "Programme deja sur le PC : fichier PL7 .stx, copie .tsxbak (outil terminal) ou .zip de cette page :"
     : "Sauvegarde deja sur le PC (autre dossier, cle USB, terminal) ou projet STEP 7 V5 (dossier du .s7p, ou archive .zip) :";
@@ -555,8 +562,8 @@ async function loadBackups() {
       const tr = el("tr");
       const actions = el("div", "row-actions");
       for (const [text, fn] of [["Comparer", () => compareBackup(b)],
-                                ...(family === "mitsubishi" ? [] : [["Restaurer", () => (family === "tsx" ? planRestoreTsx(b) : planRestore(b, false))]]),
-                                [family === "tsx" || family === "mitsubishi" ? "Details" : "Blocs", () => showBlocks(b)]]) {
+                                ...(fxpFamily() ? [] : [["Restaurer", () => (family === "tsx" ? planRestoreTsx(b) : planRestore(b, false))]]),
+                                [family === "tsx" || fxpFamily() ? "Details" : "Blocs", () => showBlocks(b)]]) {
         const btn = el("button", "btn small", text);
         btn.type = "button";
         btn.addEventListener("click", fn);

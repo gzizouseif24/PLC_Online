@@ -705,11 +705,48 @@ def import_data_files(folder: Path, files: list, note: str) -> dict:
     return {"id": made[-1]["id"], "comptes": ", ".join(m["comptes"] for m in made), "ignores": ignored}
 
 
+PROGRAM_FILE = "programme_fp0r.bin"
+DEFAULT_CAPACITY = 5000             # FP0R-C16 when RT does not answer
+
+
+def read_program_bytes(plc, progress) -> bytes:
+    """Program steps (RP), one little-endian word each, until the FFFF fill after the last step."""
+    try:
+        cap = plc.read_status().get("capacity_steps") or DEFAULT_CAPACITY
+    except mw.MewtocolError:
+        cap = DEFAULT_CAPACITY
+    words = plc.read_program(cap, lambda s, e: progress(f"lecture du programme : pas {s}..{e}", s, cap))
+    if not words:
+        raise _drv().DriverError("Aucun pas de programme recu")
+    return b"".join(w.to_bytes(2, "little") for w in words)
+
+
+def program_diff(now: bytes, saved: bytes) -> list:
+    from plc_online.web.tools_web import ranges_text
+    return ranges_text([i // 2 for i in range(min(len(now), len(saved))) if now[i] != saved[i]])
+
+
 class Fp0rOps:
     """Session calls for a Panasonic FP0R."""
 
     def __init__(self, session):
+        from plc_online.web.tools_web import ProgramCopies
         self.s = session
+        self.prog = ProgramCopies(
+            session, lambda: self.s.tsx_backups.parent / "panasonic" / "programmes", PROGRAM_FILE, read_program_bytes,
+            lambda blob: f"{len(blob) // 2} pas", program_diff, "fp0r", lambda data: len(data) % 2 == 0 and len(data) > 0,
+            "Rechargement d'un programme dans le FP0R : pas encore valide, utiliser FPWIN GR. La copie sert a comparer "
+            "et a garder une trace.")
+        for name in ("list_backups", "compare", "backup_blocks", "restore_plan", "restore", "export_backup",
+                     "import_backup"):
+            setattr(self, name, getattr(self.prog, name))
+
+    @property
+    def programs(self):
+        return self.prog.programs
+
+    def save_program(self, note):
+        return self.prog.save_program(note)
 
     @property
     def data(self) -> Path:

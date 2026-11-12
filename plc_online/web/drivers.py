@@ -604,7 +604,7 @@ S7_FEATURES = ["horloge", "rack", "evenements", "db", "projet_step7", "programme
 TSX_FEATURES = ["donnees", "horloge", "programme", "runstop", "changements"]
 WAGO_FEATURES = ["chercher"]
 DELTA_FEATURES = ["donnees", "horloge", "changements", "test_entrees"]
-FP0R_FEATURES = ["donnees", "runstop", "changements", "test_entrees"]
+FP0R_FEATURES = ["donnees", "runstop", "changements", "test_entrees", "programme"]
 LOGIX_FEATURES = ["axes"]
 FX_FEATURES = ["donnees", "horloge", "runstop", "programme", "changements", "test_entrees"]
 

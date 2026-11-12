@@ -2,7 +2,6 @@
 """Panasonic FP0R par le port outil (MEWTOCOL), sans FPWIN.
 
     python tools/panasonic.py chercher               trouver vitesse / parite / bits / station du port outil
-    python tools/panasonic.py compteurs              compteurs rapides CH0..CH3 en direct (Ctrl+C)
     python tools/panasonic.py scan --debut 0 --fin 200   afficher les DT qui changent (Ctrl+C)
     python tools/panasonic.py ecrire [DT] [VALEUR]   ecrire UN DT, avec confirmation et relecture
     python tools/panasonic.py programme              copier le programme dans .bin + _hex.txt
@@ -25,27 +24,6 @@ DEFAULT_CAPACITY = 5000  # FP0R-C16 si RT ne repond pas
 
 
 # ---- compteurs / scan (lecture seule) ----
-
-def counters(plc):
-    # DT90300..DT90315 = CH0..CH3 (valeur courante + consigne, 32 bits chacun)
-    # FP0R mono-phase : CH0=X0, CH1=X1, CH2=X3, CH3=X4
-    # Schema machine : X3 = codeur lame (cutter), X4 = codeur film
-    w = plc.read_dt(90300, 16)
-    return {
-        "CH0 (X0)": dint(w, 0),
-        "CH1 (X1)": dint(w, 4),
-        "CH2 lame (X3)": dint(w, 8),
-        "CH3 film (X4)": dint(w, 12),
-    }
-
-
-def cmd_compteurs(plc):
-    print("\nCompteurs rapides  (Ctrl+C pour arreter)\n")
-    while True:
-        c = counters(plc)
-        print("   ".join(f"{k} = {v:>10}" for k, v in c.items()))
-        time.sleep(0.3)
-
 
 def scan_block(plc, start, end):
     return dict(zip(range(start, end + 1), plc.read_dt(start, end - start + 1)))
@@ -186,7 +164,7 @@ def _test_loop(plc, inputs, words, seen_on, done):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("commande", choices=["chercher", "compteurs", "scan", "ecrire", "programme", "test-entrees"])
+    p.add_argument("commande", choices=["chercher", "scan", "ecrire", "programme", "test-entrees"])
     p.add_argument("args", nargs="*", help="ecrire : DT et VALEUR (sinon demandes)")
     p.add_argument("--port", default="COM6")
     p.add_argument("--baud", type=int, default=None, help="9600 par defaut, 115200 pour programme")
@@ -222,9 +200,7 @@ def main():
     plc = Fp0r(ser, a.station)
     print(f"{a.port} @ {baud} {a.parite}")
     try:
-        if a.commande == "compteurs":
-            cmd_compteurs(plc)
-        elif a.commande == "scan":
+        if a.commande == "scan":
             cmd_scan(plc, a.debut, a.fin)
         elif a.commande == "ecrire":
             cmd_ecrire(plc, dt, new)

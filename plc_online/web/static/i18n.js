@@ -632,7 +632,12 @@ const I18N = (() => {
     "autre erreur (IRET / SRET manquant, FOR / NEXT mal places)": "other error (IRET / SRET missing, FOR / NEXT misplaced)",
     "Copie de la memoire programme (parametres + programme), en lecture seule : a garder et a comparer. Environ 1 minute. Rechargement : GX Developer / GX Works.":
       "Copy of the program memory (parameters + program), read only: to keep and compare. About 1 minute. Loading back: GX Developer / GX Works.",
-    "Copie deja sur le PC : .zip de cette page ou .bin de tools/mitsubishi.py :": "Copy already on the PC: .zip from this page or .bin from tools/mitsubishi.py:",
+    "Copie deja sur le PC : .zip de cette page ou .bin de l'outil en ligne de commande :": "Copy already on the PC: .zip from this page or .bin from the command-line tool:",
+    "Copie des pas du programme (commande RP), en lecture seule : a garder et a comparer. Rechargement : FPWIN GR.":
+      "Copy of the program steps (RP command), read only: to keep and compare. Loading back: FPWIN GR.",
+    "Rechargement d'un programme dans le FP0R : pas encore valide, utiliser FPWIN GR. La copie sert a comparer et a garder une trace.":
+      "Loading a program into the FP0R: not validated yet, use FPWIN GR. The copy is for comparing and keeping a record.",
+    "Aucune copie de programme reconnue (.zip de cette page ou .bin de l'outil en ligne de commande)": "No program copy recognized (.zip from this page or .bin from the command-line tool)",
     "Importer un .zip ou un .bin": "Import a .zip or a .bin",
     "Lecture du programme refusee par l'automate : programme protege par mot-cle (les D / M / X / Y restent lisibles)":
       "Program read refused by the PLC: program protected by a keyword (D / M / X / Y stay readable)",
@@ -719,6 +724,7 @@ const I18N = (() => {
     [/^(\d+) \/ (\d+) entrees testees( - pas vues : (.*))?$/, (m, a, b, r, l) => `${a} / ${b} inputs tested` + (l ? " - not seen: " + l : "")],
     [/^Extension (\d) : type non renseigne, pas testee\.$/, "Expansion $1: type not given, not tested."],
     [/^Extension (\d) \((.+)\)$/, "Expansion $1 ($2)"], [/^lecture du programme : (\d+) \/ (\d+) octets$/, "reading the program: $1 / $2 bytes"],
+    [/^lecture du programme : pas (\d+)\.\.(\d+)$/, "reading the program: steps $1..$2"],
     [/^pas (\d+)(\.\.(\d+))?$/, (m, a, r, b) => b ? `steps ${a}..${b}` : `step ${a}`], [/^Bloc special n° (\d+)$/, "Special block no. $1"], [/^Extension (\d)$/, "Expansion $1"],
     [/^Extension (\d) (entree|sortie)$/, (m, n, k) => `Expansion ${n} ${k === "entree" ? "input" : "output"}`],
     [/^Unite de base (entree|sortie)$/, (m, k) => `Base unit ${k === "entree" ? "input" : "output"}`],

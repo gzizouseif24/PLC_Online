@@ -128,3 +128,124 @@ def _delta_inputs(plc) -> dict:
     return {"unites": [{"nom": label, "entrees": [{"adresse": dl.name("X", first + i), "valeur": int(bits[first + i])}
                                                   for i in range(count)]} for label, first, count in units],
             "notes": [], "cablage": ""}
+
+
+# ---- read-only program copies (Panasonic, Mitsubishi): save, compare, details, export, import ----
+
+def ranges_text(indexes, label="pas") -> list:
+    """[3, 4, 5, 9] -> ['pas 3..5', 'pas 9']."""
+    out, start, prev = [], None, None
+    for k in sorted(set(indexes)):
+        if start is not None and k == prev + 1:
+            prev = k
+            continue
+        if start is not None:
+            out.append(f"{label} {start}" if start == prev else f"{label} {start}..{prev}")
+        start = prev = k
+    if start is not None:
+        out.append(f"{label} {start}" if start == prev else f"{label} {start}..{prev}")
+    return out
+
+
+class ProgramCopies:
+    """A folder of program images (one file each + info.json). read(plc, progress) -> bytes,
+    describe(blob) -> summary, diff(now, saved) -> list of differing places."""
+
+    def __init__(self, session, folder_fn, file_name, read, describe, diff, prefix, import_ok, refuse_restore):
+        self.s, self.folder_fn, self.file = session, folder_fn, file_name
+        self.read, self.describe, self.diff = read, describe, diff
+        self.prefix, self.import_ok, self.refuse_restore = prefix, import_ok, refuse_restore
+
+    @property
+    def programs(self):
+        return self.folder_fn()
+
+    def _save(self, blob, automate, note, cpu=""):
+        import hashlib
+        import time
+        from plc_online.web import tsx_web
+        target = _drv()._new_folder(self.programs, self.prefix)
+        target.mkdir(parents=True)
+        (target / self.file).write_bytes(blob)
+        meta = {"date": time.strftime("%Y-%m-%d %H:%M:%S"), "automate": automate, "cible": cpu, "taille": len(blob),
+                "sha256": hashlib.sha256(blob).hexdigest(), "note": note.strip()[:200], "resume": self.describe(blob)}
+        tsx_web._write_meta(target, meta)
+        return {"id": target.name, "comptes": meta["resume"]}
+
+    def _image(self, backup_id) -> bytes:
+        return (_drv().backup_path(self.programs, backup_id) / self.file).read_bytes()
+
+    def list_backups(self):
+        from plc_online.web import tsx_web
+        return {"dossier": str(self.programs), "sauvegardes": tsx_web.list_copies(self.programs, self.file)}
+
+    def save_program(self, note, cpu_fn=lambda plc: ""):
+        def work(plc, progress):
+            blob = self.read(plc, progress)
+            return self._save(blob, plc.nom, note, cpu_fn(plc))
+        return self.s.start_job("sauvegarde du programme", work)
+
+    def compare(self, backup_id):
+        saved = self._image(backup_id)
+
+        def work(plc, progress):
+            now = self.read(plc, progress)
+            if now == saved:
+                return {"id": backup_id, "identique": True, "differences": [], "valeurs_db": []}
+            places = self.diff(now, saved)
+            detail = ", ".join(places[:15]) + (f" (+ {len(places) - 15} autres)" if len(places) > 15 else "")
+            if len(now) != len(saved):
+                detail = f"automate {self.describe(now)}, copie {self.describe(saved)}" + (f" ; {detail}" if detail else "")
+            return {"id": backup_id, "identique": False, "valeurs_db": [],
+                    "differences": [{"bloc": "programme", "type": "", "numero": 0, "verdict": "modifie", "detail": detail}]}
+        return self.s.start_job("comparaison avec l'automate", work)
+
+    def backup_blocks(self, backup_id):
+        import hashlib
+        from plc_online.web import tsx_web
+        meta = tsx_web._meta(_drv().backup_path(self.programs, backup_id))
+        blob = self._image(backup_id)
+        rows = [("CPU", meta.get("cible", "")), ("automate", meta.get("automate", "")), ("programme", self.describe(blob)),
+                ("sha256", hashlib.sha256(blob).hexdigest()[:16] + "...")]
+        return {"id": backup_id, "blocs": [{"bloc": k, "taille": v, "date": "", "somme": ""} for k, v in rows if v]}
+
+    def restore_plan(self, backup_id, with_db=False):
+        raise _drv().DriverError(self.refuse_restore)
+
+    def restore(self, backup_id, with_db=False, delete_extra=False):
+        raise _drv().DriverError(self.refuse_restore)
+
+    def export_backup(self, backup_id):
+        return _drv().export_zip(self.programs, backup_id, self.prefix.replace("-", "_") + "_programme")
+
+    def import_backup(self, files, note):
+        import io
+        import json
+        import zipfile
+        from pathlib import Path
+        self.programs.mkdir(parents=True, exist_ok=True)
+        made, ignored = [], []
+        for name, data in files:
+            base = Path(name.replace("\\", "/")).name
+            if base.lower().endswith(".zip") and data[:4] == b"PK\x03\x04":
+                with zipfile.ZipFile(io.BytesIO(data)) as z:
+                    inner = {Path(n).name: n for n in z.namelist()}
+                    if self.file not in inner:
+                        ignored.append(base)
+                        continue
+                    meta = {}
+                    if "info.json" in inner:
+                        try:
+                            meta = json.loads(z.read(inner["info.json"]).decode("utf-8"))
+                        except (ValueError, UnicodeDecodeError):
+                            pass
+                    made.append(self._save(z.read(inner[self.file]), str(meta.get("automate", "")),
+                                           note or meta.get("note") or f"copie importee ({base})", str(meta.get("cible", ""))))
+            elif base.lower().endswith(".bin") and self.import_ok(data):
+                made.append(self._save(data, "", note or f"importe de {base}"))
+            else:
+                ignored.append(base)
+        if not made:
+            raise _drv().DriverError("Aucune copie de programme reconnue (.zip de cette page ou .bin de l'outil en ligne "
+                                     "de commande)")
+        return {"id": made[-1]["id"], "comptes": ", ".join(m["comptes"] for m in made), "ignores": ignored}
