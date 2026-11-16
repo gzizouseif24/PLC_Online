@@ -81,7 +81,18 @@ def _identify(plc):
             continue
     if cpu == "CPU 224 / 224XP":
         cpu = "CPU 224XP" if plc.v_size == 10240 else "CPU 224"
-    plc.cpu = cpu
+    plc.cpu, plc.firmware = cpu, ""
+    try:                         # area 03: 'CPU 224' padded to 16 characters, then '02010100' (bench 16/11)
+        info = plc.read_raw_area(0x03, 0, 24)
+        name = info[:16].decode("ascii", "replace").strip()
+        digits = info[16:24].decode("ascii", "replace")
+        if name.startswith("CPU"):
+            plc.cpu = name if name.replace(" ", "") in (c.replace(" ", "") for c in CPU_IO) else cpu
+        if digits.isdigit():
+            plc.firmware = f"{digits[0:2]}.{digits[2:4]} (brut {digits})"
+    except ppi.PpiError:
+        pass
+    cpu = plc.cpu
     plc.nom = f"Siemens S7-200 {cpu}"
 
 
@@ -173,6 +184,9 @@ class DemoPort:
             transport, length, db, code = item[3], item[4] << 8 | item[5], item[6] << 8 | item[7], item[8]
             address = item[9] << 16 | item[10] << 8 | item[11]
             area = self._area(code, db)
+            if code == 0x03 and f == 0x04:                     # system info, as the bench CPU 224
+                got = (b"CPU 224".ljust(16) + b"02010100" + bytes([0x2A, 0, 0, 0, 0, 0, 0xFF, 0, 0, 0, 0, 0, 0xFF, 0, 0, 0]))[:length]
+                return self._reply(ref, bytes([4, 1]), bytes([0xFF, 4, len(got) * 8 >> 8, len(got) * 8 & 0xFF]) + got)
             mem = self.mem.get(area)
             start, nbytes = address // 8, (length * 2 if (f == 0x05 and transport == 4) else length)
             if mem is None or (transport != 1 and start + nbytes > len(mem)):
@@ -296,7 +310,8 @@ def s7200_status(plc) -> dict:
     run = running(plc)
     errs = faults(sm)
     last, low, high = struct.unpack_from(">HHH", sm, 22)
-    out = {"marque": "Siemens", "modele": plc.nom, "reference": f"memoire V : {plc.v_size} octets",
+    out = {"marque": "Siemens", "modele": plc.nom,
+           "reference": (f"firmware {plc.firmware}, " if plc.firmware else "") + f"memoire V : {plc.v_size} octets",
            "mode": "RUN" if run else "STOP", "alertes": errs}
     out["voyants"] = [
         {"nom": "RUN", "texte": "RUN", "allume": run, "clignote": False, "defaut": False},

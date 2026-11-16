@@ -805,6 +805,7 @@ const I18N = (() => {
     [/^(.*) \(apres (\d+) essais ; journal des trames : (.+)\)$/, (m, e, n, p) => `${phrases(e)} (after ${n} tries; frame log: ${p})`],
     [/^(\d+) trame\(s\) ignoree\(s\) \(automate en maitre PPI \/ NETR-NETW, ou IHM\), derniere : (.*)$/, "$1 frame(s) skipped (PLC as PPI master / NETR-NETW, or HMI), last: $2"],
     [/^identification CPU : (.+)$/, "CPU identification: $1"], [/^memoire V : (\d+) octets$/, "V memory: $1 bytes"],
+    [/^firmware (.+) \(brut (\d+)\), memoire V : (\d+) octets$/, "firmware $1 (raw $2), V memory: $3 bytes"],
     [/^(\d+) octets \(VB0\.\.VB(\d+)\)$/, "$1 bytes (VB0..VB$2)"], [/^TERM ou STOP \(SM0\.7 = 0\)$/, "TERM or STOP (SM0.7 = 0)"],
     [/^Module (\d) : (.*) \((SMB\d+)\)$/, (m, n, r, s) => `Module ${n}: ${phrases(r)} (${s})`],
     [/^lecture V : (\d+) \/ (\d+) octets$/, "reading V: $1 / $2 bytes"], [/^liste des blocs (\w+)$/, "list of the $1 blocks"],
