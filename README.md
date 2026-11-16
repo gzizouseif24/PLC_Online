@@ -27,6 +27,7 @@ The browser opens on `http://localhost:8000`. The server only listens on this PC
 | Brand | Connection | Default settings | Tested on a real PLC |
 |---|---|---|---|
 | Siemens S7-300 | USB MPI adapter + STEP 7 driver (Windows) | MPI 2, rack 0, slot 2 | yes (315-2 DP) |
+| Siemens S7-200 | RS-232/PPI cable on a COM port (no Siemens software) | 9600 8E1, address 2 | not yet |
 | Schneider TSX Micro / Premium | TSX PCX 1031 cable, TER port | 9600 8O1 | yes (TSX 3721) |
 | WAGO 750 (Ethernet coupler) | Ethernet, Modbus TCP | automatic search | yes (750-352) |
 | Panasonic FP0R | tool port (mini-DIN 5) | 9600 8O1, station 1 | yes |
@@ -65,7 +66,7 @@ Not every tab exists for every brand. The page shows only the tabs that work wit
 
 - Every write, RUN / STOP and restore asks for confirmation. Values are read back after writing.
 - Before a program restore, save the PLC first (Programme tab). The TSX restore does it by itself.
-- The program copies for Panasonic, Mitsubishi and Omron are **read only**: to compare and keep a record.
+- The program copies for Panasonic, Mitsubishi, Omron and S7-200 are **read only**: to compare and keep a record.
   Load programs with the vendor software.
 - **Omron** refuses writes in RUN: use the **Passer en MONITOR** button (the program keeps running).
 - Allen-Bradley safety tags and Kinetix drives are never written.
@@ -77,6 +78,12 @@ Not every tab exists for every brand. The page shows only the tabs that work wit
   - "Set PG/PC Interface" must be `USB.S7USB.1`, and SIMATIC Manager must be closed.
   - Restore loads OB, FB and FC, and DB only if asked. It never loads the hardware configuration.
   - A STEP 7 V5 project (its folder or a `.zip` archive) can be imported as a copy.
+- **Siemens S7-200**:
+  - Pure Python over the RS-232/PPI cable: no Micro/WIN, no 32-bit Python.
+  - CPU, modules (SMB8..SMB21) and their addresses, faults (SM bits), V memory copies, block upload.
+  - Remote RUN / STOP needs the switch on TERM.
+  - Loading a program back and decoding it into instructions: bench work in progress, see
+    [docs/s7-200.md](docs/s7-200.md).
 - **TSX**:
   - Program and data copies also read PL7 files (`.stx`, `.dat`).
   - Live `%I` / `%Q` are not readable yet. The *Recherche des %I* wizard at the bottom of the
@@ -114,6 +121,7 @@ python tools/<brand>.py --help
 | Tool | Commands |
 |---|---|
 | `tools/siemens.py` (32-bit Python) | etat, diagnostic, modules, config, sauvegarder-config, sauvegarder-programme, comparer, restaurer, importer-projet, surveiller, ecrire, lire |
+| `tools/s7200.py` | etat, lire, ecrire, televerser, brut (`--trace` shows every PPI frame) |
 | `tools/tsx.py` | etat, lire, surveiller, ecrire, run, stop, horloge, sauvegarder, comparer, restaurer, sauvegarder-donnees, restaurer-donnees, chercher-es |
 | `tools/omron.py` | etat, erreurs, parametres, lire, surveiller, ecrire, run, monitor, programme, sauvegarder-donnees, restaurer-donnees, sauvegarder, comparer |
 | `tools/panasonic.py` | chercher, scan, ecrire, programme, test-entrees |
@@ -127,7 +135,7 @@ Each of these has its equivalent in the web page.
 ## Folder layout
 
 ```
-plc_online/protocols/   one module per protocol (s7*, unitelway, hostlink, mewtocol, melsec_fx, delta, modbus, wago, logix)
+plc_online/protocols/   one module per protocol (s7*, ppi, unitelway, hostlink, mewtocol, melsec_fx, delta, modbus, wago, logix)
 plc_online/web/         web server (standard library only), one module per brand, page in static/
 tools/                  command-line tools, one per brand
 tests/                  tests against simulated PLCs, no hardware needed
@@ -143,6 +151,7 @@ exemples/               sample watch table
 - [Web interface: status per brand](docs/interface.md)
 - Protocol notes:
   - [S7-300](docs/s7-300.md)
+  - [S7-200](docs/s7-200.md)
   - [TSX / Uni-Telway](docs/unitelway.md)
   - [Omron](docs/omron.md)
   - [Panasonic FP0R](docs/fp0r.md)

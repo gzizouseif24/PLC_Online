@@ -9,6 +9,7 @@ BLOCK_ZONES = {
     "panasonic": [("DT", True), ("WR", True), ("WX", True), ("WY", True)],
     "delta": [("D", True), ("T", True), ("C", True), ("M", False), ("X", False), ("Y", False), ("S", False)],
     "mitsubishi": [("D", True), ("T", True), ("C", True), ("M", False), ("X", False), ("Y", False), ("S", False)],
+    "s7200": [("VW", True), ("VB", True), ("MB", True), ("IB", True), ("QB", True), ("SMB", True), ("AIW", True)],
     "modicon": [("MW", True), ("IW", True), ("M", False), ("I", False)],
     "omron": [("D", True), ("CIO", True), ("W", True), ("H", True), ("A", True), ("T", True), ("C", True)],
     "tsx": [("MW", True), ("MD", True), ("KW", True), ("KD", True), ("SW", True), ("M", False), ("S", False)],
@@ -31,6 +32,14 @@ def read_block(family: str, plc, zone: str, start: int, count: int) -> dict:
         raise _drv().DriverError(f"Zone {zone} : {', '.join(zones) or 'aucune pour cet automate'}")
     if not (0 <= start and 1 <= count <= MAX_BLOCK):
         raise _drv().DriverError(f"Debut >= 0, nombre 1..{MAX_BLOCK}")
+    if family == "s7200":
+        import struct as _st
+        area, size = {"VW": ("V", 2), "VB": ("V", 1), "MB": ("M", 1), "IB": ("I", 1), "QB": ("Q", 1),
+                      "SMB": ("SM", 1), "AIW": ("AI", 2)}[zone]
+        step = 2 if size == 2 else 1
+        raw = plc.read(area, start, count * size)
+        values = list(_st.unpack(f">{count}h", raw)) if size == 2 else list(raw)
+        return {"adresses": [f"{zone}{start + i * step}" for i in range(count)], "valeurs": values}
     if family == "modicon":
         from plc_online.web import modicon_web
         return modicon_web.read_block(plc, zone, start, count)
@@ -87,7 +96,22 @@ def inputs(family: str, plc) -> dict:
         return _delta_inputs(plc)
     if family == "omron":
         return _omron_inputs(plc)
+    if family == "s7200":
+        return _s7200_inputs(plc)
     raise _drv().DriverError("Test des entrees : Panasonic, Mitsubishi, Delta et Omron")
+
+
+def _s7200_inputs(plc) -> dict:
+    from plc_online.web import s7200_web as sw
+    units = [u for u in sw.layout(plc.cpu, sw.modules(plc.read("SM", 0, 30))) if u["di"][1]]
+    top = max(u["di"][0] + u["di"][1] for u in units)
+    raw = plc.read("I", 0, (top + 7) // 8)
+    return {"unites": [{"nom": f"{u['nom']} ({'CPU' if u['position'] == 'CPU' else 'module ' + str(u['position'])})",
+                        "entrees": [{"adresse": sw.bit_name("I", u["di"][0] + k),
+                                     "valeur": raw[(u["di"][0] + k) // 8] >> ((u["di"][0] + k) % 8) & 1}
+                                    for k in range(u["di"][1])]} for u in units],
+            "notes": [], "cablage": "Entrees 24 V, commun 1M / 2M : relie au 0 V (logique positive, capteurs PNP) "
+                                    "ou au +24 V (logique negative, capteurs NPN). Voir le schema du module."}
 
 
 def _omron_inputs(plc) -> dict:

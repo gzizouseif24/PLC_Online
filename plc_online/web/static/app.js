@@ -68,6 +68,7 @@ function renderSettings() {
   $("pana-chercher").hidden = key !== "panasonic";
   $("delta-chercher").hidden = key !== "delta";
   $("hint-omron").hidden = key !== "omron";
+  $("hint-s7200").hidden = key !== "s7-200";
   if (key === "wago") loadCards();
 }
 
@@ -90,7 +91,7 @@ let features = [];
 
 function fxpFamily() {
   /** Brands whose program copy is read only (no restore button). */
-  return family === "mitsubishi" || family === "panasonic" || family === "omron";
+  return family === "mitsubishi" || family === "panasonic" || family === "omron" || family === "s7200";
 }
 
 function applyBrand(key) {
@@ -103,7 +104,9 @@ function applyBrand(key) {
   chLog = [];
   const tsx = family === "tsx";
   const fxp = fxpFamily();
-  $("prog-hint").textContent = family === "omron"
+  $("prog-hint").textContent = family === "s7200"
+    ? "Copie des blocs de l'automate (OB, DB, SDB) tels qu'il les donne, en lecture seule : a garder et a comparer. Rechargement et decodage en instructions : en cours (banc). Rechargement : Micro/WIN."
+    : family === "omron"
     ? "Copie de la zone programme (FINS 0306, experimental), en lecture seule : a garder et a comparer. Rechargement : CX-Programmer."
     : family === "panasonic"
     ? "Copie des pas du programme (commande RP), en lecture seule : a garder et a comparer. Rechargement : FPWIN GR."
@@ -125,13 +128,15 @@ function applyBrand(key) {
   const logix = family === "logix";
   $("btn-stop").textContent = pana ? "Passer en PROG" : family === "omron" ? "Passer en PROGRAM" : "Passer en STOP";
   const mitsu = family === "mitsubishi";
-  const dataLike = family === "delta" || pana || mitsu || family === "omron";        // .csv data copies of this tool
+  const dataLike = family === "delta" || pana || mitsu || family === "omron" || family === "s7200";        // .csv data copies of this tool
   $("watch-hint").textContent = logix
     ? "Nom du tag, comme dans Studio 5000 : Recipe_Speed, Recipe[3].Temp, Program:Main.Count. Ecriture : BOOL, entiers, REAL, STRING (pas les tags de securite)."
     : pana
     ? "DT100, WX0 / WY0 / WR10 (mots), X0, X1F, Y3, R901C (bits : mot decimal + bit hexa). Ecriture : DT, WY, WR, Y, R. Format dint pour les compteurs 32 bits."
     : family === "delta"
     ? "D100, M10, X17 et Y0 (en octal), T5 / C2 (valeur), S0. Ecriture : D, M, Y, T, C, S. Le format se change sur chaque ligne."
+    : family === "s7200"
+    ? "Bits : I0.0, Q0.1, M1.2, V100.3, SM0.5. Octets / mots / doubles : VB10, VW100, VD200 (format real), MB, IB, QB, SMB, SMW22. Analogique : AIW0, AQW0. Ecriture : Q, M, V, SM30+, AQ."
     : family === "modicon"
     ? "%MW (registres 03), %IW (04), %M (bits 01), %I (02). Lecture seule."
     : family === "omron"
@@ -143,7 +148,7 @@ function applyBrand(key) {
     : tsx
     ? "%MW, %MD, %KW, %KD, %SW, %M, %S (le % est facultatif). Ecriture : %MW et %MD. Le format se change sur chaque ligne."
     : "E/I, A/Q, M, DB10.DBW2, T5, Z2. Le format se change sur chaque ligne.";
-  $("ajout-adresse").placeholder = logix ? "Recipe_Speed, Program:Main.Count" : pana ? "DT100, WX0, X0, Y0, R10" : family === "delta" ? "D100, M10, X0, Y0" : family === "omron" ? "D100, 0.03, W10, H5, A400" : family === "modicon" ? "%MW10, %IW0, %M5, %I2" : mitsu ? "D100, M8000, X27, Y0" : family === "wago" ? "IW0, QW0, I0, Q0" : tsx ? "%MW10, %MD4, %M5, %I1.0" : "MW10, E0.0, DB10.DBD4";
+  $("ajout-adresse").placeholder = logix ? "Recipe_Speed, Program:Main.Count" : pana ? "DT100, WX0, X0, Y0, R10" : family === "delta" ? "D100, M10, X0, Y0" : family === "omron" ? "D100, 0.03, W10, H5, A400" : family === "s7200" ? "VW100, I0.0, Q0.1, SMW22, AIW0" : family === "modicon" ? "%MW10, %IW0, %M5, %I2" : mitsu ? "D100, M8000, X27, Y0" : family === "wago" ? "IW0, QW0, I0, Q0" : tsx ? "%MW10, %MD4, %M5, %I1.0" : "MW10, E0.0, DB10.DBD4";
   $("titre-params").textContent = logix ? "Automate" : dataLike ? "Automate" : family === "wago" ? "Image process" : tsx ? "Automate" : "Parametres CPU";
   const head = $("table-rack").tHead.rows[0].cells;
   head[0].textContent = tsx || family === "wago" ? "Position" : dataLike ? "" : "Empl.";
@@ -153,6 +158,8 @@ function applyBrand(key) {
     ? "Copie de tous les registres DT (recettes, compteurs, reglages), sans le programme. Environ 1 a 2 minutes a 9600 bauds."
     : family === "delta"
     ? "Copie de tous les registres D (recettes, compteurs, reglages), sans le programme."
+    : family === "s7200"
+    ? "Copie de toute la memoire V (VB0..fin, recettes, compteurs, reglages), sans le programme."
     : family === "omron"
     ? "Copie des zones D, H et W (recettes, compteurs, reglages), sans le programme. Restauration : passage en MONITOR si l'automate est en RUN."
     : mitsu
@@ -921,7 +928,7 @@ function saveData(ev) {
 }
 
 async function planData(b) {
-  const zn = family === "omron" ? "mots" : family === "delta" || family === "mitsubishi" ? "D" : family === "panasonic" ? "DT" : "%MW";
+  const zn = family === "omron" ? "mots" : family === "s7200" ? "VB" : family === "delta" || family === "mitsubishi" ? "D" : family === "panasonic" ? "DT" : "%MW";
   setDataMsg(`Lecture des ${zn} de l'automate...`);
   let plan;
   try {
@@ -978,7 +985,7 @@ async function planData(b) {
 }
 
 async function importData(fileList) {
-  const files = [...fileList].filter((f) => (["delta", "panasonic", "mitsubishi", "omron"].includes(family) ? /\.csv$/i : /\.(dat|csv)$/i).test(f.name));
+  const files = [...fileList].filter((f) => (["delta", "panasonic", "mitsubishi", "omron", "s7200"].includes(family) ? /\.csv$/i : /\.(dat|csv)$/i).test(f.name));
   if (!files.length) {
     setDataMsg("Aucun fichier .dat ou .csv dans la selection.", true);
     return;
@@ -1013,6 +1020,8 @@ function formatsFor(adresse) {
   if (family === "wago") return /^[IQ]W\d+$/.test(a) ? ["dec", "pt100", "ud", "hex", "bin"] : [];
   if (family === "delta" || family === "mitsubishi") return /^[DTC]\d+$/.test(a) ? ["dec", "ud", "hex", "bin"] : [];
   if (family === "omron") return /\./.test(a) ? [] : ["dec", "ud", "hex", "bin"];
+  if (family === "s7200") return /^(SM|[IQMV])D\d+$/.test(a) ? ["dec", "ud", "hex", "bin", "real"]
+    : /^(SM|AI|AQ|[IQMV])[BW]\d+$/.test(a) ? ["dec", "ud", "hex", "bin"] : [];
   if (family === "modicon") return /^%?[MI]W\d+$/.test(a) ? ["dec", "ud", "hex", "bin"] : [];
   if (family === "panasonic") return /^DT\d+$/.test(a) ? ["dec", "ud", "hex", "bin", "dint"]
     : /^W[XYR]\d+$/.test(a) ? ["dec", "ud", "hex", "bin"] : [];
@@ -1562,6 +1571,7 @@ function renderDiagnostic(d) {
   $("diag-info").textContent = family === "logix" ? "Automate, modules du chassis 1756 emplacement par emplacement, axes en defaut."
     : family === "panasonic" ? "Relais et registres speciaux (R9000.., DT90000..), entrees / sorties integrees."
     : family === "delta" ? "Relais et registres speciaux (M1000.., D1000..), entrees / sorties."
+    : family === "s7200" ? "Bits speciaux (SM) expliques, CPU et modules d'extension (SMB8..SMB21) avec leurs adresses et valeurs."
     : family === "omron" ? "Journal d'erreurs, erreurs fatales / non fatales, cartes de la table E/S avec leurs mots CIO, reglages automate."
     : family === "mitsubishi" ? "Relais et registres speciaux (M8000.., D8000..), entrees / sorties par unite (octal)."
     : family === "wago" ? "Modules lus dans le coupleur, valeurs de l'image process."
