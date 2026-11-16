@@ -62,7 +62,11 @@ def cmd_televerser(plc, folder: Path):
             continue
         print(f"{kind} : {numbers or 'aucun'}")
         for n in numbers:
-            blob = plc.upload(kind, n)
+            try:
+                blob = plc.upload(kind, n)
+            except ppi.PlcRefused as e:
+                print(f"   {kind}{n} : refuse ({e}) - fichiers essayes : _0{chr(ppi.BLOCK_TYPES[kind])}{n:05d} A / P / B")
+                continue
             path = folder / f"{kind}{n}.bin"
             path.write_bytes(blob)
             print(f"   {path}  {len(blob)} octets  debut : {blob[:24].hex(' ')}")
