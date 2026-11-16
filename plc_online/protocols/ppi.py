@@ -29,6 +29,10 @@ TIMER200, COUNTER200 = 0x1F, 0x1E
 BLOCK_TYPES = {"OB": 0x38, "DB": 0x41, "SDB": 0x42}
 
 PDU_ERRORS = {0x8104: "fonction non supportee", 0x8500: "PDU trop long", 0xD209: "bloc inexistant",
+              0xD201: "nom de bloc incorrect", 0xD202: "parametre incorrect", 0xD203: "type de bloc incorrect",
+              0xD204: "pas de bloc lie en memoire", 0xD205: "le bloc existe deja", 0xD206: "le bloc existe deja",
+              0xD207: "le bloc existe deja en EEPROM", 0xD210: "numero de bloc trop grand",
+              0xD240: "regles de coordination violees (transfert de bloc en cours ?)",
               0xD20E: "pas de bloc", 0xD210: "bloc en cours de modification", 0x8404: "erreur de contexte",
               0xD802: "fonction impossible dans ce mode (RUN / STOP ?)", 0xD60A: "mot de passe necessaire",
               0x8000: "fonction occupee"}
@@ -477,6 +481,14 @@ class S7200:
         pdu_size - 22 bytes; the PLC ends with 1C; the PI service _INSE links the block. CPU in STOP."""
         info = block_info(blob)
         name = f"0{blob[5]:X}{info['numero']:05d}P".encode()
+        try:
+            self._load(blob, info, name, progress)
+        except PpiError as e:
+            path = self.ppi.write_journal()
+            raise type(e)(f"{info['type']}{info['numero']} : {e}" + (f" (journal des trames : {path})" if path and "journal" not in str(e) else ""),
+                          *([e.code] if isinstance(e, PlcRefused) else [])) from None
+
+    def _load(self, blob, info, name, progress):
         sizes = f"1{info['taille']:06d}{info['code']:06d}".encode()
         self._call(bytes([0x1A, 0, 1, 0, 0, 0, 0, 0, 9, 0x5F]) + name + bytes([len(sizes)]) + sizes)
         step, sent = max(32, self.pdu_size - 22), 0
