@@ -163,6 +163,33 @@ class BlockTests(unittest.TestCase):
             plc.load_block(blob)
 
 
+class DecodeTests(unittest.TestCase):
+    """OB1 of the bench program (16/11) against Micro/WIN's own STL export of SBR10 'Allgemein'."""
+    folder = Path(__file__).resolve().parents[1] / "research" / "s7200"
+
+    def instructions(self, text, block):
+        body = text.split(block, 1)[1].split("END_SUBROUTINE_BLOCK", 1)[0]
+        return [" ".join(line.split("//")[0].split()) for line in body.splitlines()
+                if line.strip() and not line.startswith(("Network", "TITLE", "BEGIN", "//"))]
+
+    def test_allgemein_as_microwin(self):
+        from plc_online.protocols import s7200_code
+        r = s7200_code.to_stl((self.folder / "machine_banc" / "OB1.bin").read_bytes())
+        awl = (self.folder / "machine_banc" / "Allgemein_SBR10.awl").read_text(encoding="latin-1")
+        self.assertEqual(self.instructions(r["texte"], "Allgemein:SBR10"), self.instructions(awl, "Allgemein:SBR10"))
+        self.assertIn("SUBROUTINE_BLOCK ScherenHyd:SBR11", r["texte"])
+        self.assertIn("CALL   SBR11", r["texte"])
+        self.assertEqual(r["texte"].count("Network "), 3 + 5 + 20)
+        self.assertEqual(r["inconnu"], 1)
+
+    def test_empty_project(self):
+        from plc_online.protocols import s7200_code
+        r = s7200_code.to_stl((self.folder / "bench_P0" / "OB1.bin").read_bytes())
+        self.assertEqual([line for line in r["texte"].splitlines() if "BLOCK" in line and "END" not in line],
+                         ["ORGANIZATION_BLOCK MAIN:OB1", "SUBROUTINE_BLOCK SBR_0:SBR0", "INTERRUPT_BLOCK INT_0:INT0"])
+        self.assertEqual((r["sur"], r["doute"], r["inconnu"]), (0, 0, 0))
+
+
 class WebTests(unittest.TestCase):
     def setUp(self):
         self.s = Session(backups=tempfile.mkdtemp())
@@ -246,7 +273,9 @@ class WebTests(unittest.TestCase):
                          ("", ["OB1", "DB1", "SDB0"], [], True))
         self.assertEqual(port.blocks, p0)
         self.assertFalse(port.running)
-        self.assertEqual(self.s.backup_blocks(saved["id"])["blocs"][2]["taille"], "106 octets : MAIN SBR_0 INT_0")
+        details = self.s.backup_blocks(saved["id"])
+        self.assertEqual(details["blocs"][2]["taille"], "106 octets : MAIN SBR_0 INT_0")
+        self.assertIn("SUBROUTINE_BLOCK SBR_0:SBR0", details["stl"]["texte"])
         self.assertIn("avant restauration", str(self.s.list_backups()))
         self.s.data_save("")
         data = self.wait()

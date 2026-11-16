@@ -6,6 +6,7 @@
     python tools/s7200.py ecrire VW10 1234         ecrire UNE adresse, avec confirmation et relecture
     python tools/s7200.py televerser [DOSSIER]     lire tous les blocs (OB, DB, SDB) : un fichier .bin par bloc
     python tools/s7200.py charger DOSSIER          recharger les blocs .bin d'un dossier de televerser (STOP, confirmation)
+    python tools/s7200.py stl DOSSIER|OB1.bin      programme en STL (liste d'instructions), ecrit aussi OB1.awl
     python tools/s7200.py brut                     octets bruts utiles a la recherche (SMB0..29, zone systeme 03)
 
 Options : --port COM6, --baud 9600, --adresse 2 (automate), --local 0 (PC), --trace (trames PPI).
@@ -121,6 +122,19 @@ def cmd_charger(plc, folder: Path):
     print("L'automate est en STOP. Pour repartir : RUN dans l'interface web, ou le selecteur.")
 
 
+def cmd_stl(target: Path):
+    from plc_online.protocols import s7200_code
+    path = target / "OB1.bin" if target.is_dir() else target
+    try:
+        r = s7200_code.to_stl(path.read_bytes())
+    except (OSError, s7200_code.CodeError) as e:
+        sys.exit(f"{path} : {e}")
+    print(r["texte"])
+    out = path.with_suffix(".awl")
+    out.write_text(r["texte"].replace("\n", "\r\n"), encoding="latin-1")
+    print(f"// {r['sur']} sures, {r['doute']} deduites (?), {r['inconnu']} inconnues (??) ; ecrit dans {out}")
+
+
 def cmd_brut(plc):
     print("SMB0..29 :", plc.read("SM", 0, 30).hex(" "))
     for code, name in ((0x03, "zone 03 (infos systeme)"), (0x05, "zone 05 (SM)")):
@@ -132,7 +146,7 @@ def cmd_brut(plc):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("commande", choices=["etat", "lire", "ecrire", "televerser", "charger", "brut"])
+    p.add_argument("commande", choices=["etat", "lire", "ecrire", "televerser", "charger", "stl", "brut"])
     p.add_argument("args", nargs="*")
     p.add_argument("--port", default="COM6")
     p.add_argument("--baud", type=int, default=9600)
@@ -140,6 +154,10 @@ def main():
     p.add_argument("--local", type=int, default=0)
     p.add_argument("--trace", action="store_true", help="afficher chaque trame PPI")
     a = p.parse_args()
+    if a.commande == "stl":                          # works on files: no PLC needed
+        if not a.args:
+            sys.exit("stl DOSSIER (fait par televerser) ou fichier OB1.bin")
+        return cmd_stl(Path(a.args[0]))
     log = (lambda d, b: print(f"      {d} {b.hex(' ')}")) if a.trace else None
     try:
         plc = ppi.S7200(ppi.Ppi(ppi.open_port(a.port, a.baud), a.adresse, a.local, log=log)).connect()

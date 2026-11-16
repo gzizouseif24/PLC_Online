@@ -735,7 +735,14 @@ class S7200Ops:
                 info = {"noms": [], "modifie": "", "protege": False}
             rows.append({"bloc": f"{kind}{n}", "taille": f"{len(data)} octets" + (" : " + " ".join(info["noms"]) if info["noms"] else "")
                          + (" (protege)" if info["protege"] else ""), "date": info["modifie"], "somme": ""})
-        return {"id": backup_id, "blocs": rows}
+        out = {"id": backup_id, "blocs": rows}
+        if ("OB", 1) in unpack_blocks(blob):
+            from plc_online.protocols import s7200_code
+            try:
+                out["stl"] = s7200_code.to_stl(unpack_blocks(blob)[("OB", 1)])
+            except s7200_code.CodeError as e:
+                out["stl"] = {"texte": f"// decodage impossible : {e}", "sur": 0, "doute": 0, "inconnu": 0}
+        return out
 
     def restore_plan(self, backup_id, with_db=False):
         blob, meta = self._copy(backup_id)

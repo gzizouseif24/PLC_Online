@@ -86,7 +86,9 @@ Not every tab exists for every brand. The page shows only the tabs that work wit
   - A Micro/WIN project (`.mwp`) is source: load it with Micro/WIN. The tool restores its own copies.
   - In Micro/WIN, **Upload** (up arrow) reads the PLC. **Download** (down arrow) replaces its program.
   - Remote RUN / STOP needs the switch on TERM.
-  - Decoding into instructions: bench work in progress, see [docs/s7-200.md](docs/s7-200.md).
+  - The program is decoded into STL (*Details* of a copy, `.awl` download). Bit logic, timers, S / R and
+    CALL are decoded. Other instructions show as `?? <hex>` until they are matched with a Micro/WIN export,
+    see [docs/s7-200.md](docs/s7-200.md).
 - **TSX**:
   - Program and data copies also read PL7 files (`.stx`, `.dat`).
   - Live `%I` / `%Q` are not readable yet. The *Recherche des %I* wizard at the bottom of the
@@ -124,7 +126,7 @@ python tools/<brand>.py --help
 | Tool | Commands |
 |---|---|
 | `tools/siemens.py` (32-bit Python) | etat, diagnostic, modules, config, sauvegarder-config, sauvegarder-programme, comparer, restaurer, importer-projet, surveiller, ecrire, lire |
-| `tools/s7200.py` | etat, lire, ecrire, televerser, charger, brut (`--trace` shows every PPI frame) |
+| `tools/s7200.py` | etat, lire, ecrire, televerser, charger, stl, brut (`--trace` shows every PPI frame) |
 | `tools/tsx.py` | etat, lire, surveiller, ecrire, run, stop, horloge, sauvegarder, comparer, restaurer, sauvegarder-donnees, restaurer-donnees, chercher-es |
 | `tools/omron.py` | etat, erreurs, parametres, lire, surveiller, ecrire, run, monitor, programme, sauvegarder-donnees, restaurer-donnees, sauvegarder, comparer |
 | `tools/panasonic.py` | chercher, scan, ecrire, programme, test-entrees |

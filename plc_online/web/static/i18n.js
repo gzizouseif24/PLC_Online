@@ -724,6 +724,8 @@ const I18N = (() => {
       "Copy of the PLC's blocks (OB1 program, DB1 data, SDB0 system block) as it gives them: to keep, compare and load back (STOP). A .mwp project is loaded with Micro/WIN. Decoding into instructions: in progress (bench).",
     "DB1 remet les valeurs initiales de la memoire V (bloc de donnees de Micro/WIN) : faire d'abord une copie des donnees (onglet Donnees) si des reglages ont change.":
       "DB1 puts back the initial values of V memory (Micro/WIN data block): first copy the data (Donnees tab) if settings have changed.",
+    "Programme en STL (decode par l'outil)": "Program in STL (decoded by the tool)",
+    "Telecharger .awl": "Download .awl",
     "SDB2 n'est pas recharge : la CPU le garde elle-meme en EEPROM.": "SDB2 is not loaded: the CPU keeps it in its EEPROM itself.",
     "l'automate reste en RUN (selecteur sur RUN ? le mettre sur STOP ou TERM)": "the PLC stays in RUN (switch on RUN? set it to STOP or TERM)",
     "Bits : I0.0, Q0.1, M1.2, V100.3, SM0.5. Octets / mots / doubles : VB10, VW100, VD200 (format real), MB, IB, QB, SMB, SMW22. Analogique : AIW0, AQW0. Ecriture : Q, M, V, SM30+, AQ.":

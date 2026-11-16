@@ -717,6 +717,20 @@ async function showBlocks(b) {
         const dl = el("dl", "details");
         dl.append(...r.blocs.flatMap((x) => [el("dt", "", x.bloc), el("dd", "", x.taille)]));
         box.append(dl);
+        if (r.stl) {
+          box.append(el("h4", "", "Programme en STL (decode par l'outil)"));
+          box.append(el("p", "hint", `${r.stl.sur} instructions sures, ${r.stl.doute} deduites (marquees ?), ${r.stl.inconnu} groupes d'octets inconnus (??).`));
+          box.append(el("pre", "stl", r.stl.texte));
+          const save = el("button", "btn small", "Telecharger .awl");
+          save.type = "button";
+          save.addEventListener("click", () => {
+            const a = el("a");
+            a.href = URL.createObjectURL(new Blob([r.stl.texte.replace(/\n/g, "\r\n")], { type: "text/plain" }));
+            a.download = "programme_" + b.id + ".awl";
+            a.click();
+          });
+          box.append(save);
+        }
         return;
       }
       box.append(el("h4", "", "Blocs de la sauvegarde du " + b.date + (b.note ? " — " + b.note : "")));
