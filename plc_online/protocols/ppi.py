@@ -13,8 +13,10 @@ S7 PDU: 32 type 00 00 ref(2) param_len(2) data_len(2) [error(2) for replies type
 S7-200 memory areas (S7 area codes, libnodave nodave.h): I 81, Q 82, M 83, V = DB1 in area 84,
 SM 05, AI 06, AQ 07, IEC counters 1E, IEC timers 1F.
 """
+import random
 import time
 from collections import deque
+from pathlib import Path
 
 SD2, SD1, SYN, SC = 0x68, 0x10, 0x16, 0xE5
 
@@ -87,11 +89,43 @@ def open_port(port: str, baud: int = 9600, timeout: float = 0.3):
 class Ppi:
     """PPI master (the PC) talking to one S7-200."""
 
-    def __init__(self, ser, plc: int = 2, local: int = 0, retries: int = 2, log=None):
+    def __init__(self, ser, plc: int = 2, local: int = 0, retries: int = 4, log=None):
         self.ser, self.plc, self.local, self.retries = ser, plc, local, retries
         self.log = log
         self.skipped = deque(maxlen=50)   # frames of other stations seen on the line (master PLC, HMI)
+        self.journal = deque(maxlen=400)  # last frames both ways, written to journal_path when the link fails
+        self.journal_path = None
+        self.failures = 0                 # exchanges that needed a retry (shown in Diagnostic)
         self.ref = 0
+
+    def _note(self, kind: str, data: bytes = b"", text: str = ""):
+        self.journal.append((time.time(), kind, data.hex(" ") if data else text))
+
+    def write_journal(self) -> str:
+        if not self.journal_path:
+            return ""
+        path = Path(self.journal_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        lines = [f"{time.strftime('%H:%M:%S', time.localtime(t))}.{int(t * 1000) % 1000:03d}  {k:8} {d}"
+                 for t, k, d in self.journal]
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return str(path)
+
+    def _quiet(self, gap: float = 0.015, limit: float = 0.3):
+        """Wait for a silent line before sending (another master may be talking), keeping what passes."""
+        waiting = getattr(self.ser, "in_waiting", None)
+        if waiting is None:
+            self.ser.reset_input_buffer()
+            return
+        end, last = time.time() + limit, time.time()
+        while time.time() < end:
+            n = self.ser.in_waiting
+            if n:
+                self._note("ligne", self.ser.read(n))
+                last = time.time()
+            elif time.time() - last >= gap:
+                return
+            time.sleep(0.002)
 
     def _read_exact(self, n: int) -> bytes:
         out = b""
@@ -113,30 +147,40 @@ class Ppi:
                 continue
             b = first[0]
             if b == SC:
+                self._note("<- E5")
                 return "E5", b""
             if b == SD1:
-                rest = self._read_exact(5)
-                self.skipped.append(first + rest)
+                frame = first + self._read_exact(5)
+                self.skipped.append(frame)
+                self._note("autre", frame)
                 continue
             if b == 0xDC:                                # SD4 token frame
-                self.skipped.append(first + self._read_exact(2))
+                frame = first + self._read_exact(2)
+                self.skipped.append(frame)
+                self._note("jeton", frame)
                 continue
             if b != SD2:
                 self.skipped.append(first)               # stray byte
+                self._note("octet", first)
                 continue
             head = first + self._read_exact(3)
             if len(head) < 4 or head[3] != SD2 or head[1] != head[2]:
                 self.skipped.append(head)
+                self._note("octets", head)
                 continue
             rest = self._read_exact(head[1] + 2)
             if len(rest) != head[1] + 2 or rest[-1] != SYN:
+                self._note("coupee", head + rest)
                 raise PpiError(f"trame coupee : {(head + rest).hex(' ')}")
             body = rest[:-2]
             if fcs(body) != rest[-2]:
+                self._note("FCS?", head + rest)
                 raise PpiError("somme de controle fausse")
             if body[0] != self.local or body[1] != self.plc:   # SD2 between other stations
                 self.skipped.append(head + rest)
+                self._note("autre", head + rest)
                 continue
+            self._note("<-", head + rest)
             if self.log:
                 self.log("<-", head + rest)
             return "SD2", body[3:]                       # skip DA SA FC
@@ -147,6 +191,7 @@ class Ppi:
         fc = 0x5C
         for _ in range(30):
             self.ser.write(sd1_frame(self.plc, self.local, fc))
+            self._note("-> SD1", sd1_frame(self.plc, self.local, fc))
             got = self._next()
             if got is None:
                 raise PpiError("pas de reponse a la demande de donnees")
@@ -161,24 +206,30 @@ class Ppi:
         self.ref = (self.ref + 1) & 0xFFFF or 1
         frame = sd2_frame(self.plc, self.local, 0x6C, s7_header(self.ref, param, data, pdu_type))
         error = None
-        for _ in range(self.retries + 1):
-            self.ser.reset_input_buffer()
+        for attempt in range(self.retries + 1):
+            if attempt:
+                self.failures += 1
+                self._note("ERREUR", text=str(error))
+                time.sleep(random.uniform(0.03, 0.15))      # other master on the line: try at another moment
+            self._quiet()
             self.ser.write(frame)
+            self._note("->", frame)
             if self.log:
                 self.log("->", frame)
-            got = self._next()
-            if got is None:
-                error = PpiError("pas de reponse (cable PPI branche ? adresse de l'automate ? vitesse ?)")
-                continue
-            if got[0] != "E5":
-                error = PpiError("reponse sans acquittement E5")
-                continue
             try:
+                got = self._next()
+                if got is None:
+                    error = PpiError("pas de reponse (cable PPI branche ? adresse de l'automate ? vitesse ?)")
+                    continue
+                if got[0] != "E5":
+                    error = PpiError("reponse sans acquittement E5")
+                    continue
                 return parse_pdu(self._reply())
             except PpiError as e:
                 error = e
-                time.sleep(0.05)
-        raise error
+        self._note("ECHEC", text=str(error))
+        path = self.write_journal()
+        raise PpiError(f"{error} (apres {self.retries + 1} essais ; journal des trames : {path})" if path else str(error))
 
     def close(self):
         self.ser.close()

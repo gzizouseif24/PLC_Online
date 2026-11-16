@@ -56,6 +56,7 @@ def open_s7200(settings: dict):
     except Exception as e:
         raise _drv().DriverError(tsx_web.port_error(port, e)) from None
     plc = ppi.S7200(ppi.Ppi(ser, plc_addr, local))
+    plc.ppi.journal_path = Path.home() / "PLC Online" / "sauvegardes" / "s7-200" / "journal_ppi.txt"
     try:
         plc.connect()
     except ppi.PpiError as e:
@@ -345,6 +346,8 @@ def s7200_diagnostic(plc) -> dict:
                                "etat": ", ".join(u["erreurs"]) or "ok", "ok": not u["erreurs"], "variables": variables})
     out["parametres_cpu"] = [("CPU", plc.cpu), ("Memoire V", f"{plc.v_size} octets (VB0..VB{plc.v_size - 1})"),
                              ("Taille PDU", str(plc.pdu_size))]
+    out["parametres_cpu"].append(("Echanges repetes", f"{plc.ppi.failures} depuis la connexion "
+                                  "(une repetition = trame perdue ou brouillee, puis reussie)"))
     other = list(plc.ppi.skipped)
     if other:
         out["parametres_cpu"].append(("Autres stations sur la ligne",

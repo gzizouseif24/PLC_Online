@@ -2,6 +2,7 @@
 import tempfile
 import time
 import unittest
+from pathlib import Path
 
 from plc_online.protocols import ppi
 from plc_online.web import s7200_web as sw
@@ -43,6 +44,18 @@ class LinkTests(unittest.TestCase):
         plc = ppi.S7200(ppi.Ppi(port, retries=0)).connect()
         self.assertEqual(plc.read("V", 0, 2), bytes([0x04, 0xD2]))
         self.assertTrue(any(f[0] == ppi.SD1 for f in plc.ppi.skipped))
+
+    def test_journal_written_when_the_link_fails(self):
+        port = sw.DemoPort()
+        plc = ppi.S7200(ppi.Ppi(port, retries=1)).connect()
+        plc.ppi.journal_path = Path(tempfile.mkdtemp()) / "journal_ppi.txt"
+        port.write = lambda frame: None                    # cable unplugged
+        with self.assertRaises(ppi.PpiError) as e:
+            plc.read("V", 0, 2)
+        self.assertIn("journal_ppi.txt", str(e.exception))
+        text = plc.ppi.journal_path.read_text()
+        self.assertIn("ECHEC", text)
+        self.assertEqual(plc.ppi.failures, 1)
 
     def test_bad_checksum_and_errors(self):
         port = sw.DemoPort()
