@@ -21,7 +21,7 @@ def _drv():
     return drivers
 
 
-SETTINGS = [{"cle": "port", "nom": "Port COM (cable RS-232/PPI)", "defaut": "COM1", "type": "port"},
+SETTINGS = [{"cle": "port", "nom": "Port COM (cable RS-232/PPI)", "defaut": "COM6", "type": "port"},
             {"cle": "baud", "nom": "Vitesse", "defaut": 9600},
             {"cle": "adresse", "nom": "Adresse PPI de l'automate", "defaut": 2},
             {"cle": "local", "nom": "Adresse PPI du PC", "defaut": 0}]
@@ -45,7 +45,7 @@ MODULE_ERRORS = {7: "erreur de configuration", 4: "defaut bus ou parite", 3: "ho
 
 
 def open_s7200(settings: dict):
-    port = str(settings.get("port") or "COM1").strip()
+    port = str(settings.get("port") or "COM6").strip()
     try:
         baud = int(settings.get("baud") or 9600)
         plc_addr, local = int(settings.get("adresse") or 2), int(settings.get("local") or 0)

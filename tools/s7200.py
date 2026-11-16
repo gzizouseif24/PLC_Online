@@ -7,7 +7,7 @@
     python tools/s7200.py televerser [DOSSIER]     lire tous les blocs (OB, DB, SDB) : un fichier .bin par bloc
     python tools/s7200.py brut                     octets bruts utiles a la recherche (SMB0..29, zone systeme 03)
 
-Options : --port COM1, --baud 9600, --adresse 2 (automate), --local 0 (PC), --trace (trames PPI).
+Options : --port COM6, --baud 9600, --adresse 2 (automate), --local 0 (PC), --trace (trames PPI).
 Cable RS-232/PPI : commutateurs 9600 bauds, mode PPI. Micro/WIN ferme.
 """
 import argparse
@@ -81,7 +81,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("commande", choices=["etat", "lire", "ecrire", "televerser", "brut"])
     p.add_argument("args", nargs="*")
-    p.add_argument("--port", default="COM1")
+    p.add_argument("--port", default="COM6")
     p.add_argument("--baud", type=int, default=9600)
     p.add_argument("--adresse", type=int, default=2)
     p.add_argument("--local", type=int, default=0)
