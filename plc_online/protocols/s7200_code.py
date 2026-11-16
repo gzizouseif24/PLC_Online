@@ -22,15 +22,17 @@ import struct
 import zlib
 
 BIT_OPS = {0x0: "LD", 0x1: "LDN", 0x2: "A", 0x3: "AN", 0x4: "O", 0x5: "ON", 0x6: "="}
-GUESSED_OPS = {0x4, 0x5}                     # O / ON: by position, not yet seen in Micro/WIN's STL
-AREAS = {0: "I", 1: "Q", 2: "M", 4: "SM", 5: "T", 6: "C"}
-GUESSED_AREAS = {6}
+AREAS = {0: "I", 1: "Q", 2: "M", 4: "SM", 5: "T", 6: "C", 8: "V"}
+SEEN_AREAS = {"I", "Q", "M", "SM", "T", "V"}            # seen in Micro/WIN exports; others are deduced
 
-ONE_BYTE = {0xDD: ("OLD", True), 0xDC: ("ALD", False), 0xE1: ("EU", False), 0xED: ("MEND", True),
-            0xE9: ("RET", True), 0xE5: ("RETI", True)}
+ONE_BYTE = {0xDD: "OLD", 0xDC: "ALD", 0xE1: "EU", 0xED: "MEND", 0xE9: "RET", 0xE5: "RETI"}
 PROLOGUE = bytes.fromhex("fe24014a826409")
-GUESSED = ("O / ON (4x / 5x), ALD (DC), EU (E1) et la zone C : deduits de la place dans le code, "
-           "a confirmer avec un export STL de Micro/WIN")
+# word instructions: opcode -> (name, size of the operands: 1 B, 2 W, 4 D, number of operands)
+MOVES = {0xD8: ("MOVB", 1), 0xD9: ("MOVW", 2), 0xDA: ("MOVD", 4)}
+DEDUCED = {0xD8}            # same layout as MOVW / MOVD, not yet seen in a Micro/WIN export
+COMPARES = {0x96: "LDW<=", 0x98: "LDW>="}
+INCS = {0xB1: ("INCW", 2), 0xB2: ("INCD", 4)}
+GUESSED = "MOVB (D8) et zone C : deduits par analogie, a confirmer avec un export STL de Micro/WIN"
 
 
 class CodeError(ValueError):
@@ -38,20 +40,68 @@ class CodeError(ValueError):
 
 
 def bit_operand(word12: int):
+    """2-byte bit instructions: 12 bits = area (3) | bit (3) | byte (6)."""
     area, bit, byte = word12 >> 9 & 7, word12 >> 6 & 7, word12 & 0x3F
     name = AREAS.get(area)
     if name is None:
-        return None, True
+        return None, False
     if name in ("T", "C"):
-        return f"{name}{byte * 8 + bit}", area in GUESSED_AREAS
-    return f"{name}{byte}.{bit}", area in GUESSED_AREAS
+        return f"{name}{byte * 8 + bit}", name in SEEN_AREAS
+    return f"{name}{byte}.{bit}", name in SEEN_AREAS
 
 
-def ext_bit(area_bit: int, byte: int):
-    """Bit operand of the FE instructions (S / R): 20 | bit << 1 = M (bench: 22 0E = M14.1)."""
-    if area_bit & 0xF0 == 0x20 and not area_bit & 1:
-        return f"M{byte}.{area_bit >> 1 & 7}", False
-    return None, True
+def long_bit(code: bytes, i: int):
+    """Long bit operand (80-86 instructions, S / R): <area nibble | bit*2> <byte>, or for a byte above 255
+    <F0 | bit*2> <area byte> <byte 2 bytes> (bench: 84 0D = V13.2, F8 80 03 84 = V900.4)."""
+    if i + 2 > len(code) or code[i] & 1:
+        return None, 0, False
+    first, bit = code[i] >> 4, code[i] >> 1 & 7
+    if first == 0xF:
+        if i + 4 > len(code):
+            return None, 0, False
+        area, byte, size = code[i + 1] >> 4, code[i + 2] << 8 | code[i + 3], 4
+    else:
+        area, byte, size = first, code[i + 1], 2
+    name = AREAS.get(area)
+    if name is None or name in ("T", "C"):
+        return None, 0, False
+    return f"{name}{byte}.{bit}", size, name in SEEN_AREAS
+
+
+def word_operand(code: bytes, i: int, width: int):
+    """Byte / word / double operand: <area nibble | address 12 bits> (bench: 83 F2 = VD1010)."""
+    if i + 2 > len(code):
+        return None, False
+    area, addr = code[i] >> 4, (code[i] & 0x0F) << 8 | code[i + 1]
+    name = AREAS.get(area)
+    if name is None or name in ("T", "C"):
+        return None, False
+    return f"{name}{'BWxD'[width - 1] if width != 3 else '?'}{addr}", name in SEEN_AREAS
+
+
+def constant(code: bytes, i: int, width: int):
+    if i + width > len(code):
+        return None
+    return f"{int.from_bytes(code[i:i + width], 'big', signed=True):+d}"
+
+
+def operands(code, i, flags, widths):
+    """Operands after a flags byte: bit 6 = first operand is a constant, bit 2 = second one."""
+    out, sure = [], True
+    for k, width in enumerate(widths):
+        is_const = flags & (0x40 if k == 0 else 0x04)
+        if is_const:
+            text = constant(code, i, width)
+            step = width
+        else:
+            text, ok = word_operand(code, i, width)
+            sure &= ok
+            step = 2
+        if text is None:
+            return None, i, False
+        out.append(text)
+        i += step
+    return out, i, sure
 
 
 def decode_item(code: bytes) -> list:
@@ -59,44 +109,51 @@ def decode_item(code: bytes) -> list:
     item and are returned as one '??' line."""
     out, i = [], 0
     while i < len(code):
-        b = code[i]
+        b, start = code[i], i
+        text, sure = None, True
         if code[i:i + 7] == PROLOGUE:
-            out.append(("// debut du programme (prologue)", code[i:i + 7], True))
-            i += 7
-            continue
-        if b in (0xD5, 0xD6, 0xCD) and i + 3 <= len(code):
+            text, i = "// debut du programme (prologue)", i + 7
+        elif b in (0xD5, 0xD6, 0xCD) and i + 3 <= len(code):
             n = code[i + 1] << 8 | code[i + 2]
-            text = {0xD5: f"CALL   SBR{n}", 0xD6: f"// SBR{n}", 0xCD: f"// INT{n}"}[b]
-            out.append((text, code[i:i + 3], True))
-            i += 3
-            continue
-        if b in ONE_BYTE:
-            text, sure = ONE_BYTE[b]
-            out.append((text, code[i:i + 1], sure))
-            i += 1
-            continue
-        if b == 0xA6 and code[i + 1:i + 2] == b"\x44" and i + 6 <= len(code):       # TON Tn, PT
-            t, pt = code[i + 2] << 8 | code[i + 3], struct.unpack(">h", code[i + 4:i + 6])[0]
-            out.append((f"TON    T{t}, {pt:+d}", code[i:i + 6], True))
-            i += 6
-            continue
-        if b == 0xFE and i + 7 <= len(code) and code[i + 1] in (0x1F, 0x21) and code[i + 2] == 0x01 \
-                and code[i + 5] == 0x40:                                          # S / R bit, N
-            name, unsure = ext_bit(code[i + 3], code[i + 4])
+            text, i = {0xD5: f"CALL   SBR{n}", 0xD6: f"// SBR{n}", 0xCD: f"// INT{n}"}[b], i + 3
+        elif b in ONE_BYTE:
+            text, i = ONE_BYTE[b], i + 1
+        elif b == 0xA6 and i + 2 <= len(code) and code[i + 1] & 0x40:          # TON Tn, PT (constant or word)
+            ops, j, sure = operands(code, i + 2, code[i + 1], (2, 2))
+            if ops:
+                text, i = f"TON    T{int(ops[0])}, {ops[1]}", j
+        elif b in MOVES and i + 2 <= len(code):
+            name, width = MOVES[b]
+            ops, j, sure = operands(code, i + 2, code[i + 1], (width, width))
+            sure &= b not in DEDUCED
+            if ops:
+                text, i = f"{name:<6} {ops[0]}, {ops[1]}", j
+        elif b in COMPARES and i + 2 <= len(code):
+            ops, j, sure = operands(code, i + 2, code[i + 1], (2, 2))
+            if ops:
+                text, i = f"{COMPARES[b]:<6} {ops[0]}, {ops[1]}", j
+        elif b in INCS and code[i + 1:i + 2] == b"\x0c":
+            name, width = INCS[b]
+            op, sure = word_operand(code, i + 2, width)
+            if op:
+                text, i = f"{name:<6} {op}", i + 4
+        elif b == 0xFE and i + 3 <= len(code) and code[i + 1] in (0x1F, 0x21) and code[i + 2] == 0x01:
+            name, size, sure = long_bit(code, i + 3)                         # S / R bit, N
+            j = i + 3 + size
+            if name and code[j:j + 1] == b"\x40" and j + 2 <= len(code):
+                text, i = f"{'S' if code[i + 1] == 0x1F else 'R':<6} {name}, {code[j + 1]}", j + 2
+        elif b >> 4 == 0x8 and b & 0x0F in BIT_OPS:
+            name, size, sure = long_bit(code, i + 1)                         # LD / A / … on V (long form)
             if name:
-                op = "S" if code[i + 1] == 0x1F else "R"
-                out.append((f"{op:<6} {name}, {code[i + 6]}", code[i:i + 7], not unsure))
-                i += 7
-                continue
-        op = b >> 4
-        if op in BIT_OPS and i + 2 <= len(code):
-            name, unsure = bit_operand((b & 0x0F) << 8 | code[i + 1])
+                text, i = f"{BIT_OPS[b & 0x0F]:<6} {name}", i + 1 + size
+        elif b >> 4 in BIT_OPS and i + 2 <= len(code):
+            name, sure = bit_operand((b & 0x0F) << 8 | code[i + 1])
             if name:
-                out.append((f"{BIT_OPS[op]:<6} {name}", code[i:i + 2], not unsure and op not in GUESSED_OPS))
-                i += 2
-                continue
-        out.append(("??", code[i:], False))
-        break
+                text, i = f"{BIT_OPS[b >> 4]:<6} {name}", i + 2
+        if text is None:
+            out.append(("??", code[start:], False))
+            break
+        out.append((text, code[start:i], sure))
     return out
 
 
@@ -157,11 +214,12 @@ def to_stl(ob1: bytes) -> dict:
         network = 0
         for k, item in enumerate(p["items"]):
             decoded = decode_item(item)
-            if p["type"] == "MAIN" and k == 0:              # prologue, with the CPU type test Micro/WIN adds
-                if len(decoded) > 1:
-                    lines.append("// prologue ajoute par Micro/WIN : " + " | ".join(
-                        t if t != "??" else "?? " + r.hex(" ") for t, r, _ in decoded[1:]))
-                continue
+            if p["type"] == "MAIN" and k == 0 and item.startswith(PROLOGUE):
+                decoded = decoded[1:]                    # the first item = prologue + Network 1
+                if not decoded:
+                    network += 1
+                    lines.append(f"Network {network}")
+                    continue
             texts = [t for t, _, _ in decoded]
             is_frame = all(t.startswith("//") or t in ("MEND", "RET", "RETI") for t in texts)
             if not is_frame:

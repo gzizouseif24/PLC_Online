@@ -86,8 +86,8 @@ Not every tab exists for every brand. The page shows only the tabs that work wit
   - A Micro/WIN project (`.mwp`) is source: load it with Micro/WIN. The tool restores its own copies.
   - In Micro/WIN, **Upload** (up arrow) reads the PLC. **Download** (down arrow) replaces its program.
   - Remote RUN / STOP needs the switch on TERM.
-  - The program is decoded into STL (*Details* of a copy, `.awl` download). Bit logic, timers, S / R and
-    CALL are decoded. Other instructions show as `?? <hex>` until they are matched with a Micro/WIN export,
+  - The program is decoded into STL (*Details* of a copy, `.awl` download). Bit logic, timers, S / R, CALL,
+    moves, word compares and increments are decoded. Other instructions show as `?? <hex>` until they are matched with a Micro/WIN export,
     see [docs/s7-200.md](docs/s7-200.md).
 - **TSX**:
   - Program and data copies also read PL7 files (`.stx`, `.dat`).

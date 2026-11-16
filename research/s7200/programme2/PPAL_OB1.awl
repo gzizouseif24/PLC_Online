@@ -1,0 +1,770 @@
+ORGANIZATION_BLOCK PPAL:OB1
+TITLE=COMMENTAIRES DE PROGRAMME
+BEGIN
+Network 1 // Titre de réseau
+// Commentaire de réseau
+LD     SM0.1
+R      M5.1, 10
+R      M10.0, 48
+Network 2 
+LD     V13.2
+EU
+S      M6.0, 1
+R      V13.2, 1
+R      M6.1, 1
+Network 3 
+LD     M6.1
+=      M6.2
+Network 4 
+LD     V13.3
+EU
+O      SM0.1
+ON     V191.0
+S      M6.1, 1
+R      V13.3, 1
+R      M6.0, 1
+Network 5 
+LD     SM0.1
+MOVW   +0, VW150
+Network 6 
+LD     M30.0
+EU
+S      V900.7, 1
+R      M30.0, 8
+R      V900.0, 7
+Network 7 
+LD     M30.1
+EU
+S      V900.6, 1
+R      V900.0, 6
+R      V900.7, 1
+R      M30.0, 8
+Network 8 
+LD     M30.2
+EU
+S      V900.5, 1
+R      V900.0, 5
+R      V900.6, 2
+R      M30.0, 8
+Network 9 
+LD     M30.3
+EU
+S      V900.4, 1
+R      V900.0, 4
+R      V900.5, 3
+R      M30.0, 8
+Network 10 
+LD     I0.0
+EU
+LD     I0.1
+EU
+OLD
+LD     I0.2
+EU
+OLD
+LD     I0.3
+EU
+OLD
+R      V900.6, 1
+Network 11 
+LD     I1.5
+TON    T103, +60
+Network 12 
+LD     T103
+S      M7.0, 1
+Network 13 
+LD     M7.0
+=      M7.1
+Network 14 
+LD     T103
+A      M7.0
+AN     M7.1
+R      M7.1, 1
+Network 15 
+LD     M30.4
+EU
+S      V900.3, 1
+R      V900.0, 3
+R      V900.4, 4
+R      M30.0, 8
+Network 16 
+LDW>=  VW170, +1
+MOVW   +1, VW170
+Network 17 
+LDW<=  VW170, +0
+MOVW   +0, VW170
+Network 18 
+LDW>=  VW190, +1
+MOVW   +1, VW190
+Network 19 
+LDW<=  VW190, +0
+MOVW   +0, VW190
+Network 20 
+LDW>=  VW210, +1
+MOVW   +1, VW210
+Network 21 
+LDW<=  VW210, +0
+MOVW   +0, VW210
+Network 22 
+LD     V900.6
+A      I1.5
+A      I1.1
+A      I1.2
+MOVD   +0, VD1010
+Network 23 
+LD     M10.5
+EU
+LD     M12.5
+EU
+OLD
+INCD   VD1010
+MOVD   VD1010, VD128
+Network 24 
+LD     M10.5
+EU
+LD     M12.5
+EU
+OLD
+INCW   VW150
+Network 25 
+LD     I0.5
+EU
+O      M5.0
+AN     T60
+=      M5.0
+Network 26 
+LD     M5.0
+TON    T60, +3
+Network 27 
+LD     I0.7
+EU
+O      M5.1
+AN     T61
+=      M5.1
+Network 28 
+LD     M5.1
+TON    T61, +3
+Network 29 
+LD     I0.6
+EU
+O      M5.2
+AN     T62
+=      M5.2
+Network 30 
+LD     M5.2
+TON    T62, +3
+Network 31 
+LD     I0.4
+EU
+O      M5.3
+AN     T63
+=      M5.3
+Network 32 
+LD     M5.3
+TON    T63, +3
+Network 33 
+LD     I1.0
+EU
+O      M5.4
+AN     T127
+=      M5.4
+Network 34 
+LD     M5.4
+TON    T127, +3
+Network 35 
+LD     M11.5
+TON    T37, +4
+Network 36 
+LD     M11.6
+TON    T46, +1
+Network 37 
+LD     M10.4
+TON    T38, +4
+Network 38 
+LD     M10.5
+TON    T39, +10
+Network 39 
+LD     M10.6
+AN     I0.0
+TON    T40, VW50
+Network 40 
+LD     M10.7
+TON    T41, +2
+Network 41 
+LD     M11.0
+TON    T42, +2
+Network 42 
+LD     M11.1
+TON    T43, +2
+Network 43 
+LD     M11.2
+TON    T44, +10
+Network 44 
+LD     M11.3
+AN     I0.0
+S      M11.4, 1
+R      M10.0, 12
+R      M11.5, 3
+Network 45 
+LD     M11.2
+A      T44
+S      M11.3, 1
+R      M10.0, 11
+R      M11.4, 4
+Network 46 
+LD     M11.1
+A      T43
+LD     M10.3
+LDN    I2.3
+LDN    I0.5
+ON     I0.7
+ALD
+O      I1.3
+ALD
+OLD
+S      M11.2, 1
+R      M10.0, 10
+R      M11.3, 5
+Network 47 
+LD     M11.0
+A      T42
+LD     M10.4
+A      I1.3
+OLD
+S      M11.1, 1
+R      M10.0, 9
+R      M11.2, 6
+Network 48 
+LD     M10.7
+A      T41
+LD     M10.5
+A      I1.3
+OLD
+S      M11.0, 1
+R      M10.0, 8
+R      M11.1, 7
+Network 49 
+LD     M10.6
+LD     T40
+AN     I0.0
+O      I1.3
+ALD
+S      M10.7, 1
+R      M10.0, 7
+R      M11.0, 8
+Network 50 
+LD     M10.5
+A      T39
+S      M10.6, 1
+R      M10.0, 6
+R      M10.7, 9
+Network 51 
+LD     M10.4
+A      T38
+S      M10.5, 1
+R      M10.0, 5
+R      M10.6, 10
+Network 52 
+LD     M10.3
+A      I1.1
+S      M10.4, 1
+R      M10.0, 4
+R      M10.5, 11
+Network 53 
+LD     M10.2
+LD     M5.0
+A      M5.1
+ON     I1.3
+ALD
+S      M10.3, 1
+R      M10.0, 3
+R      M10.4, 12
+Network 54 
+LD     M11.6
+S      M10.2, 1
+R      M10.3, 13
+R      M10.0, 2
+Network 55 
+LD     M11.5
+LD     M5.0
+A      M5.1
+O      I1.3
+ALD
+S      M11.6, 1
+R      M10.0, 14
+Network 56 
+LD     M10.1
+S      M11.5, 1
+R      M10.1, 1
+Network 57 
+LD     M11.7
+AN     I1.3
+A      I0.0
+EU
+S      M10.1, 1
+R      M10.2, 14
+R      M10.0, 1
+Network 58 
+LD     M10.0
+AN     I0.0
+AN     V191.0
+=      M11.7
+Network 59 
+LD     I0.0
+AN     M10.6
+AN     M10.5
+EU
+LD     M11.4
+EU
+OLD
+LD     M10.1
+O      M11.5
+O      M10.2
+O      SM0.1
+LDN    I0.0
+O      I1.3
+ALD
+OLD
+AN     M10.1
+S      M10.0, 1
+R      M10.1, 15
+Network 60 
+LD     M10.1
+LD     Q0.1
+LDN    V211.0
+LD     V211.0
+AN     M10.5
+OLD
+ALD
+OLD
+O      M11.1
+AN     M10.0
+AN     M11.3
+=      Q0.1
+Network 61 
+LD     M10.3
+O      Q0.2
+AN     M11.2
+AN     M10.0
+=      Q0.2
+Network 62 
+LD     M10.4
+O      Q0.0
+AN     M11.1
+AN     M10.0
+=      Q0.0
+Network 63 
+LD     M10.5
+LD     Q0.3
+A      M6.2
+OLD
+AN     M11.0
+AN     M10.0
+A      V171.0
+LD     M6.0
+A      V191.0
+A      V900.4
+OLD
+=      Q0.3
+Network 64 
+LD     M13.5
+TON    T47, +4
+Network 65 
+LD     M13.6
+TON    T56, +1
+Network 66 
+LD     M12.4
+TON    T48, +4
+Network 67 
+LD     M12.5
+TON    T49, +10
+Network 68 
+LD     M12.6
+AN     I0.2
+TON    T50, VW50
+Network 69 
+LD     M12.7
+TON    T51, +2
+Network 70 
+LD     M13.0
+TON    T52, +2
+Network 71 
+LD     M13.1
+TON    T53, +2
+Network 72 
+LD     M13.2
+TON    T54, +10
+Network 73 
+LD     M13.3
+AN     I0.2
+S      M13.4, 1
+R      M12.0, 1
+R      M13.5, 3
+Network 74 
+LD     M13.2
+A      T54
+S      M13.3, 1
+R      M12.0, 11
+R      M13.4, 4
+Network 75 
+LD     M13.1
+A      T53
+LD     M12.3
+LDN    I2.3
+LDN    I0.7
+ON     I0.6
+ALD
+O      I1.5
+ALD
+OLD
+S      M13.2, 1
+R      M12.0, 10
+R      M13.3, 5
+Network 76 
+LD     M13.0
+A      T52
+LD     M12.4
+A      I1.5
+OLD
+S      M13.1, 1
+R      M12.0, 9
+R      M13.2, 6
+Network 77 
+LD     M12.7
+A      T51
+LD     M12.5
+A      I1.5
+OLD
+S      M13.0, 1
+R      M12.0, 8
+R      M13.1, 7
+Network 78 
+LD     M12.6
+LD     T50
+AN     I0.2
+O      I1.5
+ALD
+S      M12.7, 1
+R      M12.0, 7
+R      M13.0, 8
+Network 79 
+LD     M12.5
+A      T49
+S      M12.6, 1
+R      M12.0, 6
+R      M12.7, 9
+Network 80 
+LD     M12.4
+A      T48
+S      M12.5, 1
+R      M12.0, 5
+R      M12.6, 10
+Network 81 
+LD     M12.3
+A      I1.2
+S      M12.4, 1
+R      M12.0, 4
+R      M12.5, 11
+Network 82 
+LD     M12.2
+LD     M5.2
+A      M5.1
+ON     I1.5
+ALD
+S      M12.3, 1
+R      M12.0, 3
+R      M12.4, 12
+Network 83 
+LD     M13.6
+S      M12.2, 1
+R      M12.3, 13
+R      M12.0, 2
+Network 84 
+LD     M13.5
+LD     M5.2
+A      M5.1
+O      I1.5
+ALD
+S      M13.6, 1
+R      M12.0, 14
+Network 85 
+LD     M12.1
+S      M13.5, 1
+R      M12.1, 1
+Network 86 
+LD     M13.7
+AN     I1.5
+A      I0.2
+EU
+S      M12.1, 1
+R      M12.2, 14
+R      M12.0, 1
+Network 87 
+LD     M12.0
+AN     I0.2
+AN     V191.0
+=      M13.7
+Network 88 
+LD     I0.2
+AN     M12.6
+AN     M12.5
+EU
+LD     M13.4
+EU
+OLD
+LD     M12.1
+O      M13.5
+O      M12.2
+O      SM0.1
+LDN    I0.2
+O      I1.5
+ALD
+OLD
+AN     M12.1
+S      M12.0, 1
+R      M12.1, 15
+Network 89 
+LD     M12.1
+LD     Q0.6
+LDN    V231.0
+LD     V231.0
+AN     M12.5
+OLD
+ALD
+OLD
+O      M13.1
+AN     M12.0
+AN     M13.3
+=      Q0.6
+Network 90 
+LD     M12.3
+O      Q0.7
+AN     M13.2
+AN     M12.0
+=      Q0.7
+Network 91 
+LD     M12.4
+O      Q2.1
+AN     M13.1
+AN     M12.0
+=      Q2.1
+Network 92 
+LD     M12.5
+LD     Q1.0
+A      M6.2
+OLD
+AN     M13.0
+AN     M12.0
+A      V171.0
+LD     M6.0
+A      V191.0
+A      V900.4
+OLD
+=      Q1.0
+Network 93 
+LD     M14.4
+TON    T110, VW70
+Network 94 
+LD     M14.7
+TON    T114, +4
+Network 95 
+LD     M14.3
+TON    T102, +2
+Network 96 
+LD     M14.7
+LD     T114
+O      I1.4
+ALD
+LD     M14.3
+AN     I2.3
+LDN    I0.5
+ON     I0.4
+ALD
+OLD
+S      M15.3, 1
+R      M14.0, 11
+R      M15.4, 4
+Network 97 
+LD     M14.4
+LD     T110
+AN     I0.1
+O      I1.4
+ALD
+LD     M14.3
+AN     I2.3
+LDN    I0.5
+ON     I0.4
+ALD
+OLD
+S      M14.7, 1
+R      M14.0, 7
+R      M15.0, 8
+Network 98 
+LD     M14.3
+LDN    I2.3
+A      I2.1
+O      I1.4
+LD     I2.3
+A      T102
+OLD
+ALD
+S      M14.4, 1
+R      M14.0, 4
+R      M14.5, 11
+Network 99 
+LD     M15.5
+LD     M5.0
+A      M5.3
+O      I1.4
+ALD
+S      M14.3, 1
+R      M14.0, 3
+R      M14.4, 12
+Network 100 
+LD     M14.1
+S      M15.5, 1
+R      M14.1, 1
+Network 101 
+LD     M14.6
+AN     I1.4
+A      I0.1
+EU
+S      M14.1, 1
+R      M14.2, 14
+R      M14.0, 1
+Network 102 
+LD     M14.0
+AN     I0.1
+=      M14.6
+Network 103 
+LD     I0.1
+AN     M14.4
+EU
+LD     M15.3
+EU
+OLD
+LD     M14.1
+O      M15.5
+O      M14.3
+O      SM0.1
+AN     I0.1
+OLD
+AN     M14.1
+S      M14.0, 1
+R      M14.1, 15
+Network 104 
+LD     M14.1
+O      Q0.4
+AN     M14.0
+AN     M15.3
+=      Q0.4
+Network 105 
+LD     M14.3
+O      Q0.5
+AN     M14.7
+AN     M14.0
+=      Q0.5
+Network 106 
+LD     M16.4
+TON    T120, VW70
+Network 107 
+LD     M16.7
+TON    T124, +4
+Network 108 
+LD     M16.3
+TON    T101, +2
+Network 109 
+LD     M16.7
+LD     T124
+O      I2.0
+ALD
+LD     M16.3
+AN     I2.3
+LDN    I1.0
+ON     I0.6
+ALD
+OLD
+S      M17.3, 1
+R      M16.0, 11
+R      M17.4, 4
+Network 110 
+LD     M16.4
+LD     T120
+AN     I0.3
+O      I2.0
+ALD
+LD     M16.3
+AN     I2.3
+LDN    I1.0
+ON     I0.6
+ALD
+OLD
+S      M16.7, 1
+R      M16.0, 7
+R      M17.0, 8
+Network 111 
+LD     M16.3
+LDN    I2.3
+A      I2.2
+O      I2.0
+LD     I2.3
+A      T101
+OLD
+ALD
+S      M16.4, 1
+R      M16.0, 4
+R      M16.5, 11
+Network 112 
+LD     M17.5
+LD     M5.2
+A      M5.4
+O      I2.0
+ALD
+S      M16.3, 1
+R      M16.0, 3
+R      M16.4, 12
+Network 113 
+LD     M16.1
+S      M17.5, 1
+R      M16.1, 1
+Network 114 
+LD     M16.6
+AN     I2.0
+A      I0.3
+EU
+S      M16.1, 1
+R      M16.2, 14
+R      M16.0, 1
+Network 115 
+LD     M16.0
+AN     I0.3
+=      M16.6
+Network 116 
+LD     I0.3
+AN     M16.4
+EU
+LD     M17.3
+EU
+OLD
+LD     M16.1
+O      M17.5
+O      M16.3
+O      SM0.1
+AN     I0.3
+OLD
+AN     M16.1
+S      M16.0, 1
+R      M16.1, 15
+Network 117 
+LD     M16.1
+O      Q1.1
+AN     M16.0
+AN     M17.3
+=      Q1.1
+Network 118 
+LD     M16.3
+O      Q2.0
+AN     M16.7
+AN     M16.0
+=      Q2.0
+END_ORGANIZATION_BLOCK

@@ -179,8 +179,28 @@ class DecodeTests(unittest.TestCase):
         self.assertEqual(self.instructions(r["texte"], "Allgemein:SBR10"), self.instructions(awl, "Allgemein:SBR10"))
         self.assertIn("SUBROUTINE_BLOCK ScherenHyd:SBR11", r["texte"])
         self.assertIn("CALL   SBR11", r["texte"])
-        self.assertEqual(r["texte"].count("Network "), 3 + 5 + 20)
-        self.assertEqual(r["inconnu"], 1)
+        self.assertEqual(r["texte"].count("Network "), 4 + 5 + 20)
+        self.assertEqual((r["inconnu"], r["doute"]), (0, 2))          # MOVB IB1, IB2 / MOVB QB2, QB1 (deduced)
+        self.assertIn("MOVB   IB1, IB2", r["texte"])
+
+    def networks(self, text):
+        import re
+        body = text.split("BEGIN", 1)[1].split("END_ORGANIZATION_BLOCK", 1)[0]
+        return [[" ".join(line.split("//")[0].split()) for line in n.splitlines()
+                 if line.strip() and not line.strip().startswith("//")]
+                for n in re.split(r"\nNetwork \d+[^\n]*\n", "\n" + body.strip("\n") + "\n")[1:]]
+
+    def test_programme2_as_microwin(self):
+        """118 networks: V bits (short and long address), S / R on V, MOVW / MOVD, LDW>= / LDW<=, INCW / INCD,
+        TON with a VW preset, EU, O / ON, ALD / OLD."""
+        from plc_online.protocols import s7200_code
+        r = s7200_code.to_stl((self.folder / "programme2" / "OB1.bin").read_bytes())
+        awl = (self.folder / "programme2" / "PPAL_OB1.awl").read_text(encoding="latin-1")
+        got, want = self.networks(r["texte"]), self.networks(awl)
+        self.assertEqual(len(got), 118)
+        for k, (g, w) in enumerate(zip(got, want), 1):
+            self.assertEqual(g, w, f"Network {k}")
+        self.assertEqual((r["doute"], r["inconnu"]), (0, 0))
 
     def test_empty_project(self):
         from plc_online.protocols import s7200_code
