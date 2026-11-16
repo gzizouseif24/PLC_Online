@@ -1278,6 +1278,7 @@ async function writeValues() {
     const io = family === "s7" && items.some((it) => /^[EIAQ]/i.test(it.adresse) && !/^DB/i.test(it.adresse));
     if (r.run && io) text += " CPU en RUN : les entrees / sorties sont reecrites a chaque cycle.";
     else if (r.run) text += " Automate en RUN : le programme peut reecrire ces valeurs.";
+    if (r.note) text += " " + r.note;
     setWatchMsg(text, bad.length > 0);
     if (hold) startHold(items, r.resultats);
     if (monitoring) readWatch();

@@ -367,6 +367,20 @@ class S7200:
     def stop(self):
         self._call(bytes([0x29, 0, 0, 0, 0, 0, 9]) + b"P_PROGRAM")
 
+    # ---- outputs in STOP (libnodave daveForce200) ----
+
+    def set_outputs_in_stop(self, area: str, byte: int, value: int):
+        """Set one output byte while the CPU is in STOP (libnodave daveForce200, ChangeLog 29/04/2005): not a
+        force, gone as soon as the CPU goes to RUN; back in STOP all outputs are 0 again."""
+        code, _ = AREAS[area]
+        address = byte * 8
+        item = bytes([0, 1, 0x10, 2, 0, 1, 0, 0, code, address >> 16 & 0xFF, address >> 8 & 0xFF, address & 0xFF])
+        data = bytes([0xFF, 9, 0, len(item)]) + item + bytes([0, 4, 0, 8, value & 0xFF, 0])
+        r = self._call(bytes([0, 1, 0x12, 8, 0x12, 0x48, 0x0E, 0, 0, 0, 0, 0]), data, pdu_type=7)
+        code = r["param"][10] << 8 | r["param"][11] if len(r["param"]) >= 12 else 0
+        if code:
+            raise PlcRefused(f"sorties en STOP : refuse (code {code:04X})", code)
+
     # ---- blocks (libnodave daveListBlocksOfType, initUpload / doUpload / endUpload) ----
 
     def list_blocks(self, kind: str) -> list:
@@ -389,8 +403,18 @@ class S7200:
                            bytes([0x0A, 0, 0, 0]), pdu_type=7)
 
     def upload(self, kind: str, number: int, progress=None) -> bytes:
-        name = bytes([0x5F, 0x30, BLOCK_TYPES[kind]]) + f"{number:05d}".encode() + b"A"
-        r = self._call(bytes([0x1D, 0, 0, 0, 0, 0, 0, 0, 9]) + name)
+        """Upload one block. The S7 file name ends with 'A' (libnodave); when the CPU answers 'block does not
+        exist' (D209), 'P' and 'B' are tried too (other S7 file systems), to learn which the S7-200 uses."""
+        r = None
+        for system in b"APB":
+            name = bytes([0x5F, 0x30, BLOCK_TYPES[kind]]) + f"{number:05d}".encode() + bytes([system])
+            try:
+                r = self._call(bytes([0x1D, 0, 0, 0, 0, 0, 0, 0, 9]) + name)
+                self.upload_system = chr(system)
+                break
+            except PlcRefused as e:
+                if e.code != 0xD209 or system == ord("B"):
+                    raise
         upload_id = r["param"][7] if len(r["param"]) > 7 else 1
         blob = b""
         try:

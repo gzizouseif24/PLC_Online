@@ -153,7 +153,7 @@ class WebTests(unittest.TestCase):
     def test_watch_write_runstop(self):
         v = self.s.values(["I0.2", "VW0", "VD0:hex", "AIW0", "I2.1"])["valeurs"]
         self.assertEqual(list(v.values()), ["1", "1234", "16#04D2002A", "6400", "1"])
-        r = self.s.write([{"adresse": "VW10", "valeur": "-12"}, {"adresse": "Q0.3", "valeur": "1"},
+        r = self.s.write([{"adresse": "VW10", "valeur": "-12"}, {"adresse": "Q1.0", "valeur": "1"},
                           {"adresse": "VD20:real", "valeur": "1.5"}])
         self.assertTrue(all(x["ok"] for x in r["resultats"]))
         for bad in ("I0.0", "SMB5"):
@@ -163,6 +163,29 @@ class WebTests(unittest.TestCase):
         self.assertEqual(self.s.status()["mode"], "STOP")
         self.s.start_cpu()
         self.assertEqual(self.s.status()["mode"], "RUN")
+
+    def test_outputs_in_stop(self):
+        r = self.s.write([{"adresse": "Q0.1", "valeur": "1"}])
+        self.assertIn("STOP", r["note"])                      # RUN: the program rewrites Q0
+        self.s.stop_cpu()
+        r = self.s.write([{"adresse": "Q0.1", "valeur": "1"}, {"adresse": "Q0.3", "valeur": "1"}])
+        self.assertTrue(all(x["ok"] for x in r["resultats"]), r)
+        self.assertEqual(self.s.plc.read("Q", 0, 1), bytes([0b1010]))
+        self.assertNotIn("note", r)
+
+    def test_refused_block_is_not_fatal(self):
+        port = self.s.plc.ppi.ser
+        port.blocks[("OB", 2)] = b""
+        orig = port._answer
+
+        def answer(p):
+            if p["param"][:1] == b"\x1d" and p["param"][12:17] == b"00002":
+                return port._reply(p["ref"], bytes([0x1D]), error=0xD209, kind=2)
+            return orig(p)
+        port._answer = answer
+        self.s.save_program("")
+        self.assertEqual(self.wait()["comptes"], "DB1 (40 o), OB1 (120 o), SDB0 (64 o)")
+        self.assertTrue(any("OB2" in x for x in self.s.plc.upload_refused))
 
     def test_program_and_data(self):
         self.s.save_program("")

@@ -744,6 +744,8 @@ const I18N = (() => {
     "Rechargement d'un programme dans un S7-200 : pas encore valide (capture de Micro/WIN a faire au banc, docs/s7-200.md). Utiliser Micro/WIN. La copie sert a comparer et a garder une trace.":
       "Loading a program into an S7-200: not validated yet (Micro/WIN capture to do on the bench, docs/s7-200.md). Use Micro/WIN. The copy is for comparing and keeping a record.",
     "Autres stations sur la ligne": "Other stations on the line", "Echanges repetes": "Repeated exchanges", "reponse sans acquittement E5": "reply without the E5 acknowledgement",
+    "En RUN le programme recalcule les sorties a chaque cycle. Pour tester une sortie : passer l'automate en STOP, puis ecrire Q (test des sorties en STOP, annule au passage en RUN).":
+      "In RUN the program recomputes the outputs every scan. To test an output: put the PLC in STOP, then write Q (outputs test in STOP, cancelled when going to RUN).",
     // short words, used inside longer texts
     "entrees": "inputs", "sorties": "outputs", "entree": "input", "sortie": "output", "voies": "channels", "voie": "channel",
     "mots": "words", "octets": "bytes", "octet": "byte", "alerte(s)": "alert(s)", "differents": "different",
@@ -801,6 +803,7 @@ const I18N = (() => {
     [/^(Erreur materiel|Erreur de parametre|Erreur de syntaxe|Erreur de structure du programme|Erreur d'execution) \(M(\d+)\) : (.*)$/,
       (m, k, n, rest) => `${{"Erreur materiel": "Hardware error", "Erreur de parametre": "Parameter error", "Erreur de syntaxe": "Syntax error", "Erreur de structure du programme": "Program structure error", "Erreur d'execution": "Runtime error"}[k]} (M${n}): ${phrases(rest.replace(/, au pas (\d+) \(D8069\)/, ", at step $1 (D8069)"))}`],
     [/^FX1N V(.+)$/, "FX1N V$1"],
+    [/^Aucun bloc lu\. Blocs annonces par l'automate : (.*)$/, (m, r) => "No block read. Blocks listed by the PLC: " + r.replace(" ; refus : ", "; refused: ").replace("Programme protege par mot de passe ? (journal des trames : bouton Diagnostic)", "Program protected by a password? (frame log: Diagnostics)")],
     [/^(\d+) depuis la connexion \(une repetition = trame perdue ou brouillee, puis reussie\)$/, "$1 since connecting (a repeat = frame lost or garbled, then successful)"],
     [/^(.*) \(apres (\d+) essais ; journal des trames : (.+)\)$/, (m, e, n, p) => `${phrases(e)} (after ${n} tries; frame log: ${p})`],
     [/^(\d+) trame\(s\) ignoree\(s\) \(automate en maitre PPI \/ NETR-NETW, ou IHM\), derniere : (.*)$/, "$1 frame(s) skipped (PLC as PPI master / NETR-NETW, or HMI), last: $2"],

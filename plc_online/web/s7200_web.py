@@ -153,11 +153,15 @@ class DemoPort:
 
     def _tick(self):
         if self.running:
+            self.mem["Q"][0] = self.mem["I"][0] & 0x0F            # demo program: Q0.0..Q0.3 = I0.0..I0.3
             self.scans += 1
             self.mem["SM"][0] ^= 0b0100_0000                 # SM0.6: scan clock
             self.mem["SM"][0] |= 1
         else:
             self.mem["SM"][0] &= ~1 & 0xFF
+            if not getattr(self, "was_stopped", False):
+                self.mem["Q"][:] = bytes(len(self.mem["Q"]))       # STOP: outputs to 0
+        self.was_stopped = not self.running
 
     def _reply(self, ref, param, data=b"", error=0, kind=3):
         head = bytes([0x32, kind, 0, 0, ref >> 8, ref & 0xFF, len(param) >> 8, len(param) & 0xFF,
@@ -171,6 +175,10 @@ class DemoPort:
         self._tick()
         ref, param, data = p["ref"], p["param"], p["data"]
         f = param[0] if param else 0
+        if p["type"] == 7 and len(param) > 5 and param[5] == 0x48:   # outputs in STOP (daveForce200)
+            if not self.running:
+                self.mem["Q"][data[4 + 9] << 13 | data[4 + 10] << 5 | data[4 + 11] >> 3] = data[16 + 4]
+            return self._reply(ref, bytes([0, 1, 0x12, 8, 0x12, 0x88, 0x0E, 0, 0, 0, 0, 0]), bytes([0xFF, 9, 0, 0]), kind=7)
         if p["type"] == 7:                                     # userdata: list blocks of a type
             kind = {v: k for k, v in ppi.BLOCK_TYPES.items()}.get(data[5])
             nums = sorted(n for (k, n) in self.blocks if k == kind)
@@ -486,14 +494,30 @@ def write_values(plc, items) -> dict:
         except ValueError as e:
             raise _drv().DriverError(f"{text} : {e}") from None
         old = v.read(plc)
-        if v.bit is not None:
+        stopped = v.area == "Q" and not running(plc)
+        if stopped:
+            # CPU in STOP: the outputs only follow the "outputs in STOP" function (libnodave daveForce200):
+            # set the whole byte, back to 0 when the CPU goes to RUN or STOP again
+            current = plc.read("Q", v.n, v.size or 1)
+            if v.bit is not None:
+                b = current[0]
+                plc.set_outputs_in_stop("Q", v.n, (b | 1 << v.bit) if value else (b & ~(1 << v.bit) & 0xFF))
+            else:
+                for k, byte in enumerate(value.to_bytes(v.size, "big")):
+                    plc.set_outputs_in_stop("Q", v.n + k, byte)
+        elif v.bit is not None:
             plc.write_bit(v.area, v.n, v.bit, bool(value))
         else:
             plc.write(v.area, v.n, value.to_bytes(v.size, "big"))
         back = v.read(plc) if v.area != "AQ" else value          # AQ: write only (manual)
         results.append({"adresse": text, "avant": v.decode(old) if v.area != "AQ" else "?", "relu": v.decode(back),
                         "ok": back == value})
-    return {"resultats": results, "run": running(plc)}
+    run = running(plc)
+    out = {"resultats": results, "run": run}
+    if run and any(S7200Var(str(i.get("adresse", ""))).area == "Q" for i in items):
+        out["note"] = ("En RUN le programme recalcule les sorties a chaque cycle. Pour tester une sortie : passer "
+                       "l'automate en STOP, puis ecrire Q (test des sorties en STOP, annule au passage en RUN).")
+    return out
 
 
 # ---- program copies: every OB / DB / SDB block as the CPU gives it ----
@@ -522,17 +546,28 @@ def unpack_blocks(blob: bytes) -> dict:
 
 
 def read_program(plc, progress) -> bytes:
-    blocks = {}
+    """Every listed block; a block the CPU refuses is noted, not fatal (the others are kept)."""
+    blocks, refused, listed = {}, [], []
     for kind in ("OB", "DB", "SDB"):
         progress(f"liste des blocs {kind}", 0, 0)
         try:
             numbers = plc.list_blocks(kind)
-        except ppi.PlcRefused:
+        except ppi.PlcRefused as e:
+            refused.append(f"liste {kind} : {e}")
             numbers = []
+        listed += [f"{kind}{n}" for n in numbers]
         for n in numbers:
-            blocks[(kind, n)] = plc.upload(kind, n, lambda size: progress(f"lecture {kind}{n} : {size} octets", 0, 0))
+            try:
+                blocks[(kind, n)] = plc.upload(kind, n, lambda size: progress(f"lecture {kind}{n} : {size} octets", 0, 0))
+            except ppi.PlcRefused as e:
+                refused.append(f"{kind}{n} : {e}")
+    plc.upload_refused = refused
+    if refused:
+        plc.ppi.write_journal()                 # the refused requests stay readable in journal_ppi.txt
     if not blocks:
-        raise _drv().DriverError("Aucun bloc lu (programme protege par mot de passe ?)")
+        raise _drv().DriverError("Aucun bloc lu. Blocs annonces par l'automate : " + (", ".join(listed) or "aucun")
+                                 + (" ; refus : " + " ; ".join(refused) if refused else "")
+                                 + ". Programme protege par mot de passe ? (journal des trames : bouton Diagnostic)")
     return pack_blocks(blocks)
 
 
