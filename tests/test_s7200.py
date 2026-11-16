@@ -274,6 +274,27 @@ class WebTests(unittest.TestCase):
         refused = self.s.plc.upload_refused
         self.assertTrue(any("OB2" in x for x in refused) and any("SDB2" in x for x in refused), refused)
 
+    def test_protected_plc(self):
+        """Password: the block list is refused with D241. Status says so, the program read gives a clear message."""
+        port = self.s.plc.ppi.ser
+        orig = port._answer
+
+        def answer(p):
+            if p["param"][:1] == b"\x1d":                          # initUpload: refused, password required
+                return port._reply(p["ref"], bytes([0x1D]), error=0xD241, kind=2)
+            return orig(p)
+        port._answer = answer
+        self.s.plc.protege = None
+        st = self.s.status()
+        self.assertTrue(any("mot de passe" in a for a in st["alertes"]))
+        self.assertTrue(any(d[0] == "Protection" for d in st["details"]))
+        self.s.save_program("")
+        j = self.s.job_state()
+        while not j["fini"]:
+            time.sleep(0.02); j = self.s.job_state()
+        self.assertIn("mot de passe", j["erreur"])
+        self.assertIn("etat, diagnostic", j["erreur"])
+
     def test_program_and_data(self):
         self.s.save_program("")
         saved = self.wait()

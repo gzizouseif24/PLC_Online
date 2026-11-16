@@ -366,6 +366,14 @@ def s7200_status(plc) -> dict:
     out["details"] = [("Selecteur", "RUN" if _bit(sm, 0, 7) else "TERM ou STOP (SM0.7 = 0)"),
                       ("Cycle", f"{last} ms (mini {low}, maxi {high})"),
                       ("Forcage", "OUI (SM4.7)" if _bit(sm, 4, 7) else "non")]
+    if getattr(plc, "protege", None) is None:        # probed once per connection, then cached
+        try:
+            plc.protege = bool(protection_level(plc))
+        except ppi.PpiError:
+            plc.protege = None
+    if plc.protege:
+        out["details"].append(("Protection", "mot de passe : lecture du programme refusee (valeurs et diagnostic OK)"))
+        out["alertes"] = errs + ["Programme protege par mot de passe : il ne peut pas etre lu ni decode (voir onglet Programme)."]
     return out
 
 
@@ -583,6 +591,24 @@ def unpack_blocks(blob: bytes) -> dict:
     return out
 
 
+PROTECTION_CODES = (0xD241, 0xD242, 0xD0A1)
+
+
+def protection_level(plc) -> int:
+    """0 = none (full read / write), 2 = password (block reads refused with D241). The S7-200 has no service
+    that returns the level, so it is probed: the block list works even when protected, but the upload of a
+    block (initUpload, 1D) is refused with D241. Probe the first listed block; endUpload is not needed when
+    initUpload fails."""
+    try:
+        for kind in ("OB", "DB", "SDB"):
+            numbers = plc.list_blocks(kind)
+            if numbers:
+                return 0 if plc.upload_allowed(kind, numbers[0]) else 2
+        return 0
+    except ppi.PpiError:
+        return 0
+
+
 def read_program(plc, progress) -> bytes:
     """Every listed block; a block the CPU refuses is noted, not fatal (the others are kept)."""
     blocks, refused, listed = {}, [], []
@@ -603,6 +629,13 @@ def read_program(plc, progress) -> bytes:
     if refused:
         plc.ppi.write_journal()                 # the refused requests stay readable in journal_ppi.txt
     if not blocks:
+        protege = any("protection" in r or "mot de passe" in r for r in refused)
+        if protege:
+            raise _drv().DriverError(
+                "Programme protege par mot de passe : l'automate refuse la lecture des blocs (code D241). "
+                "Le programme ne peut pas etre lu ni decode sans le mot de passe, par aucun outil (Micro/WIN non plus). "
+                "Ce qui reste possible : etat, diagnostic, surveillance des valeurs, test E/S et la sauvegarde des "
+                "donnees (memoire V). Blocs annonces : " + (", ".join(listed) or "aucun") + ".")
         raise _drv().DriverError("Aucun bloc lu. Blocs annonces par l'automate : " + (", ".join(listed) or "aucun")
                                  + (" ; refus : " + " ; ".join(refused) if refused else "")
                                  + ". Programme protege par mot de passe ? (journal des trames : bouton Diagnostic)")

@@ -33,6 +33,8 @@ PDU_ERRORS = {0x8104: "fonction non supportee", 0x8500: "PDU trop long", 0xD209:
               0xD204: "pas de bloc lie en memoire", 0xD205: "le bloc existe deja", 0xD206: "le bloc existe deja",
               0xD207: "le bloc existe deja en EEPROM", 0xD210: "numero de bloc trop grand",
               0xD240: "regles de coordination violees (transfert de bloc en cours ?)",
+              0xD241: "interdit au niveau de protection actuel (programme protege par mot de passe)",
+              0xD242: "violation de protection (bloc F, mot de passe requis)", 0xD0A1: "fonction interdite au niveau de protection actuel",
               0xD20E: "pas de bloc", 0xD210: "bloc en cours de modification", 0x8404: "erreur de contexte",
               0xD802: "fonction impossible dans ce mode (RUN / STOP ?)", 0xD60A: "mot de passe necessaire",
               0x8000: "fonction occupee"}
@@ -512,6 +514,23 @@ class S7200:
         else:
             raise PpiError("chargement : l'automate ne termine pas (pas de 1C)")
         self._call(bytes([0x28, 0, 0, 0, 0, 0, 0, 0xFD, 0, 0x0A, 1, 0]) + name + bytes([5]) + b"_INSE")
+
+    def upload_allowed(self, kind: str, number: int) -> bool:
+        """Start a block upload (initUpload, 1D) and stop at once (endUpload, 1F). Returns False when the CPU
+        refuses the read with a protection code (D241): used to detect a password without reading the block."""
+        try:
+            r = self._call(bytes([0x1D, 0, 0, 0, 0, 0, 0, 0, 9, 0x5F, 0x30, BLOCK_TYPES[kind]])
+                           + f"{number:05d}".encode() + b"P")
+        except PlcRefused as e:
+            if e.code in (0xD241, 0xD242, 0xD0A1):
+                return False
+            return True                              # another refusal (e.g. D209): not a protection block
+        upload_id = r["param"][7] if len(r["param"]) > 7 else 1
+        try:
+            self._call(bytes([0x1F, 0, 0, 0, 0, 0, 0, upload_id]))
+        except PpiError:
+            pass
+        return True
 
     def upload(self, kind: str, number: int, progress=None) -> bytes:
         """Upload one block. The S7 file name ends with 'A' (libnodave); when the CPU answers 'block does not
