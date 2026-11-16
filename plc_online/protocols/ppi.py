@@ -14,6 +14,7 @@ S7-200 memory areas (S7 area codes, libnodave nodave.h): I 81, Q 82, M 83, V = D
 SM 05, AI 06, AQ 07, IEC counters 1E, IEC timers 1F.
 """
 import random
+import struct
 import time
 from collections import deque
 from pathlib import Path
@@ -33,6 +34,48 @@ PDU_ERRORS = {0x8104: "fonction non supportee", 0x8500: "PDU trop long", 0xD209:
               0x8000: "fonction occupee"}
 ITEM_ERRORS = {0x05: "adresse hors zone", 0x06: "type de donnee non supporte", 0x07: "type incoherent",
                0x0A: "objet inexistant", 0x03: "acces refuse", 0x01: "erreur materiel"}
+
+
+TYPE_CODES = {0x08: "OB", 0x0A: "DB", 0x0B: "SDB"}
+
+
+def s7_date(raw: bytes) -> str:
+    """S7 time stamp: ms since midnight (4 bytes) + days since 1984-01-01 (2 bytes)."""
+    import datetime
+    ms, days = struct.unpack(">IH", raw)
+    try:
+        return (datetime.datetime(1984, 1, 1) + datetime.timedelta(days=days, milliseconds=ms)).strftime("%Y-%m-%d %H:%M:%S")
+    except OverflowError:
+        return ""
+
+
+def block_info(blob: bytes) -> dict:
+    """Header of a block as the S7-200 uploads it (same 36-byte header as an S7-300 MC7 block: 70 70, type,
+    number, total size, password, two time stamps, sizes). In OB1 and DB1 the CPU keeps Micro/WIN's program
+    as a zlib stream (bench 16/11): 'source' is it inflated, 'noms' the block / page names found in it."""
+    import zlib
+    if len(blob) < 36 or blob[:2] != b"\x70\x70":
+        raise ValueError("pas un bloc S7 (70 70 attendu)")
+    out = {"type": TYPE_CODES.get(blob[5], f"{blob[5]:02X}"), "numero": blob[6] << 8 | blob[7],
+           "taille": struct.unpack_from(">I", blob, 8)[0], "protege": blob[12:16] != bytes(4),
+           "modifie": s7_date(blob[16:22]), "interface": s7_date(blob[22:28]),
+           "code": blob[34] << 8 | blob[35], "source": b"", "noms": []}
+    start = blob.find(b"\x78\x9c", 36)
+    if start >= 0:
+        try:
+            out["source"] = zlib.decompressobj().decompress(blob[start:])
+        except zlib.error:
+            pass
+    src, i = out["source"], 0
+    while i < len(src):                                   # length-prefixed names: 04 MAIN, 05 SBR_0, 05 USER1
+        n = src[i]
+        word = src[i + 1:i + 1 + n]
+        if 3 <= n <= 23 and len(word) == n and all(48 <= c < 123 and chr(c).isalnum() or c == 95 for c in word):
+            out["noms"].append(word.decode())
+            i += 1 + n
+        else:
+            i += 1
+    return out
 
 
 class PpiError(Exception):
@@ -199,10 +242,10 @@ class Ppi:
         self.ser.write(frame)
         self._note("-> SD1", frame)
 
-    def _reply(self) -> bytes:
+    def _reply(self, first_fc: int = 0x5C) -> bytes:
         """Ask for the reply (request data) until the PLC sends its SD2 frame; returns the S7 PDU.
         A lost reply is asked again (the PLC keeps it until it is collected)."""
-        fc, lost = 0x5C, 0
+        fc, lost = first_fc, 0
         for _ in range(40):
             self._ask(fc)
             got = self._next(0.6)
@@ -265,6 +308,32 @@ class Ppi:
         self._note("ECHEC", text=str(error))
         path = self.write_journal()
         raise PpiError(f"{error} (apres {self.retries + 1} essais ; journal des trames : {path})" if path else str(error))
+
+    def plc_request(self) -> dict:
+        """Collect a request the PLC sends us (during a block load the PLC asks for each part: 1B, then 1C)."""
+        return parse_pdu(self._reply(first_fc=0x7C))
+
+    def answer(self, ref: int, param: bytes, data: bytes = b""):
+        """Answer a request of the PLC: ack-data PDU (type 3) in an SD2 frame with FC 5C, as libnodave's
+        testPPIload; the PLC acknowledges with E5."""
+        pdu = (bytes([0x32, 3, 0, 0, ref >> 8 & 0xFF, ref & 0xFF, len(param) >> 8, len(param) & 0xFF,
+                      len(data) >> 8, len(data) & 0xFF, 0, 0]) + param + data)
+        frame = sd2_frame(self.plc, self.local, 0x5C, pdu)
+        for attempt in range(self.retries + 1):
+            if attempt:
+                self.failures += 1
+            self._quiet()
+            time.sleep(self.TURNAROUND)
+            self.ser.write(frame)
+            self._note("->", frame)
+            if self.log:
+                self.log("->", frame)
+            got = self._next()
+            if got and got[0] == "E5":
+                return
+        self._note("ECHEC", text="pas d'acquittement E5 de la reponse a l'automate")
+        path = self.write_journal()
+        raise PpiError("pas d'acquittement E5 pendant le chargement" + (f" (journal des trames : {path})" if path else ""))
 
     def close(self):
         self.ser.close()
@@ -401,6 +470,36 @@ class S7200:
                 return entries
             r = self._call(bytes([0, 1, 0x12, 8, 0x12, 0x43, 2, r["param"][7], 0, 0, 0, 0]),
                            bytes([0x0A, 0, 0, 0]), pdu_type=7)
+
+    def load_block(self, blob: bytes, progress=None):
+        """Load one block as upload() gave it (libnodave testPPIload): load request 1A with the file name
+        _0<type><number>P and the sizes; the PLC then asks for the parts (1B), the PC answers each with up to
+        pdu_size - 22 bytes; the PLC ends with 1C; the PI service _INSE links the block. CPU in STOP."""
+        info = block_info(blob)
+        name = f"0{blob[5]:X}{info['numero']:05d}P".encode()
+        sizes = f"1{info['taille']:06d}{info['code']:06d}".encode()
+        self._call(bytes([0x1A, 0, 1, 0, 0, 0, 0, 0, 9, 0x5F]) + name + bytes([len(sizes)]) + sizes)
+        step, sent = max(32, self.pdu_size - 22), 0
+        for _ in range(len(blob) // 32 + 20):
+            req = self.ppi.plc_request()
+            p = req["param"]
+            if req["type"] != 1 or not p:                 # an answer repeated by the PLC: ask again
+                continue
+            if p[0] == 0x1B:
+                part = blob[sent:sent + step]
+                sent += len(part)
+                self.ppi.answer(req["ref"], bytes([0x1B, 1 if sent < len(blob) else 0]),
+                                bytes([len(part) >> 8, len(part) & 0xFF, 0, 0xFB]) + part)
+                if progress:
+                    progress(sent)
+            elif p[0] == 0x1C:
+                self.ppi.answer(req["ref"], bytes([0x1C]))
+                break
+            else:
+                raise PpiError(f"demande inattendue de l'automate pendant le chargement : {p.hex(' ')}")
+        else:
+            raise PpiError("chargement : l'automate ne termine pas (pas de 1C)")
+        self._call(bytes([0x28, 0, 0, 0, 0, 0, 0, 0xFD, 0, 0x0A, 1, 0]) + name + bytes([5]) + b"_INSE")
 
     def upload(self, kind: str, number: int, progress=None) -> bytes:
         """Upload one block. The S7 file name ends with 'A' (libnodave); when the CPU answers 'block does not

@@ -124,6 +124,45 @@ class DecodingTests(unittest.TestCase):
         self.assertEqual(sw.diff(other, blob), ["OB1 modifie (premier octet different : 1)"])
 
 
+P0 = "DB1 (56 o : USER1), OB1 (106 o : MAIN SBR_0 INT_0), SDB0 (332 o) ; charge par Micro/WIN le 2026-11-16 14:20:55"
+
+
+class BlockTests(unittest.TestCase):
+    def test_bench_blocks(self):
+        """Blocks uploaded from the bench CPU 224 (16/11) after Micro/WIN loaded an empty project."""
+        folder = Path(__file__).resolve().parents[1] / "research" / "s7200" / "bench_P0"
+        ob = ppi.block_info((folder / "OB1.bin").read_bytes())
+        self.assertEqual((ob["type"], ob["numero"], ob["taille"], ob["code"], ob["protege"], ob["modifie"]),
+                         ("OB", 1, 106, 16, False, "2026-11-16 14:20:55"))
+        self.assertEqual(ob["noms"], ["MAIN", "SBR_0", "INT_0"])
+        self.assertEqual(len(ob["source"]), 65)
+        db = ppi.block_info((folder / "DB1.bin").read_bytes())
+        self.assertEqual((db["type"], db["noms"]), ("DB", ["USER1"]))
+        sdb = ppi.block_info((folder / "SDB0.bin").read_bytes())
+        self.assertEqual((sdb["type"], sdb["numero"], sdb["taille"], sdb["source"]), ("SDB", 0, 332, b""))
+
+    def test_load_frames_as_libnodave(self):
+        """testPPIload: 1A with the file name and sizes, parts with 00 FB, ends with _INSE."""
+        port = sw.DemoPort()
+        port.running = False
+        sent = []
+        orig = port.write
+        port.write = lambda f: (sent.append(f), orig(f))[1]
+        plc = ppi.S7200(ppi.Ppi(port, 2, 0)).connect()
+        blob = port.blocks[("SDB", 0)]
+        port.blocks.pop(("SDB", 0))
+        plc.load_block(blob)
+        self.assertEqual(port.blocks[("SDB", 0)], blob)
+        pdus = [f[7:-2] for f in sent if f[0] == ppi.SD2]
+        self.assertIn(b"\x1a\x00\x01\x00\x00\x00\x00\x00\x09_0B00000P\x0d1000332000296", pdus[1])
+        answers = [f for f in sent if f[0] == ppi.SD2 and f[6] == 0x5C]
+        self.assertEqual(len(answers), 3)                       # 218 + 114 bytes, then the 1C answer
+        self.assertIn(b"_INSE", pdus[-1])
+        with self.assertRaises(ppi.PlcRefused):                 # RUN: refused (as Micro/WIN asks for STOP)
+            port.running = True
+            plc.load_block(blob)
+
+
 class WebTests(unittest.TestCase):
     def setUp(self):
         self.s = Session(backups=tempfile.mkdtemp())
@@ -184,18 +223,30 @@ class WebTests(unittest.TestCase):
             return orig(p)
         port._answer = answer
         self.s.save_program("")
-        self.assertEqual(self.wait()["comptes"], "DB1 (40 o), OB1 (120 o), SDB0 (64 o)")
-        self.assertTrue(any("OB2" in x for x in self.s.plc.upload_refused))
+        self.assertEqual(self.wait()["comptes"], P0)
+        refused = self.s.plc.upload_refused
+        self.assertTrue(any("OB2" in x for x in refused) and any("SDB2" in x for x in refused), refused)
 
     def test_program_and_data(self):
         self.s.save_program("")
         saved = self.wait()
-        self.assertEqual(saved["comptes"], "DB1 (40 o), OB1 (120 o), SDB0 (64 o)")
-        self.s.plc.ppi.ser.blocks[("OB", 1)] = b"\x00" * 120
+        self.assertEqual(saved["comptes"], P0)
+        port = self.s.plc.ppi.ser
+        p0 = dict(port.blocks)
+        port.blocks[("OB", 1)] = p0[("OB", 1)][:40] + b"\x01" + p0[("OB", 1)][41:]
         self.s.compare(saved["id"])
         self.assertIn("OB1 modifie", self.wait()["differences"][0]["detail"])
-        with self.assertRaises(DriverError):
-            self.s.restore_plan(saved["id"], False)
+        plan = self.s.restore_plan(saved["id"], False)
+        self.assertEqual((plan["run"], plan["autre_automate"], len(plan["charger"])), (True, False, 3))
+        self.assertIn("DB1", plan["avert"])
+        self.s.restore(saved["id"], False, False)
+        r = self.wait()
+        self.assertEqual((r["erreur"], r["charges"], r["differences"], r["etait_en_run"]),
+                         ("", ["OB1", "DB1", "SDB0"], [], True))
+        self.assertEqual(port.blocks, p0)
+        self.assertFalse(port.running)
+        self.assertEqual(self.s.backup_blocks(saved["id"])["blocs"][2]["taille"], "106 octets : MAIN SBR_0 INT_0")
+        self.assertIn("avant restauration", str(self.s.list_backups()))
         self.s.data_save("")
         data = self.wait()
         self.assertEqual(data["comptes"], "8192 VB")

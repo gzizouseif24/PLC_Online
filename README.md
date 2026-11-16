@@ -49,7 +49,7 @@ it would hold the same port.
 | **Surveillance** | Watch table: any address, live, with a format per row (dec, hex, bin…). Writing with confirmation and read-back. |
 | **Changements** | Reads a whole range (e.g. D0..D199) again and again and logs every value that changes, with the time. Use it to find which register a setting uses. |
 | **Test E/S** | Wiring check: every input of every unit. An input turns green once it has been seen at 1 then back at 0, with the wiring notes. |
-| **Programme** | Save the program with a note, compare the PLC with a copy, download / import copies. Restore: S7-300 and TSX only. |
+| **Programme** | Save the program with a note, compare the PLC with a copy, download / import copies. Restore: S7-300, TSX and S7-200. |
 | **Donnees** | Copy of the data words (recipes, counters, settings) to CSV, then restore only the words that changed. |
 | **Axes** | Allen-Bradley only: Kinetix drives, faults (same codes as the drive display), inhibits, fault history. Read only. |
 
@@ -66,7 +66,7 @@ Not every tab exists for every brand. The page shows only the tabs that work wit
 
 - Every write, RUN / STOP and restore asks for confirmation. Values are read back after writing.
 - Before a program restore, save the PLC first (Programme tab). The TSX restore does it by itself.
-- The program copies for Panasonic, Mitsubishi, Omron and S7-200 are **read only**: to compare and keep a record.
+- The program copies for Panasonic, Mitsubishi and Omron are **read only**: to compare and keep a record.
   Load programs with the vendor software.
 - **Omron** refuses writes in RUN: use the **Passer en MONITOR** button (the program keeps running).
 - Allen-Bradley safety tags and Kinetix drives are never written.
@@ -80,10 +80,13 @@ Not every tab exists for every brand. The page shows only the tabs that work wit
   - A STEP 7 V5 project (its folder or a `.zip` archive) can be imported as a copy.
 - **Siemens S7-200**:
   - Pure Python over the RS-232/PPI cable: no Micro/WIN, no 32-bit Python.
-  - CPU, modules (SMB8..SMB21) and their addresses, faults (SM bits), V memory copies, block upload.
+  - CPU, modules (SMB8..SMB21) and their addresses, faults (SM bits), V memory copies.
+  - Program copies: OB1 (program with its SBR / INT), DB1 (data block), SDB0 (system block). Restore
+    loads them back in STOP. SDB2 is listed by the CPU but cannot be uploaded, so it is not copied.
+  - A Micro/WIN project (`.mwp`) is source: load it with Micro/WIN. The tool restores its own copies.
+  - In Micro/WIN, **Upload** (up arrow) reads the PLC. **Download** (down arrow) replaces its program.
   - Remote RUN / STOP needs the switch on TERM.
-  - Loading a program back and decoding it into instructions: bench work in progress, see
-    [docs/s7-200.md](docs/s7-200.md).
+  - Decoding into instructions: bench work in progress, see [docs/s7-200.md](docs/s7-200.md).
 - **TSX**:
   - Program and data copies also read PL7 files (`.stx`, `.dat`).
   - Live `%I` / `%Q` are not readable yet. The *Recherche des %I* wizard at the bottom of the
@@ -121,7 +124,7 @@ python tools/<brand>.py --help
 | Tool | Commands |
 |---|---|
 | `tools/siemens.py` (32-bit Python) | etat, diagnostic, modules, config, sauvegarder-config, sauvegarder-programme, comparer, restaurer, importer-projet, surveiller, ecrire, lire |
-| `tools/s7200.py` | etat, lire, ecrire, televerser, brut (`--trace` shows every PPI frame) |
+| `tools/s7200.py` | etat, lire, ecrire, televerser, charger, brut (`--trace` shows every PPI frame) |
 | `tools/tsx.py` | etat, lire, surveiller, ecrire, run, stop, horloge, sauvegarder, comparer, restaurer, sauvegarder-donnees, restaurer-donnees, chercher-es |
 | `tools/omron.py` | etat, erreurs, parametres, lire, surveiller, ecrire, run, monitor, programme, sauvegarder-donnees, restaurer-donnees, sauvegarder, comparer |
 | `tools/panasonic.py` | chercher, scan, ecrire, programme, test-entrees |

@@ -94,6 +94,11 @@ function fxpFamily() {
   return family === "mitsubishi" || family === "panasonic" || family === "omron" || family === "s7200";
 }
 
+function readOnlyProgram() {
+  /** Program copies without a restore button. */
+  return fxpFamily() && family !== "s7200";
+}
+
 function applyBrand(key) {
   const b = brands[key] || {};
   family = b.famille || "s7";
@@ -105,7 +110,7 @@ function applyBrand(key) {
   const tsx = family === "tsx";
   const fxp = fxpFamily();
   $("prog-hint").textContent = family === "s7200"
-    ? "Copie des blocs de l'automate (OB, DB, SDB) tels qu'il les donne, en lecture seule : a garder et a comparer. Rechargement et decodage en instructions : en cours (banc). Rechargement : Micro/WIN."
+    ? "Copie des blocs de l'automate (OB1 programme, DB1 donnees, SDB0 bloc systeme) tels qu'il les donne : a garder, comparer et recharger (STOP). Un projet .mwp se charge avec Micro/WIN. Decodage en instructions : en cours (banc)."
     : family === "omron"
     ? "Copie de la zone programme (FINS 0306, experimental), en lecture seule : a garder et a comparer. Rechargement : CX-Programmer."
     : family === "panasonic"
@@ -621,7 +626,7 @@ async function loadBackups() {
       const actions = el("div", "row-actions");
       for (const [text, fn] of [["Comparer", () => compareBackup(b)],
                                 ...(family === "s7" && r.sauvegardes.length > 1 ? [["Comparer a une copie", () => compareWithCopy(b, r.sauvegardes)]] : []),
-                                ...(fxpFamily() ? [] : [["Restaurer", () => (family === "tsx" ? planRestoreTsx(b) : planRestore(b, false))]]),
+                                ...(readOnlyProgram() ? [] : [["Restaurer", () => (family === "tsx" || family === "s7200" ? planRestoreTsx(b) : planRestore(b, false))]]),
                                 [family === "tsx" || fxpFamily() ? "Details" : "Blocs", () => showBlocks(b)]]) {
         const btn = el("button", "btn small", text);
         btn.type = "button";
@@ -825,6 +830,7 @@ async function planRestoreTsx(b) {
     }
     box.append(el("p", "hint", "Le programme actuel de l'automate est d'abord copie dans la liste (note \"avant restauration\"). " +
                   "L'automate passe en STOP, l'application est chargee puis relue pour verification."));
+    if (plan.avert) box.append(el("p", "avert", plan.avert));
     if (plan.vide) box.append(el("p", "avert", "L'automate est vide (pas d'application) : rien a copier avant, l'application sera chargee directement."));
     if (plan.run) box.append(el("p", "avert", "L'automate est en RUN : il sera mis en STOP, la machine s'arrete."));
     const go = el("button", "btn btn-danger", "Lancer la restauration");

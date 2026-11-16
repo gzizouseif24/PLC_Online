@@ -112,9 +112,13 @@ class DemoPort:
         self.mem["V"][0:4] = bytes([0x04, 0xD2, 0, 42])
         struct.pack_into(">h", self.mem["AI"], 0, 6400)
         self.running = True
-        self.blocks = {("OB", 1): bytes(range(40)) * 3, ("DB", 1): bytes([1, 2, 3, 4]) * 10,
-                       ("SDB", 0): bytes(64)}
+        # the blocks of the bench CPU 224 after Micro/WIN loaded an empty project (16/11); SDB2 is listed, not uploadable
+        self.blocks = unpack_blocks((Path(__file__).parent / "s7200_demo_program.bin").read_bytes())
+        self.hidden = {("SDB", 2)}
         self.uploads = {}
+        self.jobs = []                                         # requests of the PLC during a block load (1B / 1C)
+        self.load = None
+        self.job_ref = 0x100
         self.buf = b""
         self.pending = None
         self.lose_next = 0
@@ -132,6 +136,8 @@ class DemoPort:
 
     def write(self, frame):
         if frame[0] == ppi.SD1:
+            if self.pending is None and self.jobs:
+                self.pending = self.jobs.pop(0)
             if self.pending is None:
                 self.buf = b""
                 return
@@ -148,6 +154,10 @@ class DemoPort:
             return
         body = frame[4:-2]
         assert ppi.fcs(body) == frame[-2], "le PC a envoye une somme fausse"
+        if body[2] == 0x5C:                                  # the PC answers a request of the PLC (block load)
+            self._load_answer(ppi.parse_pdu(body[3:]))
+            self.buf = bytes([ppi.SC])
+            return
         self.pending = self._answer(ppi.parse_pdu(body[3:]))
         self.buf = bytes([ppi.SC])
 
@@ -168,6 +178,21 @@ class DemoPort:
                       len(data) >> 8, len(data) & 0xFF])
         return head + (bytes([error >> 8, error & 0xFF]) if kind in (2, 3) else b"") + param + data
 
+    def _job(self, param):
+        self.job_ref += 1
+        self.jobs.append(self._reply(self.job_ref, param, kind=1))
+
+    def _load_answer(self, p):
+        if self.load is None or p["type"] != 3:
+            return
+        if p["param"][:1] == b"\x1b":
+            d = p["data"]
+            assert d[3] == 0xFB, "prefixe 00 FB attendu (libnodave)"
+            self.load["buf"] += d[4:4 + (d[0] << 8 | d[1])]
+            self._job(bytes([0x1B, 0, 0, 0, 0, 0, 0, 1]) if p["param"][1] else bytes([0x1C, 0, 0, 0, 0, 0, 0, 1]))
+        elif p["param"][:1] == b"\x1c":
+            self.load["fini"] = True
+
     def _area(self, code, db):
         return next((a for a, (c, d) in ppi.AREAS.items() if c == code and (a != "V" or db == 1)), None)
 
@@ -181,7 +206,7 @@ class DemoPort:
             return self._reply(ref, bytes([0, 1, 0x12, 8, 0x12, 0x88, 0x0E, 0, 0, 0, 0, 0]), bytes([0xFF, 9, 0, 0]), kind=7)
         if p["type"] == 7:                                     # userdata: list blocks of a type
             kind = {v: k for k, v in ppi.BLOCK_TYPES.items()}.get(data[5])
-            nums = sorted(n for (k, n) in self.blocks if k == kind)
+            nums = sorted(n for (k, n) in set(self.blocks) | self.hidden if k == kind)
             raw = b"".join(struct.pack(">HBB", n, 0x22, 0x05) for n in nums)
             body = bytes([0xFF, 9, len(raw) >> 8, len(raw) & 0xFF]) + raw if nums else bytes([0x0A, 0, 0, 0])
             return self._reply(ref, bytes([0, 1, 0x12, 8, 0x12, 0x83, 2, 1, 0, 0, 0, 0]), body, kind=7)
@@ -209,6 +234,19 @@ class DemoPort:
                 n = (data[2] << 8 | data[3]) // 8
                 mem[start:start + n] = data[4:4 + n]
             return self._reply(ref, bytes([5, 1]), bytes([0xFF]))
+        if f == 0x1A:                                         # load request: _0<type><number>P + sizes
+            if self.running:
+                return self._reply(ref, bytes([0x1A]), error=0xD802, kind=3)
+            self.load = {"nom": param[10:18], "taille": int(param[20:26]), "buf": b"", "fini": False}
+            self._job(bytes([0x1B, 0, 0, 0, 0, 0, 0, 1]))
+            return self._reply(ref, bytes([0x1A]))
+        if f == 0x28 and b"_INSE" in param:
+            load, self.load = self.load, None
+            if not load or not load["fini"] or param[12:20] != load["nom"] or len(load["buf"]) != load["taille"]:
+                return self._reply(ref, bytes([0x28]), error=0xD209, kind=3)
+            blob = load["buf"]
+            self.blocks[(ppi.TYPE_CODES[blob[5]], blob[6] << 8 | blob[7])] = blob
+            return self._reply(ref, bytes([0x28]))
         if f == 0x28 and b"P_PROGRAM" in param:
             self.running = True
             return self._reply(ref, bytes([0x28]))
@@ -571,11 +609,36 @@ def read_program(plc, progress) -> bytes:
     return pack_blocks(blocks)
 
 
+def block_text(kind, n, data) -> str:
+    try:
+        info = ppi.block_info(data)
+    except ValueError:
+        return f"{kind}{n} ({len(data)} o)"
+    names = " ".join(info["noms"])
+    return (f"{kind}{n} ({len(data)} o" + (f" : {names}" if names else "") + (", protege" if info["protege"] else "")
+            + ")")
+
+
 def describe(blob: bytes) -> str:
     try:
-        return ", ".join(f"{k}{n} ({len(d)} o)" for (k, n), d in sorted(unpack_blocks(blob).items()))
+        blocks = unpack_blocks(blob)
     except ValueError:
         return f"{len(blob)} octets"
+    dates = sorted({ppi.block_info(d)["modifie"] for d in blocks.values() if d[:2] == b"\x70\x70"} - {""})
+    return ", ".join(block_text(k, n, d) for (k, n), d in sorted(blocks.items())) + (
+        f" ; charge par Micro/WIN le {dates[-1]}" if dates else "")
+
+
+LOAD_ORDER = {"OB": 0, "DB": 1, "SDB": 2}
+
+
+def load_program(plc, blob, progress, done=None) -> list:
+    """Load every block of a copy (CPU in STOP). Returns the names loaded (also appended to done as it goes)."""
+    done = [] if done is None else done
+    for (kind, n), data in sorted(unpack_blocks(blob).items(), key=lambda kv: (LOAD_ORDER.get(kv[0][0], 9), kv[0][1])):
+        plc.load_block(data, lambda size: progress(f"chargement {kind}{n} : {size} / {len(data)} octets", size, len(data)))
+        done.append(f"{kind}{n}")
+    return done
 
 
 def diff(now: bytes, saved: bytes) -> list:
@@ -638,10 +701,8 @@ class S7200Ops:
         self.prog = ProgramCopies(
             session, lambda: self.s.tsx_backups.parent / "s7-200" / "programmes", PROGRAM_FILE, read_program,
             describe, diff, "s7200", lambda data: data.startswith(MAGIC),
-            "Rechargement d'un programme dans un S7-200 : pas encore valide (capture de Micro/WIN a faire au banc, "
-            "docs/s7-200.md). Utiliser Micro/WIN. La copie sert a comparer et a garder une trace.")
-        for name in ("list_backups", "compare", "backup_blocks", "restore_plan", "restore", "export_backup",
-                     "import_backup"):
+            "")
+        for name in ("list_backups", "compare", "export_backup", "import_backup"):
             setattr(self, name, getattr(self.prog, name))
 
     @property
@@ -654,6 +715,60 @@ class S7200Ops:
 
     def save_program(self, note):
         return self.prog.save_program(note, lambda plc: plc.cpu)
+
+    def _copy(self, backup_id):
+        path = _drv().backup_path(self.programs, backup_id)
+        return self.prog._image(backup_id), tsx_web._meta(path)
+
+    def backup_blocks(self, backup_id):
+        blob, meta = self._copy(backup_id)
+        rows = [{"bloc": "CPU", "taille": meta.get("cible", ""), "date": "", "somme": ""}]
+        for (kind, n), data in sorted(unpack_blocks(blob).items()):
+            try:
+                info = ppi.block_info(data)
+            except ValueError:
+                info = {"noms": [], "modifie": "", "protege": False}
+            rows.append({"bloc": f"{kind}{n}", "taille": f"{len(data)} octets" + (" : " + " ".join(info["noms"]) if info["noms"] else "")
+                         + (" (protege)" if info["protege"] else ""), "date": info["modifie"], "somme": ""})
+        return {"id": backup_id, "blocs": rows}
+
+    def restore_plan(self, backup_id, with_db=False):
+        blob, meta = self._copy(backup_id)
+        blocks = unpack_blocks(blob)
+
+        def run(plc):
+            target = meta.get("cible") or ""
+            return {"charger": [block_text(k, n, d) for (k, n), d in sorted(blocks.items())], "en_trop": [],
+                    "db_ignorees": False, "run": running(plc), "cible": target, "automate": plc.nom, "vide": False,
+                    "autre_automate": bool(target) and target.replace(" ", "") != plc.cpu.replace(" ", ""),
+                    "avert": ("DB1 remet les valeurs initiales de la memoire V (bloc de donnees de Micro/WIN) : faire "
+                              "d'abord une copie des donnees (onglet Donnees) si des reglages ont change."
+                              if ("DB", 1) in blocks else "")}
+        return self.s._call(run)
+
+    def restore(self, backup_id, with_db=False, delete_extra=False):
+        blob, _ = self._copy(backup_id)
+
+        def work(plc, progress):
+            out = {"charges": [], "supprimes": [], "erreur": "", "differences": [], "etait_en_run": running(plc)}
+            before = read_program(plc, progress)
+            out["sauvegarde_avant"] = self.prog._save(before, plc.nom, "avant restauration", plc.cpu)["id"]
+            if out["etait_en_run"]:
+                progress("passage en STOP", 0, 0)
+                plc.stop()
+                time.sleep(0.3)
+                if running(plc):
+                    out["erreur"] = "l'automate reste en RUN (selecteur sur RUN ? le mettre sur STOP ou TERM)"
+                    return out
+            try:
+                load_program(plc, blob, progress, out["charges"])
+            except ppi.PpiError as e:
+                out["erreur"] = str(e)
+                return out
+            back = read_program(plc, progress)
+            out["differences"] = [d for d in diff(back, blob) if "absent de la copie" not in d]
+            return out
+        return self.s.start_job("restauration du programme", work)
 
     def status(self, plc):
         return s7200_status(plc)

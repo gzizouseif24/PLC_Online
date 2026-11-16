@@ -720,8 +720,11 @@ const I18N = (() => {
     "S7-200 : cable RS-232/PPI sur un port COM (commutateurs : 9600 bauds, mode PPI),": "S7-200: RS-232/PPI cable on a COM port (switches: 9600 baud, PPI mode),",
     "Micro/WIN ferme": "Micro/WIN closed",
     ". Automate a l'adresse 2 par defaut. RUN / STOP a distance : selecteur sur TERM.": ". PLC at address 2 by default. Remote RUN / STOP: switch on TERM.",
-    "Copie des blocs de l'automate (OB, DB, SDB) tels qu'il les donne, en lecture seule : a garder et a comparer. Rechargement et decodage en instructions : en cours (banc). Rechargement : Micro/WIN.":
-      "Copy of the PLC's blocks (OB, DB, SDB) as it gives them, read only: to keep and compare. Loading back and decoding into instructions: in progress (bench). Loading back: Micro/WIN.",
+    "Copie des blocs de l'automate (OB1 programme, DB1 donnees, SDB0 bloc systeme) tels qu'il les donne : a garder, comparer et recharger (STOP). Un projet .mwp se charge avec Micro/WIN. Decodage en instructions : en cours (banc).":
+      "Copy of the PLC's blocks (OB1 program, DB1 data, SDB0 system block) as it gives them: to keep, compare and load back (STOP). A .mwp project is loaded with Micro/WIN. Decoding into instructions: in progress (bench).",
+    "DB1 remet les valeurs initiales de la memoire V (bloc de donnees de Micro/WIN) : faire d'abord une copie des donnees (onglet Donnees) si des reglages ont change.":
+      "DB1 puts back the initial values of V memory (Micro/WIN data block): first copy the data (Donnees tab) if settings have changed.",
+    "l'automate reste en RUN (selecteur sur RUN ? le mettre sur STOP ou TERM)": "the PLC stays in RUN (switch on RUN? set it to STOP or TERM)",
     "Bits : I0.0, Q0.1, M1.2, V100.3, SM0.5. Octets / mots / doubles : VB10, VW100, VD200 (format real), MB, IB, QB, SMB, SMW22. Analogique : AIW0, AQW0. Ecriture : Q, M, V, SM30+, AQ.":
       "Bits: I0.0, Q0.1, M1.2, V100.3, SM0.5. Bytes / words / doubles: VB10, VW100, VD200 (real format), MB, IB, QB, SMB, SMW22. Analog: AIW0, AQW0. Writing: Q, M, V, SM30+, AQ.",
     "Copie de toute la memoire V (VB0..fin, recettes, compteurs, reglages), sans le programme.": "Copy of the whole V memory (VB0..end, recipes, counters, settings), without the program.",
