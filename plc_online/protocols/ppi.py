@@ -191,7 +191,7 @@ class Ppi:
             return "SD2", body[3:]                       # skip DA SA FC
         return None
 
-    TURNAROUND = 0.005         # RS-232/PPI cable: time to switch from receiving to sending
+    TURNAROUND = 0.012         # idle line before each frame: PROFIBUS Tsyn = 33 bits (3.4 ms at 9600), with margin
 
     def _ask(self, fc: int):
         time.sleep(self.TURNAROUND)
