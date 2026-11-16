@@ -238,7 +238,8 @@ class WebTests(unittest.TestCase):
         self.assertIn("OB1 modifie", self.wait()["differences"][0]["detail"])
         plan = self.s.restore_plan(saved["id"], False)
         self.assertEqual((plan["run"], plan["autre_automate"], len(plan["charger"])), (True, False, 3))
-        self.assertIn("DB1", plan["avert"])
+        self.assertEqual(len(plan["avert"]), 1)
+        self.assertIn("DB1", plan["avert"][0])
         self.s.restore(saved["id"], False, False)
         r = self.wait()
         self.assertEqual((r["erreur"], r["charges"], r["differences"], r["etait_en_run"]),

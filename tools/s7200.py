@@ -79,6 +79,10 @@ def cmd_televerser(plc, folder: Path):
             if info["source"]:
                 (folder / f"{kind}{n}.source.bin").write_bytes(info["source"])
                 print(f"      programme Micro/WIN (decompresse) : {kind}{n}.source.bin, {len(info['source'])} octets")
+                src = info["source"]
+                for i in range(0, len(src), 16):
+                    line = src[i:i + 16]
+                    print(f"      {i:04X}  {line.hex(' '):<48}  {''.join(chr(c) if 32 <= c < 127 else '.' for c in line)}")
 
 
 def cmd_charger(plc, folder: Path):
@@ -93,6 +97,8 @@ def cmd_charger(plc, folder: Path):
         except ValueError as e:
             sys.exit(f"{f} : {e}")
         blocks[(info["type"], info["numero"])] = data
+    for key in sw.NOT_LOADED:
+        blocks.pop(key, None)
     if not blocks:
         sys.exit(f"aucun bloc .bin dans {folder}")
     print("A charger :", ", ".join(sw.block_text(k, n, d) for (k, n), d in sorted(blocks.items())))

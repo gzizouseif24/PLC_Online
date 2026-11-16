@@ -61,7 +61,7 @@ def block_info(blob: bytes) -> dict:
     if len(blob) < 36 or blob[:2] != b"\x70\x70":
         raise ValueError("pas un bloc S7 (70 70 attendu)")
     out = {"type": TYPE_CODES.get(blob[5], f"{blob[5]:02X}"), "numero": blob[6] << 8 | blob[7],
-           "taille": struct.unpack_from(">I", blob, 8)[0], "protege": blob[12:16] != bytes(4),
+           "taille": struct.unpack_from(">I", blob, 8)[0], "protege": blob[5] != 0x0B and blob[12:16] != bytes(4),
            "modifie": s7_date(blob[16:22]), "interface": s7_date(blob[22:28]),
            "code": blob[34] << 8 | blob[35], "source": b"", "noms": []}
     start = blob.find(b"\x78\x9c", 36)

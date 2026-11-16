@@ -630,12 +630,17 @@ def describe(blob: bytes) -> str:
 
 
 LOAD_ORDER = {"OB": 0, "DB": 1, "SDB": 2}
+# SDB2: same size as SDB0, kept by the CPU in its EEPROM; loading it is refused with D207 "block exists in EEPROM"
+# (bench 16/11). Micro/WIN's download does not need it: the CPU writes it itself.
+NOT_LOADED = {("SDB", 2)}
 
 
 def load_program(plc, blob, progress, done=None) -> list:
     """Load every block of a copy (CPU in STOP). Returns the names loaded (also appended to done as it goes)."""
     done = [] if done is None else done
     for (kind, n), data in sorted(unpack_blocks(blob).items(), key=lambda kv: (LOAD_ORDER.get(kv[0][0], 9), kv[0][1])):
+        if (kind, n) in NOT_LOADED:
+            continue
         plc.load_block(data, lambda size: progress(f"chargement {kind}{n} : {size} / {len(data)} octets", size, len(data)))
         done.append(f"{kind}{n}")
     return done
@@ -738,12 +743,15 @@ class S7200Ops:
 
         def run(plc):
             target = meta.get("cible") or ""
-            return {"charger": [block_text(k, n, d) for (k, n), d in sorted(blocks.items())], "en_trop": [],
+            return {"charger": [block_text(k, n, d) for (k, n), d in sorted(blocks.items()) if (k, n) not in NOT_LOADED],
+                    "en_trop": [],
                     "db_ignorees": False, "run": running(plc), "cible": target, "automate": plc.nom, "vide": False,
                     "autre_automate": bool(target) and target.replace(" ", "") != plc.cpu.replace(" ", ""),
-                    "avert": ("DB1 remet les valeurs initiales de la memoire V (bloc de donnees de Micro/WIN) : faire "
-                              "d'abord une copie des donnees (onglet Donnees) si des reglages ont change."
-                              if ("DB", 1) in blocks else "")}
+                    "avert": list(filter(None, [
+                        "SDB2 n'est pas recharge : la CPU le garde elle-meme en EEPROM." if ("SDB", 2) in blocks else "",
+                        "DB1 remet les valeurs initiales de la memoire V (bloc de donnees de Micro/WIN) : faire "
+                        "d'abord une copie des donnees (onglet Donnees) si des reglages ont change."
+                        if ("DB", 1) in blocks else ""]))}
         return self.s._call(run)
 
     def restore(self, backup_id, with_db=False, delete_extra=False):
@@ -766,7 +774,7 @@ class S7200Ops:
                 out["erreur"] = str(e)
                 return out
             back = read_program(plc, progress)
-            out["differences"] = [d for d in diff(back, blob) if "absent de la copie" not in d]
+            out["differences"] = [d for d in diff(back, blob) if "absent de la copie" not in d and not d.startswith("SDB2")]
             return out
         return self.s.start_job("restauration du programme", work)
 
