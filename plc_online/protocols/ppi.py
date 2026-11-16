@@ -137,7 +137,7 @@ class Ppi:
         return out
 
     def _next(self, wait: float = 1.0):
-        """Next frame for us: ('E5', b'') or ('SD2', S7 PDU). Frames of other stations on the line are
+        """Next frame for us: ('E5', b''), ('SD2', S7 PDU) or ('SD1', function code: 02 = busy). Frames of other stations on the line are
         skipped: an S7-200 in PPI master mode (NETR / NETW) or an HMI polls every address with short
         frames (SD1: 10 DA SA FC FCS 16) and passes the token (SD4: DC DA SA). Returns None on timeout."""
         deadline = time.time() + wait
@@ -151,6 +151,11 @@ class Ppi:
                 return "E5", b""
             if b == SD1:
                 frame = first + self._read_exact(5)
+                # a short ANSWER of our PLC (bit 6 = 0, e.g. 02 = busy); a request (bit 6 = 1, e.g. 49 = status
+                # poll of a PLC in PPI master mode) is skipped like the frames of other stations
+                if len(frame) == 6 and frame[1] == self.local and frame[2] == self.plc and not frame[3] & 0x40:
+                    self._note("<- SD1", frame)
+                    return "SD1", bytes([frame[3]])
                 self.skipped.append(frame)
                 self._note("autre", frame)
                 continue
@@ -186,21 +191,42 @@ class Ppi:
             return "SD2", body[3:]                       # skip DA SA FC
         return None
 
+    TURNAROUND = 0.005         # RS-232/PPI cable: time to switch from receiving to sending
+
+    def _ask(self, fc: int):
+        time.sleep(self.TURNAROUND)
+        frame = sd1_frame(self.plc, self.local, fc)
+        self.ser.write(frame)
+        self._note("-> SD1", frame)
+
     def _reply(self) -> bytes:
-        """Ask for the reply (request data) until the PLC sends its SD2 frame; returns the S7 PDU."""
-        fc = 0x5C
-        for _ in range(30):
-            self.ser.write(sd1_frame(self.plc, self.local, fc))
-            self._note("-> SD1", sd1_frame(self.plc, self.local, fc))
-            got = self._next()
+        """Ask for the reply (request data) until the PLC sends its SD2 frame; returns the S7 PDU.
+        A lost reply is asked again (the PLC keeps it until it is collected)."""
+        fc, lost = 0x5C, 0
+        for _ in range(40):
+            self._ask(fc)
+            got = self._next(0.6)
             if got is None:
-                raise PpiError("pas de reponse a la demande de donnees")
-            if got[0] == "E5":                           # not ready yet: ask again, other FC (as libnodave)
+                lost += 1
+                if lost > 3:
+                    raise PpiError("pas de reponse a la demande de donnees")
+                self._note("perdu", text="reponse perdue : nouvelle demande")
+                continue
+            if got[0] in ("E5", "SD1"):                  # not ready yet: ask again, other FC (as libnodave)
                 fc = 0x7C if fc == 0x5C else 0x5C
-                time.sleep(0.01)
+                time.sleep(0.02)
                 continue
             return got[1]
-        raise PpiError("l'automate repond toujours 'pas pret' (E5)")
+        raise PpiError("l'automate repond toujours 'pas pret'")
+
+    def _collect_pending(self):
+        """The PLC answered 'busy' (SD1 FC 02): it still holds the reply to an earlier request whose
+        reply was lost. Collect it and drop it, so the PLC accepts the next request."""
+        try:
+            self._reply()
+            self._note("vide", text="reponse en attente recuperee et ignoree")
+        except PpiError:
+            pass
 
     def exchange(self, param: bytes, data: bytes = b"", pdu_type: int = 1) -> dict:
         self.ref = (self.ref + 1) & 0xFFFF or 1
@@ -212,6 +238,7 @@ class Ppi:
                 self._note("ERREUR", text=str(error))
                 time.sleep(random.uniform(0.03, 0.15))      # other master on the line: try at another moment
             self._quiet()
+            time.sleep(self.TURNAROUND)
             self.ser.write(frame)
             self._note("->", frame)
             if self.log:
@@ -221,10 +248,18 @@ class Ppi:
                 if got is None:
                     error = PpiError("pas de reponse (cable PPI branche ? adresse de l'automate ? vitesse ?)")
                     continue
+                if got[0] == "SD1":
+                    error = PpiError(f"automate occupe (code {got[1][0]:02X}) : reponse precedente pas recuperee")
+                    self._collect_pending()
+                    continue
                 if got[0] != "E5":
                     error = PpiError("reponse sans acquittement E5")
                     continue
-                return parse_pdu(self._reply())
+                reply = parse_pdu(self._reply())
+                if reply["ref"] != self.ref:                 # an older reply: ours was not taken
+                    error = PpiError(f"reponse a une autre demande (n° {reply['ref']} au lieu de {self.ref})")
+                    continue
+                return reply
             except PpiError as e:
                 error = e
         self._note("ECHEC", text=str(error))

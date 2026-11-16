@@ -106,6 +106,7 @@ class DemoPort:
         self.uploads = {}
         self.buf = b""
         self.pending = None
+        self.lose_next = 0
         self.scans = 0
 
     def reset_input_buffer(self):
@@ -124,7 +125,15 @@ class DemoPort:
                 self.buf = b""
                 return
             reply, self.pending = self.pending, None
+            if self.lose_next:                               # reply lost on the line: kept for the next ask
+                self.lose_next -= 1
+                self.pending = reply
+                self.buf = b""
+                return
             self.buf = ppi.sd2_frame(frame[2], frame[1], 0x08, reply)
+            return
+        if self.pending is not None:                         # bench S7-200: busy until the reply is collected
+            self.buf = ppi.sd1_frame(frame[5], frame[4], 0x02)
             return
         body = frame[4:-2]
         assert ppi.fcs(body) == frame[-2], "le PC a envoye une somme fausse"

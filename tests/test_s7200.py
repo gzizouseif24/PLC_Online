@@ -57,6 +57,16 @@ class LinkTests(unittest.TestCase):
         self.assertIn("ECHEC", text)
         self.assertEqual(plc.ppi.failures, 1)
 
+    def test_lost_reply_and_busy_plc(self):
+        # bench log 16/11: a reply lost after E5, then the PLC answers 10 00 02 02 04 16 (busy) to every new request
+        port = sw.DemoPort()
+        plc = ppi.S7200(ppi.Ppi(port, retries=2)).connect()
+        port.lose_next = 1
+        self.assertEqual(plc.read("V", 0, 2), bytes([0x04, 0xD2]))
+        port.pending = ppi.s7_header(99, b"\x04\x01", b"")      # an old reply nobody collected
+        self.assertEqual(plc.read("V", 2, 2), bytes([0, 42]))
+        self.assertTrue(any("occupe" in d or "perdu" in k for _, k, d in plc.ppi.journal))
+
     def test_bad_checksum_and_errors(self):
         port = sw.DemoPort()
         plc = ppi.S7200(ppi.Ppi(port, retries=0)).connect()
