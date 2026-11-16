@@ -14,6 +14,7 @@ S7-200 memory areas (S7 area codes, libnodave nodave.h): I 81, Q 82, M 83, V = D
 SM 05, AI 06, AQ 07, IEC counters 1E, IEC timers 1F.
 """
 import time
+from collections import deque
 
 SD2, SD1, SYN, SC = 0x68, 0x10, 0x16, 0xE5
 
@@ -89,6 +90,7 @@ class Ppi:
     def __init__(self, ser, plc: int = 2, local: int = 0, retries: int = 2, log=None):
         self.ser, self.plc, self.local, self.retries = ser, plc, local, retries
         self.log = log
+        self.skipped = deque(maxlen=50)   # frames of other stations seen on the line (master PLC, HMI)
         self.ref = 0
 
     def _read_exact(self, n: int) -> bytes:
@@ -100,30 +102,59 @@ class Ppi:
             out += got
         return out
 
-    def _reply(self) -> bytes:
-        """Ask for the reply (request data) until the PLC sends an SD2 frame; returns the S7 PDU."""
-        fc = 0x5C
-        for _ in range(30):
-            self.ser.write(sd1_frame(self.plc, self.local, fc))
+    def _next(self, wait: float = 1.0):
+        """Next frame for us: ('E5', b'') or ('SD2', S7 PDU). Frames of other stations on the line are
+        skipped: an S7-200 in PPI master mode (NETR / NETW) or an HMI polls every address with short
+        frames (SD1: 10 DA SA FC FCS 16) and passes the token (SD4: DC DA SA). Returns None on timeout."""
+        deadline = time.time() + wait
+        while time.time() < deadline:
             first = self._read_exact(1)
             if not first:
-                raise PpiError("pas de reponse a la demande de donnees")
-            if first[0] == SC:                       # not ready yet: ask again, other FC (as libnodave)
-                fc = 0x7C if fc == 0x5C else 0x5C
-                time.sleep(0.01)
+                continue
+            b = first[0]
+            if b == SC:
+                return "E5", b""
+            if b == SD1:
+                rest = self._read_exact(5)
+                self.skipped.append(first + rest)
+                continue
+            if b == 0xDC:                                # SD4 token frame
+                self.skipped.append(first + self._read_exact(2))
+                continue
+            if b != SD2:
+                self.skipped.append(first)               # stray byte
                 continue
             head = first + self._read_exact(3)
-            if len(head) < 4 or head[0] != SD2 or head[3] != SD2 or head[1] != head[2]:
-                raise PpiError(f"trame inattendue : {head.hex(' ')}")
+            if len(head) < 4 or head[3] != SD2 or head[1] != head[2]:
+                self.skipped.append(head)
+                continue
             rest = self._read_exact(head[1] + 2)
             if len(rest) != head[1] + 2 or rest[-1] != SYN:
                 raise PpiError(f"trame coupee : {(head + rest).hex(' ')}")
             body = rest[:-2]
             if fcs(body) != rest[-2]:
                 raise PpiError("somme de controle fausse")
+            if body[0] != self.local or body[1] != self.plc:   # SD2 between other stations
+                self.skipped.append(head + rest)
+                continue
             if self.log:
                 self.log("<-", head + rest)
-            return body[3:]                           # skip DA SA FC
+            return "SD2", body[3:]                       # skip DA SA FC
+        return None
+
+    def _reply(self) -> bytes:
+        """Ask for the reply (request data) until the PLC sends its SD2 frame; returns the S7 PDU."""
+        fc = 0x5C
+        for _ in range(30):
+            self.ser.write(sd1_frame(self.plc, self.local, fc))
+            got = self._next()
+            if got is None:
+                raise PpiError("pas de reponse a la demande de donnees")
+            if got[0] == "E5":                           # not ready yet: ask again, other FC (as libnodave)
+                fc = 0x7C if fc == 0x5C else 0x5C
+                time.sleep(0.01)
+                continue
+            return got[1]
         raise PpiError("l'automate repond toujours 'pas pret' (E5)")
 
     def exchange(self, param: bytes, data: bytes = b"", pdu_type: int = 1) -> dict:
@@ -135,18 +166,18 @@ class Ppi:
             self.ser.write(frame)
             if self.log:
                 self.log("->", frame)
-            ack = self._read_exact(1)
-            if not ack:
+            got = self._next()
+            if got is None:
                 error = PpiError("pas de reponse (cable PPI branche ? adresse de l'automate ? vitesse ?)")
                 continue
-            if ack[0] != SC:
-                error = PpiError(f"acquittement inattendu : {ack.hex()}")
-                time.sleep(0.05)
+            if got[0] != "E5":
+                error = PpiError("reponse sans acquittement E5")
                 continue
             try:
                 return parse_pdu(self._reply())
             except PpiError as e:
                 error = e
+                time.sleep(0.05)
         raise error
 
     def close(self):

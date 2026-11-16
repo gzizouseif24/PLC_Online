@@ -30,6 +30,20 @@ class LinkTests(unittest.TestCase):
         plc = ppi.S7200(ppi.Ppi(port)).connect()
         self.assertEqual(plc.read("SM", 6, 1), bytes([0b0010_0000]))
 
+    def test_frames_of_other_stations_are_skipped(self):
+        # S7-200 in PPI master mode: FDL status requests (SD1) and tokens (SD4) between our frames
+        port = sw.DemoPort()
+        orig = port.write
+        poll = ppi.sd1_frame(0, 2, 0x49) + bytes([0xDC, 3, 2]) + ppi.sd2_frame(5, 2, 0x6C, b"\x01\x02")
+
+        def write(frame):
+            orig(frame)
+            port.buf = poll + port.buf
+        port.write = write
+        plc = ppi.S7200(ppi.Ppi(port, retries=0)).connect()
+        self.assertEqual(plc.read("V", 0, 2), bytes([0x04, 0xD2]))
+        self.assertTrue(any(f[0] == ppi.SD1 for f in plc.ppi.skipped))
+
     def test_bad_checksum_and_errors(self):
         port = sw.DemoPort()
         plc = ppi.S7200(ppi.Ppi(port, retries=0)).connect()

@@ -743,6 +743,7 @@ const I18N = (() => {
       "24 V inputs, common 1M / 2M: to 0 V (sinking inputs, PNP sensors) or to +24 V (sourcing inputs, NPN sensors). See the module's wiring diagram.",
     "Rechargement d'un programme dans un S7-200 : pas encore valide (capture de Micro/WIN a faire au banc, docs/s7-200.md). Utiliser Micro/WIN. La copie sert a comparer et a garder une trace.":
       "Loading a program into an S7-200: not validated yet (Micro/WIN capture to do on the bench, docs/s7-200.md). Use Micro/WIN. The copy is for comparing and keeping a record.",
+    "Autres stations sur la ligne": "Other stations on the line", "reponse sans acquittement E5": "reply without the E5 acknowledgement",
     // short words, used inside longer texts
     "entrees": "inputs", "sorties": "outputs", "entree": "input", "sortie": "output", "voies": "channels", "voie": "channel",
     "mots": "words", "octets": "bytes", "octet": "byte", "alerte(s)": "alert(s)", "differents": "different",
@@ -800,6 +801,7 @@ const I18N = (() => {
     [/^(Erreur materiel|Erreur de parametre|Erreur de syntaxe|Erreur de structure du programme|Erreur d'execution) \(M(\d+)\) : (.*)$/,
       (m, k, n, rest) => `${{"Erreur materiel": "Hardware error", "Erreur de parametre": "Parameter error", "Erreur de syntaxe": "Syntax error", "Erreur de structure du programme": "Program structure error", "Erreur d'execution": "Runtime error"}[k]} (M${n}): ${phrases(rest.replace(/, au pas (\d+) \(D8069\)/, ", at step $1 (D8069)"))}`],
     [/^FX1N V(.+)$/, "FX1N V$1"],
+    [/^(\d+) trame\(s\) ignoree\(s\) \(automate en maitre PPI \/ NETR-NETW, ou IHM\), derniere : (.*)$/, "$1 frame(s) skipped (PLC as PPI master / NETR-NETW, or HMI), last: $2"],
     [/^identification CPU : (.+)$/, "CPU identification: $1"], [/^memoire V : (\d+) octets$/, "V memory: $1 bytes"],
     [/^(\d+) octets \(VB0\.\.VB(\d+)\)$/, "$1 bytes (VB0..VB$2)"], [/^TERM ou STOP \(SM0\.7 = 0\)$/, "TERM or STOP (SM0.7 = 0)"],
     [/^Module (\d) : (.*) \((SMB\d+)\)$/, (m, n, r, s) => `Module ${n}: ${phrases(r)} (${s})`],

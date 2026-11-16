@@ -345,6 +345,11 @@ def s7200_diagnostic(plc) -> dict:
                                "etat": ", ".join(u["erreurs"]) or "ok", "ok": not u["erreurs"], "variables": variables})
     out["parametres_cpu"] = [("CPU", plc.cpu), ("Memoire V", f"{plc.v_size} octets (VB0..VB{plc.v_size - 1})"),
                              ("Taille PDU", str(plc.pdu_size))]
+    other = list(plc.ppi.skipped)
+    if other:
+        out["parametres_cpu"].append(("Autres stations sur la ligne",
+                                      f"{len(other)} trame(s) ignoree(s) (automate en maitre PPI / NETR-NETW, ou IHM), "
+                                      f"derniere : {other[-1].hex(' ')}"))
     try:
         out["parametres_cpu"].append(("Zone systeme 03 (40 octets, brut)", plc.read_raw_area(0x03, 0, 40).hex(" ")))
     except ppi.PpiError as e:
