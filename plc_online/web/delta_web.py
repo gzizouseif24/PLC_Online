@@ -352,11 +352,13 @@ def delta_diagnostic(plc) -> dict:
 # ---- watch table ----
 
 ADDRESS = re.compile(r"^([DMXYSTC])(\d+)$", re.IGNORECASE)
-WORD_FORMATS = ["dec", "ud", "hex", "bin"]
+WORD_FORMATS = ["dec", "ud", "hex", "bin", "real", "dint"]
+DOUBLE_FORMATS = ("real", "dint")      # two registers, low word first (Delta 32-bit: D238 = low, D239 = high)
 
 
 class DeltaVar:
-    """'D100', 'D100:hex', 'M1000', 'X17', 'Y0', 'T5', 'C2', 'S0' (T / C : current value)."""
+    """'D100', 'D100:hex', 'D238:real' (32-bit float on D238 + D239), 'D10:dint' (32-bit integer), 'M1000', 'X17',
+    'Y0', 'T5', 'C2', 'S0' (T / C : current value)."""
 
     def __init__(self, text: str):
         self.text = text.strip()
@@ -372,15 +374,34 @@ class DeltaVar:
         self.fmt = (fmt.strip().lower() or "dec") if self.word else ""
         if self.word and self.fmt not in WORD_FORMATS:
             raise ValueError(f"format {self.fmt} : {', '.join(WORD_FORMATS)}")
+        self.double = self.fmt in DOUBLE_FORMATS
+        if self.double and self.area != "D":
+            raise ValueError(f"format {self.fmt} : D seulement (D{self.n} et D{self.n + 1})")
 
     def read(self, plc):
+        if self.double:
+            low, high = plc.read_words(self.area, self.n, 2)
+            return high << 16 | low
         if self.word:
             return plc.read_words(self.area, self.n, 1)[0]
         return int(plc.read_bits(self.area, self.n, 1)[0])
 
+    def write(self, plc, value):
+        if self.double:
+            plc.write_words(self.area, self.n, [value & 0xFFFF, value >> 16 & 0xFFFF])
+        elif self.word:
+            plc.write_word(self.area, self.n, value)
+        else:
+            plc.write_bit(self.area, self.n, bool(value))
+
     def decode(self, v) -> str:
         if not self.word:
             return str(int(v))
+        if self.fmt == "real":
+            x = struct.unpack("<f", struct.pack("<I", v))[0]
+            return f"{x:.7g}"
+        if self.fmt == "dint":
+            return str(v - (1 << 32) if v & 0x80000000 else v)
         if self.fmt == "ud":
             return str(v)
         if self.fmt == "hex":
@@ -396,6 +417,19 @@ class DeltaVar:
             if t not in ("0", "1"):
                 raise ValueError("0 ou 1")
             return int(t)
+        if self.fmt == "real":
+            try:
+                return struct.unpack("<I", struct.pack("<f", float(t.replace(",", "."))))[0]
+            except (ValueError, OverflowError):
+                raise ValueError("nombre reel illisible (ex. 12.5)") from None
+        if self.fmt == "dint":
+            try:
+                v = int(t)
+            except ValueError:
+                raise ValueError("entier illisible") from None
+            if not -2**31 <= v < 2**32:
+                raise ValueError("hors -2147483648..4294967295")
+            return v & 0xFFFFFFFF
         try:
             if t.startswith("16#") or t.startswith("0x"):
                 v = int(t[3:] if t.startswith("16#") else t[2:], 16)
@@ -442,10 +476,7 @@ def write_values(plc, items) -> dict:
         except ValueError as e:
             raise _drv().DriverError(f"{text} : {e}") from None
         old = v.read(plc)
-        if v.word:
-            plc.write_word(v.area, v.n, value)
-        else:
-            plc.write_bit(v.area, v.n, bool(value))
+        v.write(plc, value)
         back = v.read(plc)
         results.append({"adresse": text, "avant": v.decode(old), "relu": v.decode(back), "ok": back == value})
     run = _get(lambda: plc.read_bits("M", 1000, 1)[0])

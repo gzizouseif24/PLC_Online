@@ -52,6 +52,21 @@ class DeltaWebTests(unittest.TestCase):
         with self.assertRaises(dl.ModbusError):               # what the old read (function 01) got
             self.s.plc.mb.read_coils(dl.bit_address("X", 0), 16)
 
+    def test_float_and_dint(self):
+        """D238:real = IEEE 754 float on D238 (low word) + D239 (high word), as a Delta DEMOV / position."""
+        import struct
+        low, high = struct.unpack("<HH", struct.pack("<f", 123.25))
+        self.s.plc.write_words("D", 238, [low, high])
+        v = self.s.values(["D238:real", "D238", "D238:dint"])["valeurs"]
+        self.assertEqual(v["D238:real"], "123.25")
+        self.assertEqual(v["D238"], str(dl.signed16(low)))
+        r = self.s.write([{"adresse": "D124:real", "valeur": "-7,5"}, {"adresse": "D10:dint", "valeur": "-100000"}])
+        self.assertTrue(all(x["ok"] for x in r["resultats"]), r)
+        self.assertEqual(self.s.values(["D124:real", "D10:dint"])["valeurs"], {"D124:real": "-7.5", "D10:dint": "-100000"})
+        self.assertEqual(self.s.plc.read_words("D", 10, 2), [(-100000) & 0xFFFF, ((-100000) >> 16) & 0xFFFF])
+        with self.assertRaises(DriverError):
+            self.s.write([{"adresse": "T5:real", "valeur": "1"}])
+
     def test_fault_shown(self):
         self.s.plc.write_bit("M", 1004, True)
         self.s.plc.write_word("D", 1004, 0xC4EE)

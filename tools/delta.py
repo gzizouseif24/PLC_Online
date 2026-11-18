@@ -6,6 +6,9 @@
     python tools/delta.py etat                     RUN, erreurs (codes et pas), cycle, horloge
     python tools/delta.py lire D100 20             lire (D, T, C : mots ; X, Y, M, S : bits)
     python tools/delta.py surveiller X0 16         afficher en direct (Ctrl+C)
+    python tools/delta.py suivre D238:real D124:real X0 --periode 250
+                                                   quelques adresses avec leur format (real = flottant D+D+1,
+                                                   dint, hex...), une ligne horodatee a chaque changement
     python tools/delta.py ecrire D100 1234         ecrire UN mot D, avec confirmation et relecture
     python tools/delta.py horloge                  mettre l'horloge a l'heure du PC
     python tools/delta.py sauvegarder-donnees      tous les D dans un CSV
@@ -129,6 +132,25 @@ def cmd_surveiller(plc, area, start, count):
         old = cur
 
 
+def cmd_suivre(plc, texts, period_ms):
+    from plc_online.web.delta_web import DeltaVar
+    try:
+        rows = [DeltaVar(t) for t in texts]
+    except ValueError as e:
+        raise DeltaError(str(e)) from None
+    print(f"(Ctrl+C pour arreter ; lecture toutes les {period_ms} ms)")
+    print("heure         " + "  ".join(f"{v.text:>14}" for v in rows))
+    old = None
+    while True:
+        t0 = time.time()
+        cur = [v.decode(v.read(plc)) for v in rows]
+        if cur != old:
+            stamp = time.strftime("%H:%M:%S") + f".{int(t0 * 1000) % 1000:03d}"
+            print(stamp + "  " + "  ".join(f"{c:>14}" for c in cur))
+            old = cur
+        time.sleep(max(0.0, period_ms / 1000 - (time.time() - t0)))
+
+
 def cmd_ecrire(plc, area, n, value):
     if area != "D":
         raise DeltaError("ecriture limitee aux mots D")
@@ -218,7 +240,7 @@ def cmd_restaurer_donnees(plc, filename):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("commande", choices=["chercher", "ecouter-ihm", "etat", "lire", "surveiller", "ecrire", "horloge",
+    p.add_argument("commande", choices=["chercher", "ecouter-ihm", "etat", "lire", "surveiller", "suivre", "ecrire", "horloge",
                                         "sauvegarder-donnees", "restaurer-donnees"])
     p.add_argument("args", nargs="*")
     p.add_argument("--port", default="COM6")
@@ -228,6 +250,7 @@ def main():
     p.add_argument("--stop", type=int, default=1, choices=[1, 2])
     p.add_argument("--station", type=int, default=1)
     p.add_argument("--trace", action="store_true", help="afficher les trames (mode ascii)")
+    p.add_argument("--periode", type=int, default=250, help="suivre : ms entre deux lectures (defaut 250)")
     a = p.parse_args()
 
     if a.commande == "chercher":
@@ -242,6 +265,8 @@ def main():
                 p.error(f"usage : {a.commande} ADRESSE {'VALEUR' if a.commande == 'ecrire' else 'NOMBRE'}")
             area, n = parse_address(a.args[0])
             second = int(a.args[1])
+        if a.commande == "suivre" and not a.args:
+            p.error("usage : suivre ADRESSE[:format] ... (ex. suivre D238:real D124:real X0)")
         if a.commande == "restaurer-donnees" and len(a.args) != 1:
             p.error("usage : restaurer-donnees FICHIER.csv")
     except (DeltaError, ValueError) as e:
@@ -260,6 +285,8 @@ def main():
             cmd_lire(plc, area, n, second)
         elif a.commande == "surveiller":
             cmd_surveiller(plc, area, n, second)
+        elif a.commande == "suivre":
+            cmd_suivre(plc, a.args, max(50, a.periode))
         elif a.commande == "ecrire":
             cmd_ecrire(plc, area, n, second)
         elif a.commande == "horloge":

@@ -162,8 +162,8 @@ const I18N = (() => {
       "%MW, %MD, %KW, %KD, %SW, %M, %S (the % is optional). Writing: %MW and %MD. The format is set on each row.",
     "IW0 (mot d'entree), QW0 (mot de sortie), I0 (bit d'entree), Q0 (bit de sortie). Ecriture : QW et Q. Format Pt100 pour le 750-461.":
       "IW0 (input word), QW0 (output word), I0 (input bit), Q0 (output bit). Writing: QW and Q. Pt100 format for the 750-461.",
-    "D100, M10, X17 et Y0 (en octal), T5 / C2 (valeur), S0. Ecriture : D, M, Y, T, C, S. Le format se change sur chaque ligne.":
-      "D100, M10, X17 and Y0 (octal), T5 / C2 (value), S0. Writing: D, M, Y, T, C, S. The format is set on each row.",
+    "D100, M10, X17 et Y0 (en octal), T5 / C2 (valeur), S0. Ecriture : D, M, Y, T, C, S. Le format se change sur chaque ligne : real = flottant 32 bits sur D et D+1 (mot bas en premier), dint = entier 32 bits.":
+      "D100, M10, X17 and Y0 (octal), T5 / C2 (value), S0. Writing: D, M, Y, T, C, S. The format is set on each row: real = 32-bit float on D and D+1 (low word first), dint = 32-bit integer.",
     "Visualiser": "Monitor", "Arreter": "Stop", "Ecrire les valeurs": "Write values", "Exporter": "Export", "Importer": "Import",
     "Vider": "Clear", "Format": "Format", "Valeur": "Value", "Nouvelle valeur": "New value",
     "Visualiser les valeurs (comme les lunettes de TIA Portal / STEP 7)": "Monitor the values (like the glasses in TIA Portal / STEP 7)",
@@ -669,6 +669,9 @@ const I18N = (() => {
     "Aucune trame lue. Adaptateur branche en parallele sur D+ / D- de l'IHM (essayer d'inverser) ? IHM allumee (en erreur de communication, elle interroge toujours) ?":
       "No frame heard. Adapter wired in parallel on the HMI's D+ / D- (try swapping)? HMI on (in communication error, it keeps polling)?",
     "constantes": "constants", "voyant I/O": "I/O LED", "taille image": "image size", "entrees (mots)": "inputs (words)",
+    "Lecture toutes les": "Read every",
+    "Intervalle entre deux lectures. Plus court = plus de requetes sur le cable : avec peu d'adresses, 250 ms suit un mouvement rapide.":
+      "Time between two reads. Shorter = more requests on the cable: with few addresses, 250 ms follows a fast movement.",
     "Maintenir": "Hold", "Arreter le maintien": "Stop holding", "Valeurs d'avant remises.": "Previous values put back.",
     "Journal des changements": "Change log", "Effacer": "Clear",
     "Chaque valeur qui change pendant la visualisation, avec l'heure : pour un defaut fugitif.": "Every value that changes while monitoring, with the time: for an intermittent fault.",

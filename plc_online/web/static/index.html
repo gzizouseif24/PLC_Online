@@ -275,6 +275,14 @@
             <span id="visu-texte">Visualiser</span>
           </button>
           <button type="button" class="btn" id="btn-ecrire">Ecrire les valeurs</button>
+          <label class="check" title="Intervalle entre deux lectures. Plus court = plus de requetes sur le cable : avec peu d'adresses, 250 ms suit un mouvement rapide.">
+            Lecture toutes les
+            <select id="watch-periode">
+              <option value="250">250 ms</option>
+              <option value="500">500 ms</option>
+              <option value="1000">1 s</option>
+              <option value="2000">2 s</option>
+            </select></label>
           <label class="check" title="Reecrire les valeurs toutes les 0,5 s jusqu'a Arreter, comme Forcer permanent de STEP 7 (pas un vrai forcage)">
             <input type="checkbox" id="watch-maintenir"> Maintenir</label>
           <span class="spacer"></span>

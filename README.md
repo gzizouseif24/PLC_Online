@@ -56,6 +56,8 @@ it would hold the same port.
 In the **Surveillance** tab:
 - **Journal des changements** records every change with the time and exports it to CSV. Use it
   for intermittent faults.
+- **Lecture toutes les** sets the refresh: 250 ms to 2 s. With a few addresses, 250 ms follows a
+  fast movement (each address is one request on the cable).
 - **Maintenir** writes the values again every 0.5 s until you stop. When you stop, it offers to
   put the old values back. It is **not a real force**: the program can still change the value
   in between.
@@ -105,6 +107,8 @@ Not every tab exists for every brand. The page shows only the tabs that work wit
 - **Delta DVP**:
   - **Chercher les reglages** finds the format and station.
   - **Ecouter l'IHM** listens to an HMI on the RS-485 line and gives the settings to use.
+  - 32-bit values use two registers, low word first: watch `D238:real` (float on D238 + D239) or
+    `D238:dint` (32-bit integer). A plain `D238` shows only the low half.
 - **Omron CJ1M**:
   - Cards are named from the PLC's I/O table. Known codes: CJ1W-ID211, CJ1W-OC211.
   - For a new card, add its code in `plc_online/protocols/hostlink.py` (`IO_UNIT_CODES`).
@@ -131,7 +135,7 @@ python tools/<brand>.py --help
 | `tools/omron.py` | etat, erreurs, parametres, lire, surveiller, ecrire, run, monitor, programme, sauvegarder-donnees, restaurer-donnees, sauvegarder, comparer |
 | `tools/panasonic.py` | chercher, scan, ecrire, programme, test-entrees |
 | `tools/mitsubishi.py` | info, lire, ecrire, test-entrees, programme |
-| `tools/delta.py` | chercher, ecouter-ihm, etat, lire, surveiller, ecrire, horloge, sauvegarder-donnees, restaurer-donnees |
+| `tools/delta.py` | chercher, ecouter-ihm, etat, lire, surveiller, suivre, ecrire, horloge, sauvegarder-donnees, restaurer-donnees |
 | `tools/wago.py` | chercher, etat, surveiller, registres |
 | `tools/modicon.py` | read %MW / %IW / %M / %I (RTU with `--port`, TCP with `--ip`) |
 

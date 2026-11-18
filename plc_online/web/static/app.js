@@ -139,7 +139,7 @@ function applyBrand(key) {
     : pana
     ? "DT100, WX0 / WY0 / WR10 (mots), X0, X1F, Y3, R901C (bits : mot decimal + bit hexa). Ecriture : DT, WY, WR, Y, R. Format dint pour les compteurs 32 bits."
     : family === "delta"
-    ? "D100, M10, X17 et Y0 (en octal), T5 / C2 (valeur), S0. Ecriture : D, M, Y, T, C, S. Le format se change sur chaque ligne."
+    ? "D100, M10, X17 et Y0 (en octal), T5 / C2 (valeur), S0. Ecriture : D, M, Y, T, C, S. Le format se change sur chaque ligne : real = flottant 32 bits sur D et D+1 (mot bas en premier), dint = entier 32 bits."
     : family === "s7200"
     ? "Bits : I0.0, Q0.1, M1.2, V100.3, SM0.5. Octets / mots / doubles : VB10, VW100, VD200 (format real), MB, IB, QB, SMB, SMW22. Analogique : AIW0, AQW0. Ecriture : Q, M, V, SM30+, AQ."
     : family === "modicon"
@@ -1023,7 +1023,7 @@ async function importData(fileList) {
 
 // ---- watch table ----
 
-const WATCH_MS = 1000;
+let WATCH_MS = Number(localStorageGet("periode-surveillance")) || 1000;   // the user picks 250 ms .. 2 s
 let watch = loadWatch();          // [{adresse, libelle}]
 let watchTimer = null;
 let watchBusy = false;
@@ -1038,7 +1038,9 @@ function formatsFor(adresse) {
   const a = adresse.toUpperCase();
   if (family === "logix") return [];
   if (family === "wago") return /^[IQ]W\d+$/.test(a) ? ["dec", "pt100", "ud", "hex", "bin"] : [];
-  if (family === "delta" || family === "mitsubishi") return /^[DTC]\d+$/.test(a) ? ["dec", "ud", "hex", "bin"] : [];
+  if (family === "delta") return /^D\d+$/.test(a) ? ["dec", "ud", "hex", "bin", "real", "dint"]
+    : /^[TC]\d+$/.test(a) ? ["dec", "ud", "hex", "bin"] : [];
+  if (family === "mitsubishi") return /^[DTC]\d+$/.test(a) ? ["dec", "ud", "hex", "bin"] : [];
   if (family === "omron") return /\./.test(a) ? [] : ["dec", "ud", "hex", "bin"];
   if (family === "s7200") return /^(SM|[IQMV])D\d+$/.test(a) ? ["dec", "ud", "hex", "bin", "real"]
     : /^(SM|AI|AQ|[IQMV])[BW]\d+$/.test(a) ? ["dec", "ud", "hex", "bin"] : [];
@@ -1190,6 +1192,12 @@ function setMonitoring(on) {
   $("table-watch").classList.toggle("off", !on);
   if (!on) $("watch-maj").textContent = "Visualisation arretee : cliquer sur les lunettes pour voir les valeurs en direct.";
   if (!$("vue-watch").hidden) startWatch();
+}
+
+function setWatchPeriod(ms) {
+  WATCH_MS = ms;
+  localStorageSet("periode-surveillance", String(ms));
+  if (watchTimer) startWatch();
 }
 
 function startWatch() {
@@ -1761,6 +1769,8 @@ async function init() {
   $("form-changements").addEventListener("submit", toggleChanges);
   $("btn-maintien-stop").addEventListener("click", () => stopHold(true));
   $("btn-journal-effacer").addEventListener("click", () => { watchLog = []; renderWatchLog(); });
+  $("watch-periode").value = String(WATCH_MS);
+  $("watch-periode").addEventListener("change", (e) => setWatchPeriod(Number(e.target.value)));
   $("btn-journal-csv").addEventListener("click", watchLogCsv);
   $("btn-ch-effacer").addEventListener("click", () => { chLog = []; rows($("table-ch").tBodies[0], [], null, "Aucun changement pour l'instant.", 4); });
   $("btn-ch-csv").addEventListener("click", changesCsv);
