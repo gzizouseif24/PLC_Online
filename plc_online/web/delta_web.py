@@ -199,12 +199,14 @@ class DemoPort:
                 pdu = bytes([0x83, 2])
             else:
                 pdu = bytes([3, 2 * n]) + struct.pack(f">{n}H", *[self.regs.get(a, 0) for a in range(addr, addr + n)])
-        elif func == 1:
+        elif func == 1 and addr < 0x0500 and addr + n > 0x0400:   # X0..X377 = 0x0400..0x04FF
+            pdu = bytes([0x81, 4])                    # X with function 01: exception 04, as the real DVP (18/11)
+        elif func in (1, 2):
             raw = bytearray((n + 7) // 8)
             for i in range(n):
                 if self.coils.get(addr + i):
                     raw[i // 8] |= 1 << (i % 8)
-            pdu = bytes([1, len(raw)]) + raw
+            pdu = bytes([func, len(raw)]) + raw
         elif func in (5, 6):
             if func == 6:
                 self.regs[addr] = n
@@ -301,17 +303,17 @@ def delta_status(plc) -> dict:
     return out
 
 
-def io_row(plc, pos, area, count, label):
+def io_row(plc, pos, area, count, label, first=0):
+    """I/O row of the rack: count bits of area from bit index first (octal names X20.. for an expansion)."""
     try:
-        bits = plc.read_bits(area, 0, count)
+        bits = plc.read_bits(area, first, count)
         values, ok, etat = " ".join(str(int(v)) for v in bits), True, "ok"
     except (ModbusError, dl.DeltaError) as e:
         values, ok, etat = f"non lu ({e})", False, "non lu"
-    last = dl.name(area, count - 1)
-    return {"emplacement": pos, "type": label, "adresse": f"{area}0..{last}",
+    return {"emplacement": pos, "type": label, "adresse": f"{dl.name(area, first)}..{dl.name(area, first + count - 1)}",
             "configure": {"code": "", "nom": label, "references": f"{count} voies"},
             "en_place": {"code": "", "nom": values, "references": ""}, "etat": etat, "ok": ok,
-            "variables": [{"adresse": dl.name(area, i), "libelle": f"{label} {i + 1}"} for i in range(count)]}
+            "variables": [{"adresse": dl.name(area, first + i), "libelle": f"{label} {i + 1}"} for i in range(count)]}
 
 
 def delta_diagnostic(plc) -> dict:
@@ -331,15 +333,9 @@ def delta_diagnostic(plc) -> dict:
     ext_x = _get(lambda: plc.read_words("D", 1142, 1)[0]) or 0
     ext_y = _get(lambda: plc.read_words("D", 1143, 1)[0]) or 0
     if 0 < ext_x <= 256 - n_in:
-        row = io_row(plc, 1, "X", n_in + ext_x, "Entrees d'extension")
-        row["variables"] = row["variables"][n_in:]
-        row["adresse"] = f"{dl.name('X', n_in)}..{dl.name('X', n_in + ext_x - 1)}"
-        out["modules"].append(row)
+        out["modules"].append(io_row(plc, 1, "X", ext_x, "Entrees d'extension", n_in))
     if 0 < ext_y <= 256 - n_out:
-        row = io_row(plc, 1, "Y", n_out + ext_y, "Sorties d'extension")
-        row["variables"] = row["variables"][n_out:]
-        row["adresse"] = f"{dl.name('Y', n_out)}..{dl.name('Y', n_out + ext_y - 1)}"
-        out["modules"].append(row)
+        out["modules"].append(io_row(plc, 1, "Y", ext_y, "Sorties d'extension", n_out))
     specials = _get(lambda: plc.read_words("D", 1140, 1)[0]) or 0
     if 0 < specials <= 8:
         ids = _get(lambda: plc.read_words("D", dl.MODULE_IDS, specials)) or []

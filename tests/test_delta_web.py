@@ -34,6 +34,24 @@ class DeltaWebTests(unittest.TestCase):
         self.assertEqual((x["adresse"], x["variables"][-1]["adresse"]), ("X0..X17", "X17"))
         self.assertTrue(x["en_place"]["nom"].startswith("1 0 1"))
 
+    def test_expansion_rows(self):
+        """Machine 18/11: X read with function 02 (01 on X = exception 04); expansion rows show only their own
+        channels, from X20 / Y14."""
+        self.s.plc.write_word("D", 1142, 8)
+        self.s.plc.write_word("D", 1143, 8)
+        port = self.s.plc.mb.transport.ser
+        port.coils[dl.bit_address("X", 0o21)] = True
+        port.coils[dl.bit_address("Y", 0o15)] = True
+        mods = self.s.diagnostic()["modules"]
+        self.assertTrue(all(m["ok"] for m in mods[:4]), [m["en_place"] for m in mods[:4]])
+        ext_x, ext_y = mods[2], mods[3]
+        self.assertEqual((ext_x["adresse"], ext_x["configure"]["references"], ext_x["en_place"]["nom"]),
+                         ("X20..X27", "8 voies", "0 1 0 0 0 0 0 0"))
+        self.assertEqual((ext_y["adresse"], ext_y["en_place"]["nom"]), ("Y14..Y23", "0 1 0 0 0 0 0 0"))
+        self.assertEqual(ext_x["variables"][0]["adresse"], "X20")
+        with self.assertRaises(dl.ModbusError):               # what the old read (function 01) got
+            self.s.plc.mb.read_coils(dl.bit_address("X", 0), 16)
+
     def test_fault_shown(self):
         self.s.plc.write_bit("M", 1004, True)
         self.s.plc.write_word("D", 1004, 0xC4EE)

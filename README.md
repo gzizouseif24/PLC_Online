@@ -32,7 +32,7 @@ The browser opens on `http://localhost:8000`. The server only listens on this PC
 | WAGO 750 (Ethernet coupler) | Ethernet, Modbus TCP | automatic search | yes (750-352) |
 | Panasonic FP0R | tool port (mini-DIN 5) | 9600 8O1, station 1 | yes |
 | Mitsubishi FX1N | SC-09 / USB-SC09 cable, programming port (mini-DIN 8) | 9600 7E1 | yes (FX1N-40MR) |
-| Delta DVP | COM1 RS-232 or COM2 RS-485 | ASCII 9600 7E1, station 1 | not yet |
+| Delta DVP | COM1 RS-232 or COM2 RS-485 | ASCII 9600 7E1, station 1 | partly (reads, on a machine with 2 special modules) |
 | Omron CJ1M | peripheral port, Host Link | 9600 7E2, unit 0, DIP 4 ON | partly (reads) |
 | Allen-Bradley ControlLogix / GuardLogix | Ethernet (EtherNet/IP) | IP + CPU slot | not yet |
 | Modicon / any Modbus slave | Modbus RTU or TCP, read only | 19200 8E1, slave 1 | not yet |
