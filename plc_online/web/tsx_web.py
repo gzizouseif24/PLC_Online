@@ -477,11 +477,20 @@ def tsx_status(plc) -> dict:
     if mode == "VIDE":
         out["alertes"].append("Pas d'application dans l'automate (vide : programme efface ou chargement refuse)")
     faults = {n: label for n, (label, bad) in ut.SYSTEM_BITS.items() if bits.get(n) == bad}
-    out["alertes"] += [f"%S{n} : {label}" for n, label in faults.items()] if mode != "VIDE" else []
+    empty = mode == "VIDE"
+    if empty:
+        # no application: the system bits mean nothing (%S10 reads 0 = "I/O fault" with the I/O light off,
+        # TSX 3721 18/11). Only the battery bit is kept. The CPU shows it with ERR flashing, RUN off.
+        faults = {n: label for n, label in faults.items() if n == 68}
+        out["alertes"].append("Voyant ERR clignotant, RUN eteint : c'est l'affichage normal d'une CPU sans "
+                              "application. Pas un defaut materiel : charger l'application (onglet Programme, "
+                              "Restaurer) ou avec PL7.")
+    out["alertes"] += [f"%S{n} : {label}" for n, label in faults.items()] if not empty else []
     out["voyants"] = [
         {"nom": "RUN", "texte": "RUN", "allume": mode == "RUN", "clignote": False, "defaut": False},
         {"nom": "I/O", "texte": "Defaut E/S", "allume": io_fault or 10 in faults, "clignote": False, "defaut": True},
-        {"nom": "ERR", "texte": "Chien de garde (%S11)", "allume": 11 in faults, "clignote": False, "defaut": True},
+        {"nom": "ERR", "texte": "pas d'application" if empty else "Chien de garde (%S11)",
+         "allume": empty or 11 in faults, "clignote": empty, "defaut": True},
         {"nom": "BAT", "texte": "Pile (%S68)", "allume": 68 in faults, "clignote": False, "defaut": True},
     ]
     clock = clock_text(sw)
@@ -998,7 +1007,13 @@ class TsxOps:
         return self.s._call(run)
 
     def start_cpu(self):
-        return self.s._call(lambda plc: (plc.run(), {"ok": True})[1])
+        def go(plc):
+            if cpu_state(plc)[0] == "VIDE":
+                raise _drv().DriverError("RUN impossible : l'automate n'a pas d'application (VIDE). Charger "
+                                         "d'abord l'application (onglet Programme, Restaurer) ou avec PL7.")
+            plc.run()
+            return {"ok": True}
+        return self.s._call(go)
 
     def stop_cpu(self):
         return self.s._call(lambda plc: (plc.stop(), {"ok": True})[1])

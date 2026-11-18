@@ -231,6 +231,11 @@ const I18N = (() => {
     "Derniere sauvegarde Flash": "Last Flash backup", "aucune": "none", "aucun": "none",
     "Etat CPU (requete 4F)": "CPU status (request 4F)", "Etat CPU (4F)": "CPU status (4F)", "Application": "Application",
     "Defaut E/S signale par la CPU (voyant I/O) : voir l'onglet Diagnostic": "I/O fault reported by the CPU (I/O LED): see the Diagnostics tab",
+    "Voyant ERR clignotant, RUN eteint : c'est l'affichage normal d'une CPU sans application. Pas un defaut materiel : charger l'application (onglet Programme, Restaurer) ou avec PL7.":
+      "ERR flashing, RUN off: this is how a CPU without an application shows it. Not a hardware fault: load the application (Programme tab, Restaurer) or with PL7.",
+    "RUN impossible : l'automate n'a pas d'application (VIDE). Charger d'abord l'application (onglet Programme, Restaurer) ou avec PL7.":
+      "RUN not possible: the PLC has no application (EMPTY). First load the application (Programme tab, Restaurer) or with PL7.",
+    "pas d'application": "no application",
     "Pas d'application dans l'automate (vide : programme efface ou chargement refuse)":
       "No application in the PLC (empty: program erased or download refused)",
     "Defauts des modules non lus (requete refusee)": "Module faults not read (request refused)",
