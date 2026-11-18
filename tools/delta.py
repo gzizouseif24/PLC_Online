@@ -8,7 +8,8 @@
     python tools/delta.py surveiller X0 16         afficher en direct (Ctrl+C)
     python tools/delta.py suivre D238:real D124:real X0 --periode 250
                                                    quelques adresses avec leur format (real = flottant D+D+1,
-                                                   dint, hex...), une ligne horodatee a chaque changement
+                                                   dint, hex...), une ligne horodatee a chaque changement ;
+                                                   --csv journal.csv pour l'enregistrer aussi
     python tools/delta.py ecrire D100 1234         ecrire UN mot D, avec confirmation et relecture
     python tools/delta.py horloge                  mettre l'horloge a l'heure du PC
     python tools/delta.py sauvegarder-donnees      tous les D dans un CSV
@@ -132,7 +133,7 @@ def cmd_surveiller(plc, area, start, count):
         old = cur
 
 
-def cmd_suivre(plc, texts, period_ms):
+def cmd_suivre(plc, texts, period_ms, csv_path=None):
     from plc_online.web.delta_web import DeltaVar
     try:
         rows = [DeltaVar(t) for t in texts]
@@ -140,6 +141,11 @@ def cmd_suivre(plc, texts, period_ms):
         raise DeltaError(str(e)) from None
     print(f"(Ctrl+C pour arreter ; lecture toutes les {period_ms} ms)")
     print("heure         " + "  ".join(f"{v.text:>14}" for v in rows))
+    out = None
+    if csv_path:
+        out = open(csv_path, "a", encoding="utf-8-sig", newline="")
+        out.write("heure;" + ";".join(v.text for v in rows) + "\n")
+        print(f"(journal CSV : {Path(csv_path).resolve()})")
     old = None
     while True:
         t0 = time.time()
@@ -147,6 +153,9 @@ def cmd_suivre(plc, texts, period_ms):
         if cur != old:
             stamp = time.strftime("%H:%M:%S") + f".{int(t0 * 1000) % 1000:03d}"
             print(stamp + "  " + "  ".join(f"{c:>14}" for c in cur))
+            if out:
+                out.write(stamp + ";" + ";".join(c.replace(".", ",") for c in cur) + "\n")
+                out.flush()
             old = cur
         time.sleep(max(0.0, period_ms / 1000 - (time.time() - t0)))
 
@@ -251,6 +260,7 @@ def main():
     p.add_argument("--station", type=int, default=1)
     p.add_argument("--trace", action="store_true", help="afficher les trames (mode ascii)")
     p.add_argument("--periode", type=int, default=250, help="suivre : ms entre deux lectures (defaut 250)")
+    p.add_argument("--csv", help="suivre : enregistrer aussi chaque changement dans ce fichier CSV (Excel)")
     a = p.parse_args()
 
     if a.commande == "chercher":
@@ -286,7 +296,7 @@ def main():
         elif a.commande == "surveiller":
             cmd_surveiller(plc, area, n, second)
         elif a.commande == "suivre":
-            cmd_suivre(plc, a.args, max(50, a.periode))
+            cmd_suivre(plc, a.args, max(50, a.periode), a.csv)
         elif a.commande == "ecrire":
             cmd_ecrire(plc, area, n, second)
         elif a.commande == "horloge":
