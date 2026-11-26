@@ -27,7 +27,7 @@ The browser opens on `http://localhost:8000`. The server only listens on this PC
 | Brand | Connection | Default settings | Tested on a real PLC |
 |---|---|---|---|
 | Siemens S7-300 | USB MPI adapter + STEP 7 driver (Windows) | MPI 2, rack 0, slot 2 | yes (315-2 DP) |
-| Siemens S7-200 | RS-232/PPI cable on a COM port (no Siemens software) | 9600 8E1, address 2 | not yet |
+| Siemens S7-200 | RS-232/PPI cable on a COM port (no Siemens software) | 9600 8E1, address 2 | yes (CPU 224, bench) |
 | Schneider TSX Micro / Premium | TSX PCX 1031 cable, TER port | 9600 8O1 | yes (TSX 3721) |
 | WAGO 750 (Ethernet coupler) | Ethernet, Modbus TCP | automatic search | yes (750-352) |
 | Panasonic FP0R | tool port (mini-DIN 5) | 9600 8O1, station 1 | yes |
