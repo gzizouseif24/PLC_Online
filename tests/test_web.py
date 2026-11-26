@@ -136,8 +136,8 @@ class ApiTests(unittest.TestCase):
     def test_errors_for_the_technician(self):
         code, e = self.json("POST", "/api/connexion", {"marque": "s7-300", "reglages": {"mpi": 9}})
         self.assertEqual((code, e["erreur"]), (502, "pas de CPU a l'adresse MPI 9"))
-        code, e = self.json("POST", "/api/connexion", {"marque": "omron"})
-        self.assertEqual((code, e["erreur"]), (400, "Marque non disponible : omron"))
+        code, e = self.json("POST", "/api/connexion", {"marque": "siemens-s5"})
+        self.assertEqual((code, e["erreur"]), (400, "Marque non disponible : siemens-s5"))
         self.assertEqual(self.json("POST", "/api/connexion", {"marque": "s7-300", "reglages": {"mpi": 7}})[0], 200)
         code, e = self.json("GET", "/api/etat")
         self.assertEqual((code, e["erreur"]), (502, "Liaison perdue : pas de reponse"))
@@ -161,7 +161,8 @@ class ApiTests(unittest.TestCase):
     def test_brands(self):
         code, b = self.json("GET", "/api/marques")
         self.assertTrue(b["s7-300"]["disponible"])
-        self.assertFalse(b["omron"]["disponible"])
+        self.assertTrue(b["omron"]["disponible"])
+        self.assertTrue(b["demo-tsx"]["cache"])
 
 
 if __name__ == "__main__":
@@ -201,6 +202,17 @@ class ProgramTests(unittest.TestCase):
         self.assertEqual((b["id"], b["note"], b["modele"], b["blocs"]), (bid, "avant modif", "CPU 315-2 DP", 12))
         blocks = [x["bloc"] for x in self.session.backup_blocks(bid)["blocs"]]
         self.assertEqual(blocks[:5], ["OB1", "OB35", "FB1", "FC1", "FC2"])
+
+    def test_copy_config_and_compare_two_copies(self):
+        first = self.save("a")
+        cfg = self.session.backup_blocks(first)["config"]
+        self.assertTrue(cfg["modules"], cfg)
+        fc2 = self.session.plc.blocks[("FC", 2)]
+        self.session.plc.blocks[("FC", 2)] = fc2[:40] + b"\x99" + fc2[41:]
+        second = self.save("b")
+        r = self.session.compare_copies(first, second)
+        self.assertEqual([d["bloc"] for d in r["differences"]], ["FC2"])
+        self.assertTrue(self.session.compare_copies(first, first)["identique"])
 
     def test_compare_finds_changed_block_and_db_values(self):
         bid = self.save()

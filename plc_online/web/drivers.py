@@ -18,6 +18,8 @@ from plc_online.protocols.modbus import ModbusError, PlcRefused
 from plc_online.protocols.mewtocol import MewtocolError, PlcRefused as MewtocolRefused
 from plc_online.protocols.logix import LogixError, TagRefused
 from plc_online.protocols.melsec_fx import FxError, FxRefused
+from plc_online.protocols.hostlink import FinsRefused, HostLinkError, PlcRefused as HostLinkRefused
+from plc_online.protocols.ppi import PpiError, PlcRefused as PpiRefused
 from plc_online.protocols.s7 import BLOCK_TYPES, S7300, S7Error, parse_block, parse_sdb1_modules
 from plc_online.protocols.s7_catalogue import catalog_name
 from plc_online.protocols.s7_names import address_range, cpu_parameter_lines, module_text
@@ -417,7 +419,7 @@ class DemoS7:
 
 DEFAULT_BACKUPS = Path.home() / "PLC Online" / "sauvegardes" / "s7-300"
 DEFAULT_TSX_BACKUPS = Path.home() / "PLC Online" / "sauvegardes" / "tsx"
-LINK_ERRORS = (S7Error, UniteError, OSError, ModbusError, MewtocolError, LogixError, FxError)
+LINK_ERRORS = (S7Error, UniteError, OSError, ModbusError, MewtocolError, LogixError, FxError, HostLinkError, PpiError)
 BACKUP_ID = re.compile(r"^[\w\-. ]+$")
 
 
@@ -454,7 +456,33 @@ def backup_path(folder: Path, backup_id: str) -> Path:
 def backup_blocks(folder: Path, backup_id: str) -> dict:
     blocks = program.load_program(backup_path(folder, backup_id))
     return {"id": backup_id, "blocs": [program.block_info(k, n, d) for (k, n), d in
-                                       sorted(blocks.items(), key=lambda kv: program.sort_key(kv[0]))]}
+                                       sorted(blocks.items(), key=lambda kv: program.sort_key(kv[0]))],
+            "config": copy_config(blocks)}
+
+
+def copy_config(blocks: dict) -> dict:
+    """Hardware configuration stored in a copy (SDB 1 modules, SDB 0 CPU parameters), without the CPU."""
+    out = {"modules": [], "parametres_cpu": [], "date": ""}
+    sdb1, sdb0 = blocks.get(("SDB", 1)), blocks.get(("SDB", 0))
+    if sdb1:
+        try:
+            out["date"] = parse_block(sdb1)["date"]
+            for m in parse_sdb1_modules(sdb1):
+                if m["type"] == "CPU":
+                    out["modules"].append({"emplacement": m["emplacement"], "type": "CPU", "adresse": "",
+                                           "nom": f"type {m['code']:04X}"})
+                else:
+                    out["modules"].append({"emplacement": m["emplacement"], "type": m["type"],
+                                           "adresse": address_range(m["type"], m["adresse"], m["octets"]),
+                                           "nom": f"{module_text(m['code']) or 'module inconnu'} (type {m['code']:04X})"})
+        except S7Error as e:
+            out["erreur"] = f"SDB 1 illisible : {e}"
+    if sdb0:
+        try:
+            out["parametres_cpu"] = [list(x) for x in cpu_parameter_lines(sdb0)]
+        except S7Error:
+            pass
+    return out
 
 
 MAX_IMPORT = 5 * 1024 * 1024
@@ -601,30 +629,38 @@ def import_files(folder: Path, files: list, note: str = "") -> dict:
 
 
 S7_FEATURES = ["horloge", "rack", "evenements", "db", "projet_step7", "programme", "runstop", "ob_erreur"]
-TSX_FEATURES = ["donnees", "horloge", "programme", "runstop"]
+TSX_FEATURES = ["donnees", "horloge", "programme", "runstop", "changements", "chercher_es"]
 WAGO_FEATURES = ["chercher"]
-DELTA_FEATURES = ["donnees", "horloge"]
-FP0R_FEATURES = ["donnees", "runstop"]
+DELTA_FEATURES = ["donnees", "horloge", "changements", "test_entrees"]
+FP0R_FEATURES = ["donnees", "runstop", "changements", "test_entrees", "programme"]
 LOGIX_FEATURES = ["axes"]
-FX_FEATURES = ["donnees", "horloge", "runstop", "programme"]
+OMRON_FEATURES = ["donnees", "runstop", "monitor", "programme", "changements", "test_entrees"]
+MODICON_FEATURES = ["changements"]
+S7200_FEATURES = ["donnees", "runstop", "programme", "changements", "test_entrees"]
+FX_FEATURES = ["donnees", "horloge", "runstop", "programme", "changements", "test_entrees"]
 
 
 def _brands():
-    from plc_online.web import delta_web, logix_web, melsec_web, panasonic_web, tsx_web, wago_web
+    from plc_online.web import (delta_web, logix_web, melsec_web, modicon_web, omron_web, panasonic_web, s7200_web,
+                                tsx_web, wago_web)
     return {
         "s7-300": {"nom": "Siemens S7-300", "disponible": True, "famille": "s7", "fonctions": S7_FEATURES,
                    "reglages": [{"cle": "mpi", "nom": "Adresse MPI", "defaut": 2},
                                 {"cle": "rack", "nom": "Rack", "defaut": 0},
                                 {"cle": "slot", "nom": "Emplacement CPU", "defaut": 2}]},
+        "s7-200": {"nom": "Siemens S7-200 (cable RS-232/PPI)", "disponible": True, "famille": "s7200",
+                   "fonctions": S7200_FEATURES, "reglages": s7200_web.SETTINGS},
+        "demo-s7-200": {"nom": "Demo (S7-200 CPU 224 simule)", "disponible": True, "famille": "s7200",
+                        "fonctions": S7200_FEATURES, "reglages": []},
         "tsx": {"nom": "Schneider TSX Micro / Premium", "disponible": True, "famille": "tsx",
                 "fonctions": TSX_FEATURES, "reglages": tsx_web.SETTINGS},
-        "demo": {"nom": "Demo (S7-300 simule)", "disponible": True, "famille": "s7", "fonctions": S7_FEATURES,
+        "demo": {"nom": "Demo (S7-300 simule)", "disponible": True, "cache": True, "famille": "s7", "fonctions": S7_FEATURES,
                  "reglages": []},
-        "demo-tsx": {"nom": "Demo (TSX simule)", "disponible": True, "famille": "tsx", "fonctions": TSX_FEATURES,
+        "demo-tsx": {"nom": "Demo (TSX simule)", "disponible": True, "cache": True, "famille": "tsx", "fonctions": TSX_FEATURES,
                      "reglages": []},
         "wago": {"nom": "WAGO 750 (coupleur Ethernet)", "disponible": True, "famille": "wago",
                  "fonctions": WAGO_FEATURES, "reglages": wago_web.SETTINGS},
-        "demo-wago": {"nom": "Demo (WAGO 750-352 simule)", "disponible": True, "famille": "wago",
+        "demo-wago": {"nom": "Demo (WAGO 750-352 simule)", "disponible": True, "cache": True, "famille": "wago",
                       "fonctions": WAGO_FEATURES, "reglages": []},
         "delta": {"nom": "Delta DVP (SV, SS, SA...)", "disponible": True, "famille": "delta",
                   "fonctions": DELTA_FEATURES, "reglages": delta_web.SETTINGS},
@@ -636,17 +672,34 @@ def _brands():
                        "fonctions": LOGIX_FEATURES, "reglages": []},
         "mitsubishi": {"nom": "Mitsubishi FX1N (port de programmation)", "disponible": True, "famille": "mitsubishi",
                        "fonctions": FX_FEATURES, "reglages": melsec_web.SETTINGS},
-        "demo-mitsubishi": {"nom": "Demo (Mitsubishi FX1N-40MR simule)", "disponible": True, "famille": "mitsubishi",
+        "demo-mitsubishi": {"nom": "Demo (Mitsubishi FX1N-40MR simule)", "disponible": True, "cache": True, "famille": "mitsubishi",
                             "fonctions": FX_FEATURES, "reglages": []},
-        "omron": {"nom": "Omron CJ1M", "disponible": False, "reglages": []},
+        "modicon": {"nom": "Modicon / Modbus (RTU ou TCP, lecture seule)", "disponible": True, "famille": "modicon",
+                    "fonctions": MODICON_FEATURES, "reglages": modicon_web.SETTINGS},
+        "demo-modicon": {"nom": "Demo (esclave Modbus simule)", "disponible": True, "famille": "modicon",
+                         "fonctions": MODICON_FEATURES, "reglages": []},
+        "omron": {"nom": "Omron CJ1M (port peripherique, Host Link)", "disponible": True, "famille": "omron",
+                  "fonctions": OMRON_FEATURES, "reglages": omron_web.SETTINGS},
+        "demo-omron": {"nom": "Demo (Omron CJ1M simule)", "disponible": True, "famille": "omron",
+                       "fonctions": OMRON_FEATURES, "reglages": []},
         "panasonic": {"nom": "Panasonic FP0R", "disponible": True, "famille": "panasonic",
                       "fonctions": FP0R_FEATURES, "reglages": panasonic_web.SETTINGS},
-        "demo-panasonic": {"nom": "Demo (Panasonic FP0R simule)", "disponible": True, "famille": "panasonic",
+        "demo-panasonic": {"nom": "Demo (Panasonic FP0R simule)", "disponible": True, "cache": True, "famille": "panasonic",
                            "fonctions": FP0R_FEATURES, "reglages": []},
     }
 
 
 BRANDS = _brands()
+
+
+def _add_zones():
+    from plc_online.web.tools_web import BLOCK_ZONES
+    for b in BRANDS.values():
+        if b.get("famille") in BLOCK_ZONES:
+            b["zones"] = [z for z, _ in BLOCK_ZONES[b["famille"]]]
+
+
+_add_zones()
 
 
 class Session:
@@ -659,6 +712,9 @@ class Session:
         from plc_online.web.panasonic_web import Fp0rOps
         from plc_online.web.logix_web import LogixOps
         from plc_online.web.melsec_web import FxOps
+        from plc_online.web.omron_web import OmronOps
+        from plc_online.web.modicon_web import ModiconOps
+        from plc_online.web.s7200_web import S7200Ops
         self.lock = threading.Lock()
         self.plc, self.brand, self.settings = None, None, {}
         self.opener = opener or open_plc
@@ -670,6 +726,9 @@ class Session:
         self.fp0r = Fp0rOps(self)
         self.logix = LogixOps(self)
         self.fx = FxOps(self)
+        self.omron = OmronOps(self)
+        self.modicon = ModiconOps(self)
+        self.s7200 = S7200Ops(self)
         self.job = None                   # long operation running in the background
         self.last_status = None
 
@@ -695,7 +754,8 @@ class Session:
     def _ops(self):
         """TsxOps when a TSX is connected, None for the S7-300 (methods of this class)."""
         return {"tsx": self.tsx, "wago": self.wago, "delta": self.delta, "panasonic": self.fp0r, "logix": self.logix,
-                "mitsubishi": self.fx}.get(self.family)
+                "mitsubishi": self.fx, "omron": self.omron,
+                "modicon": self.modicon, "s7200": self.s7200}.get(self.family)
 
     def busy(self) -> str:
         j = self.job
@@ -781,7 +841,10 @@ class Session:
             except S7Error:
                 pass
             stamp = time.strftime("%Y-%m-%d %H:%M:%S")
-            folder = self.backups / time.strftime("%Y%m%d_%H%M%S")
+            folder, n = self.backups / time.strftime("%Y%m%d_%H%M%S"), 1
+            while folder.exists():            # two saves in the same second: keep both
+                n += 1
+                folder = self.backups / f"{time.strftime('%Y%m%d_%H%M%S')}_{n}"
             program.save_program(folder, blocks, [f"date : {stamp}", f"CPU  : {info.get('reference', '?')}"])
             meta = {"date": stamp, "cpu": info.get("reference", ""),
                     "modele": catalog_name(info.get("reference")) or "", "note": note.strip()[:200],
@@ -800,6 +863,14 @@ class Session:
             now = program.upload_program(plc, lambda k, i, n: progress(f"lecture {k} {i}/{n}", i, n))
             return {"id": backup_id, **program.comparison(ref, now)}
         return self.start_job("comparaison avec la CPU", work)
+
+    def compare_copies(self, backup_id, other_id) -> dict:
+        """Two copies on the PC, without the CPU (S7: block by block)."""
+        if self._ops():
+            raise DriverError("Comparaison de deux copies : S7-300 seulement pour l'instant")
+        ref = program.load_program(backup_path(self.backups, backup_id))
+        now = program.load_program(backup_path(self.backups, other_id))
+        return {"id": backup_id, "autre": other_id, **program.comparison(ref, now)}
 
     def restore_plan(self, backup_id, with_db: bool) -> dict:
         if self._ops():
@@ -854,6 +925,11 @@ class Session:
             return {"ok": True}
         return self._call(run)
 
+    def monitor_cpu(self) -> dict:
+        if self.family != "omron":
+            raise DriverError("Mode MONITOR : Omron seulement")
+        return self.omron.monitor_cpu()
+
     def set_clock(self) -> dict:
         if self._ops():
             return self._ops().set_clock()
@@ -896,11 +972,11 @@ class Session:
                     self._close()
                     raise DriverError(f"Liaison perdue : {e}") from None
                 raise DriverError(f"Refuse par l'automate : {e}") from None
-            except (PlcRefused, MewtocolRefused, TagRefused, FxRefused) as e:
+            except (PlcRefused, MewtocolRefused, TagRefused, FxRefused, HostLinkRefused, FinsRefused, PpiRefused) as e:
                 raise DriverError(f"Refuse : {e}") from None
             except DeltaError as e:
                 raise DriverError(str(e)) from None
-            except (S7Error, OSError, ModbusError, MewtocolError, LogixError, FxError) as e:
+            except (S7Error, OSError, ModbusError, MewtocolError, LogixError, FxError, HostLinkError, PpiError) as e:
                 self._close()
                 raise DriverError(f"Liaison perdue : {e}") from None
 
@@ -908,12 +984,13 @@ class Session:
 
     def _tsx_only(self):
         """Ops of the brands with a Donnees tab (TSX, Delta)."""
-        if self.family not in ("tsx", "delta", "panasonic", "mitsubishi"):
-            raise DriverError("Sauvegarde des donnees : TSX, Delta, Panasonic et Mitsubishi seulement pour l'instant")
+        if self.family not in ("tsx", "delta", "panasonic", "mitsubishi", "omron", "s7200"):
+            raise DriverError("Sauvegarde des donnees : pas pour cet automate")
         return self._ops()
 
     def _data_ops(self):
-        return {"delta": self.delta, "panasonic": self.fp0r, "mitsubishi": self.fx}.get(self.family, self.tsx)
+        return {"delta": self.delta, "panasonic": self.fp0r, "mitsubishi": self.fx, "omron": self.omron,
+                "s7200": self.s7200}.get(self.family, self.tsx)
 
     def data_list(self) -> dict:
         return self._data_ops().data_list()
@@ -947,6 +1024,21 @@ class Session:
             return out
         return self._call(run)
 
+    def block(self, zone, start, count) -> dict:
+        from plc_online.web import tools_web
+        family = self.family
+        return self._call(lambda plc: tools_web.read_block(family, plc, zone, int(start), int(count)))
+
+    def inputs(self) -> dict:
+        from plc_online.web import tools_web
+        family = self.family
+        return self._call(lambda plc: tools_web.inputs(family, plc))
+
+    def io_search(self, step, positions, which="") -> dict:
+        if self.family != "tsx":
+            raise DriverError("Recherche des %I : TSX seulement")
+        return self.tsx.io_search(step, positions, which)
+
     def axes(self) -> dict:
         if self.family != "logix":
             raise DriverError("Axes : automates Allen-Bradley seulement")
@@ -973,6 +1065,15 @@ def open_plc(brand: str, settings: dict):
     if brand in ("delta", "demo-delta"):
         from plc_online.web import delta_web
         return delta_web.demo_delta() if brand == "demo-delta" else delta_web.open_delta(settings)
+    if brand in ("s7-200", "demo-s7-200"):
+        from plc_online.web import s7200_web
+        return s7200_web.demo_s7200() if brand == "demo-s7-200" else s7200_web.open_s7200(settings)
+    if brand in ("modicon", "demo-modicon"):
+        from plc_online.web import modicon_web
+        return modicon_web.DemoModicon() if brand == "demo-modicon" else modicon_web.open_modicon(settings)
+    if brand in ("omron", "demo-omron"):
+        from plc_online.web import omron_web
+        return omron_web.demo_omron() if brand == "demo-omron" else omron_web.open_omron(settings)
     if brand in ("mitsubishi", "demo-mitsubishi"):
         from plc_online.web import melsec_web
         return melsec_web.demo_fx() if brand == "demo-mitsubishi" else melsec_web.open_fx(settings)

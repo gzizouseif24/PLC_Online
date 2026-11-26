@@ -24,6 +24,7 @@ SETTINGS = [{"cle": "port", "nom": "Port COM", "defaut": "COM3", "type": "port"}
             {"cle": "bits", "nom": "Bits de donnees (7 ou 8)", "defaut": 8},
             {"cle": "stop", "nom": "Bits de stop (1 ou 2)", "defaut": 1},
             {"cle": "station", "nom": "Station", "defaut": 1},
+            {"cle": "cpu", "nom": "CPU (C10, C14, C16, C32 ; vide = inconnue)", "defaut": "", "type": "texte"},
             {"cle": "ext1", "nom": "Extension 1 (ex. E16P, E32T, E8X, A21 ; vide = inconnue ; aucune)", "defaut": "",
              "type": "texte"},
             {"cle": "ext2", "nom": "Extension 2", "defaut": "", "type": "texte"},
@@ -38,6 +39,15 @@ EXPANSIONS = {
     "E32T": (16, 16), "E32P": (16, 16),
     "AD4": "mots", "AD8": "mots", "DA4": "mots", "A21": "mots", "A42": "mots", "TC4": "mots", "TC8": "mots",
 }
+# built-in inputs of the CPU (manual 4.2): C10 X0..X5, C14 / C16 X0..X7, C32 / T32 / F32 X0..XF
+CPU_INPUTS = {"C10": 6, "C14": 8, "C16": 8, "C32": 16, "T32": 16, "F32": 16}
+
+
+def cpu_inputs(text):
+    m = re.search(r"(C10|C14|C16|C32|T32|F32)", str(text or "").upper())
+    return CPU_INPUTS[m.group(1)] if m else None
+
+
 NO_UNIT = {"AUCUNE", "AUCUN", "NONE", "NON", "-", "0"}
 
 
@@ -135,6 +145,7 @@ def open_fp0r(settings: dict):
                                  "bouton Chercher les reglages.") from None
     plc.nom = "Panasonic FP0R"
     plc.expansions = [expansion_model(settings.get(f"ext{i}")) for i in (1, 2, 3)]
+    plc.cpu_inputs = cpu_inputs(settings.get("cpu"))
     plc.close = ser.close
     return plc
 
@@ -329,6 +340,7 @@ def demo_fp0r():
     plc = mw.Fp0r(port, 1)
     plc.nom = "Panasonic FP0R (demo)"
     plc.expansions = ["E16P", None, ""]           # E16P, unknown, nothing
+    plc.cpu_inputs = 8                             # C16
     plc.close = port.close
     return plc
 
@@ -693,11 +705,48 @@ def import_data_files(folder: Path, files: list, note: str) -> dict:
     return {"id": made[-1]["id"], "comptes": ", ".join(m["comptes"] for m in made), "ignores": ignored}
 
 
+PROGRAM_FILE = "programme_fp0r.bin"
+DEFAULT_CAPACITY = 5000             # FP0R-C16 when RT does not answer
+
+
+def read_program_bytes(plc, progress) -> bytes:
+    """Program steps (RP), one little-endian word each, until the FFFF fill after the last step."""
+    try:
+        cap = plc.read_status().get("capacity_steps") or DEFAULT_CAPACITY
+    except mw.MewtocolError:
+        cap = DEFAULT_CAPACITY
+    words = plc.read_program(cap, lambda s, e: progress(f"lecture du programme : pas {s}..{e}", s, cap))
+    if not words:
+        raise _drv().DriverError("Aucun pas de programme recu")
+    return b"".join(w.to_bytes(2, "little") for w in words)
+
+
+def program_diff(now: bytes, saved: bytes) -> list:
+    from plc_online.web.tools_web import ranges_text
+    return ranges_text([i // 2 for i in range(min(len(now), len(saved))) if now[i] != saved[i]])
+
+
 class Fp0rOps:
     """Session calls for a Panasonic FP0R."""
 
     def __init__(self, session):
+        from plc_online.web.tools_web import ProgramCopies
         self.s = session
+        self.prog = ProgramCopies(
+            session, lambda: self.s.tsx_backups.parent / "panasonic" / "programmes", PROGRAM_FILE, read_program_bytes,
+            lambda blob: f"{len(blob) // 2} pas", program_diff, "fp0r", lambda data: len(data) % 2 == 0 and len(data) > 0,
+            "Rechargement d'un programme dans le FP0R : pas encore valide, utiliser FPWIN GR. La copie sert a comparer "
+            "et a garder une trace.")
+        for name in ("list_backups", "compare", "backup_blocks", "restore_plan", "restore", "export_backup",
+                     "import_backup"):
+            setattr(self, name, getattr(self.prog, name))
+
+    @property
+    def programs(self):
+        return self.prog.programs
+
+    def save_program(self, note):
+        return self.prog.save_program(note)
 
     @property
     def data(self) -> Path:

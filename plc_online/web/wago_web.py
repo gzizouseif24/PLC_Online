@@ -168,6 +168,18 @@ def pc_auto(card: str) -> dict:
 
 # ---- demo ----
 
+class _DemoRegisters:
+    """Raw registers of the demo coupler: 03 answers, 04 refuses above 0x1000 like a 750-352."""
+
+    def read_holding(self, start, n):
+        return [(0x1234 if start == 0x2000 and i == 0 else 0) for i in range(n)]
+
+    def read_input_registers(self, start, n):
+        if start >= 0x1000:
+            raise ModbusError("exception 02 (adresse invalide)")
+        return [0] * n
+
+
 class DemoWago:
     """750-352 + 750-461 (channel 1 at 23.4 deg C, channel 2 broken wire) + DI8 + DO8."""
 
@@ -177,6 +189,7 @@ class DemoWago:
         self.out_words = [0] * 8
         self.out_bits = [False] * 16
         self.in_bits = [True, False, False, True] + [False] * 12
+        self.mb = _DemoRegisters()
 
     def is_wago(self):
         return True
@@ -317,7 +330,29 @@ def wago_diagnostic(plc) -> dict:
         ("Entrees TOR", f"{_bits(sizes['digital_in_bits'])} bits"),
         ("Sorties TOR", f"{_bits(sizes['digital_out_bits'])} bits"),
     ]
+    out["systeme"] = raw_registers(plc)
     return out
+
+
+RAW_REGISTERS = (("constantes", 0x2000, 9), ("firmware", 0x2010, 5), ("voyant I/O", 0x1020, 2),
+                 ("taille image", 0x1022, 4), ("modules", 0x2030, 8), ("entrees (mots)", 0x0000, 4))
+
+
+def raw_registers(plc) -> list:
+    """What the coupler answers, register by register, with function 03 and 04 (was tools/wago.py registres)."""
+    mb = getattr(plc, "mb", None)
+    if mb is None:
+        return []
+    rows = []
+    for name, start, n in RAW_REGISTERS:
+        for fc, read in (("03", mb.read_holding), ("04", mb.read_input_registers)):
+            try:
+                v, ok = " ".join(f"{x:04X}" for x in read(start, n)), True
+            except (ModbusError, OSError) as e:
+                v, ok = str(e), fc == "04"           # 04 refused on the config registers is normal
+            rows.append({"adresse": f"0x{start:04X} x{n} ({fc})", "valeur": v, "texte": f"{name}, fonction {fc}",
+                         "ok": ok})
+    return rows
 
 
 def wago_status(plc) -> dict:

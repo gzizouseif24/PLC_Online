@@ -38,14 +38,25 @@
       <p class="hint" id="hint-tsx" hidden>TSX : cable <b>TSX PCX 1031</b> sur la prise TER, selecteur
         dans la meme position qu'avec PL7, <b>PL7 ferme</b>. 9600 bauds, 8 bits, parite impaire.</p>
       <p class="hint" id="hint-delta" hidden>Delta : adaptateur RS-485 sur COM2 (+ / -) ou cable RS-232 sur COM1
-        (mini-DIN), <b>WPLSoft / ISPSoft ferme</b>. Defaut Delta : ASCII 9600 7E1, station 1. Reglages inconnus :
-        python tools/delta.py chercher.</p>
+        (mini-DIN), <b>WPLSoft / ISPSoft ferme</b>. Defaut Delta : ASCII 9600 7E1, station 1. Reglages inconnus : bouton
+        Chercher les reglages ; IHM branchee sur le RS-485 : Ecouter l'IHM.</p>
       <p class="hint" id="hint-panasonic" hidden>Panasonic : cable USB / RS-232 sur le port outil (mini-DIN 5),
         <b>FPWIN ferme</b>. Defaut du port outil : 9600 bauds, 8 bits, parite impaire (O), station 1.
         RUN / PROG a distance : selecteur de l'automate sur RUN.</p>
       <p class="hint" id="hint-mitsubishi" hidden>Mitsubishi FX : cable SC-09 / USB-SC09 sur le port de programmation
         (mini-DIN 8 sous le capot), <b>GX Developer / GX Works ferme</b>. 9600 bauds 7E1. Renseigner l'unite de base
         et les extensions dans l'ordre (le FX ne les signale pas).</p>
+      <p class="hint" id="hint-s7200" hidden>S7-200 : cable RS-232/PPI sur un port COM (commutateurs : 9600 bauds,
+        mode PPI), <b>Micro/WIN ferme</b>. Automate a l'adresse 2 par defaut. RUN / STOP a distance : selecteur sur
+        TERM.</p>
+      <p class="hint" id="hint-omron" hidden>Omron : cable CS1W-CN226 / USB-serie sur le port peripherique, <b>CX-Programmer
+        ferme</b>. Port en Host Link 9600 7E2, unite 0 (DIP 4 ON). En RUN l'automate refuse les ecritures : passer en
+        MONITOR.</p>
+      <div class="hint" id="delta-chercher" hidden>
+        <button type="button" class="btn" id="btn-delta-chercher">Chercher les reglages</button>
+        <button type="button" class="btn" id="btn-delta-ihm">Ecouter l'IHM</button>
+        <p id="delta-msg" class="msg" role="status"></p>
+      </div>
       <div class="hint" id="pana-chercher" hidden>
         <button type="button" class="btn" id="btn-pana-chercher">Chercher les reglages</button>
         <p id="pana-msg" class="msg" role="status"></p>
@@ -91,9 +102,49 @@
         <button type="button" role="tab" class="tab" data-tab="vue-diag" aria-selected="false">Diagnostic</button>
         <button type="button" role="tab" class="tab" data-tab="vue-axes" aria-selected="false" data-fonction="axes">Axes</button>
         <button type="button" role="tab" class="tab" data-tab="vue-watch" aria-selected="false">Surveillance</button>
+        <button type="button" role="tab" class="tab" data-tab="vue-changements" aria-selected="false" data-fonction="changements">Changements</button>
+        <button type="button" role="tab" class="tab" data-tab="vue-test" aria-selected="false" data-fonction="test_entrees">Test E/S</button>
         <button type="button" role="tab" class="tab" data-tab="vue-prog" aria-selected="false" data-fonction="programme">Programme</button>
         <button type="button" role="tab" class="tab" data-tab="vue-data" aria-selected="false" data-fonction="donnees">Donnees</button>
       </nav>
+
+      <div id="vue-changements" class="vue" hidden>
+        <p class="hint">Relit une plage de l'automate en continu et note chaque valeur qui change, avec l'heure : pour
+          trouver le registre d'un reglage ou suivre un defaut fugitif. Lecture seule.</p>
+        <form id="form-changements" class="ajout" autocomplete="off">
+          <label class="field"><span>Zone</span><select id="ch-zone"></select></label>
+          <label class="field"><span>Debut</span><input id="ch-debut" type="number" min="0" value="0"></label>
+          <label class="field"><span>Nombre (max 256)</span><input id="ch-nombre" type="number" min="1" max="256" value="100"></label>
+          <button type="submit" class="btn btn-primary" id="btn-ch">Demarrer</button>
+          <button type="button" class="btn" id="btn-ch-effacer">Effacer le journal</button>
+          <button type="button" class="btn" id="btn-ch-csv">Journal en .csv</button>
+        </form>
+        <p id="ch-msg" class="msg" role="status"></p>
+        <h3>Journal <span class="hint">(le plus recent en haut)</span></h3>
+        <div class="table-wrap">
+          <table class="table" id="table-ch">
+            <thead><tr><th>Heure</th><th>Adresse</th><th>Avant</th><th>Apres</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <h3>Valeurs</h3>
+        <div id="ch-valeurs" class="es-grille"></div>
+      </div>
+
+      <div id="vue-test" class="vue" hidden>
+        <p class="hint">Mettre chaque entree a 1 puis la relacher : elle passe au vert. Lecture toutes les 0,2 s, rien
+          n'est ecrit. Les unites viennent des reglages de connexion (modele de CPU et extensions).</p>
+        <p class="hint" id="test-cablage"></p>
+        <p id="test-notes" class="msg"></p>
+        <div class="ajout">
+          <button type="button" class="btn" id="btn-test-reset">Recommencer</button>
+          <span id="test-compte" class="hint"></span>
+        </div>
+        <p id="test-msg" class="msg" role="status"></p>
+        <div id="test-unites"></div>
+        <p class="hint">Gris : pas encore vue. Jaune : a 1 maintenant. Vert : vue a 1 puis a 0. Rouge : deja a 1 au
+          depart (a relacher, ou entree en court-circuit).</p>
+      </div>
 
       <div id="vue-axes" class="vue" hidden>
         <p class="hint">Axes Kinetix lus dans l'automate (tags AXIS_CIP_DRIVE), toutes les secondes. Lecture seule :
@@ -224,6 +275,16 @@
             <span id="visu-texte">Visualiser</span>
           </button>
           <button type="button" class="btn" id="btn-ecrire">Ecrire les valeurs</button>
+          <label class="check" title="Intervalle entre deux lectures. Plus court = plus de requetes sur le cable : avec peu d'adresses, 250 ms suit un mouvement rapide.">
+            Lecture toutes les
+            <select id="watch-periode">
+              <option value="250">250 ms</option>
+              <option value="500">500 ms</option>
+              <option value="1000">1 s</option>
+              <option value="2000">2 s</option>
+            </select></label>
+          <label class="check" title="Reecrire les valeurs toutes les 0,5 s jusqu'a Arreter, comme Forcer permanent de STEP 7 (pas un vrai forcage)">
+            <input type="checkbox" id="watch-maintenir"> Maintenir</label>
           <span class="spacer"></span>
           <button type="button" class="btn" id="btn-exporter">Exporter</button>
           <label class="btn" for="fichier-table">Importer</label>
@@ -231,6 +292,10 @@
           <button type="button" class="btn" id="btn-vider">Vider</button>
         </div>
         <p id="watch-msg" class="msg" role="status"></p>
+        <div id="watch-maintien" class="alerte" hidden>
+          <span id="watch-maintien-texte"></span>
+          <button type="button" class="btn" id="btn-maintien-stop">Arreter le maintien</button>
+        </div>
 
         <div class="table-wrap">
           <table class="table watch" id="table-watch">
@@ -239,6 +304,20 @@
           </table>
         </div>
         <p class="maj" id="watch-maj"></p>
+        <details class="watch-journal">
+          <summary>Journal des changements <span id="watch-journal-compte" class="hint"></span></summary>
+          <p class="hint">Chaque valeur qui change pendant la visualisation, avec l'heure : pour un defaut fugitif.</p>
+          <div class="ajout">
+            <button type="button" class="btn" id="btn-journal-effacer">Effacer</button>
+            <button type="button" class="btn" id="btn-journal-csv">Journal en .csv</button>
+          </div>
+          <div class="table-wrap">
+            <table class="table" id="table-watch-journal">
+              <thead><tr><th>Heure</th><th>Adresse</th><th>Libelle</th><th>Avant</th><th>Apres</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </details>
       </div>
 
       <div id="vue-diag" class="vue" hidden>
@@ -281,6 +360,24 @@
 
         </div>
 
+        <details class="watch-journal" id="tsx-es" data-fonction="chercher_es">
+          <summary>Recherche des %I (pour le developpement de l'outil)</summary>
+          <p class="hint">Trouve ou le TSX garde l'etat des entrees, pour afficher les %I en direct dans une version
+            future. Lecture seule. Il faut une entree que l'on peut faire passer de 0 a 1. Chaque etape dure environ
+            1 minute.</p>
+          <div class="ajout">
+            <label class="field"><span>Positions des modules d'entrees</span><input id="es-positions" value="1"></label>
+            <label class="field"><span>Entree basculee (ex. %I1.3)</span><input id="es-entree"></label>
+          </div>
+          <div class="ajout">
+            <button type="button" class="btn" id="btn-es-a">1. Lire, entree a 0</button>
+            <button type="button" class="btn" id="btn-es-b">2. Lire, entree a 1</button>
+            <button type="button" class="btn" id="btn-es-c">3. Lire, entree revenue a 0</button>
+          </div>
+          <p id="es-msg" class="msg" role="status"></p>
+          <div id="es-resultat"></div>
+        </details>
+
         <h3 id="titre-params">Parametres CPU</h3>
         <dl id="params" class="details"></dl>
       </div>
@@ -297,6 +394,7 @@
         <div class="cpu-actions">
           <button type="button" class="btn btn-run" id="btn-run" data-fonction="runstop">Passer en RUN</button>
           <button type="button" class="btn btn-stop" id="btn-stop" data-fonction="runstop">Passer en STOP</button>
+          <button type="button" class="btn" id="btn-monitor" data-fonction="monitor" title="Le programme tourne et les ecritures sont acceptees">Passer en MONITOR</button>
           <button type="button" class="btn" id="btn-horloge" data-fonction="horloge">Mettre l'horloge a l'heure du PC</button>
         </div>
         <p id="cpu-msg" class="msg" role="status"></p>

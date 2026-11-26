@@ -56,6 +56,114 @@ def open_delta(settings: dict):
     return plc
 
 
+# ---- settings search (the PLC answers) and HMI listening (another master talks) ----
+
+def _open(port, baud, parity, stop, timeout, bits):
+    from plc_online.protocols.modbus import open_serial
+    return open_serial(port, baud, parity, stop, timeout, bytesize=bits)
+
+
+def request_frame(mode, station):
+    """Read D1000 (1 word)."""
+    from plc_online.protocols.modbus import crc16
+    body = bytes([station]) + struct.pack(">BHH", 3, 0x1000 + 1000, 1)
+    if mode == "ascii":
+        return b":" + (body + bytes([lrc(body)])).hex().upper().encode() + b"\r\n"
+    return body + struct.pack("<H", crc16(body))
+
+
+def answered(mode, station, got):
+    from plc_online.protocols.modbus import crc16
+    try:
+        if mode == "ascii":
+            data = bytes.fromhex(got.strip()[1:].decode("ascii"))
+            return got.strip().startswith(b":") and lrc(data[:-1]) == data[-1] and data[0] == station
+        return len(got) >= 5 and got[0] == station and crc16(got[:-2]) == struct.unpack("<H", got[-2:])[0]
+    except (ValueError, IndexError):
+        return False
+
+
+def probe(port, mode, baud, parity, stop, station, opener=None):
+    try:
+        ser = (opener or _open)(port, baud, parity, stop, 0.4, 7 if mode == "ascii" else 8)
+    except Exception as e:
+        raise _drv().DriverError(tsx_web.port_error(port, e)) from None
+    try:
+        ser.reset_input_buffer()
+        ser.write(request_frame(mode, station))
+        got = ser.read(64)
+        while True:
+            more = ser.read(64)
+            if not more:
+                return got
+            got += more
+    finally:
+        ser.close()
+
+
+def search(port, opener=None, progress=None) -> dict:
+    """Every usual format at station 1, then stations 1..32 at 9600 E."""
+    echo = noise = False
+    tries = [(m, b, p, s, 1) for m, b, p, s in dl.SEARCH] + [(m, 9600, "E", 1, st) for m in ("ascii", "rtu")
+                                                            for st in range(1, 33)]
+    for i, (mode, baud, parity, stop, station) in enumerate(tries):
+        if progress:
+            progress(f"{mode.upper()} {baud} {parity}{stop} station {station}", i, len(tries))
+        got = probe(port, mode, baud, parity, stop, station, opener)
+        if got and answered(mode, station, got):
+            bits = 7 if mode == "ascii" else 8
+            return {"trouve": True, "reglages": {"port": port, "mode": mode, "baud": baud, "parite": parity,
+                                                 "station": station},
+                    "texte": f"Delta trouve : {mode.upper()} {baud} {bits}{parity}{stop}, station {station}."}
+        if got and got.startswith(request_frame(mode, station)):
+            echo = True
+        elif got:
+            noise = True
+    if noise:
+        text = ("Des octets arrivent mais illisibles : format non standard, ou un autre appareil (IHM maitre) parle "
+                "sur la ligne : bouton Ecouter l'IHM.")
+    elif echo:
+        text = "Seulement l'echo de nos trames : l'adaptateur renvoie ce qu'il envoie, l'automate ne repond pas."
+    else:
+        text = ("Silence total. Fils + / - inverses (les permuter) ? COM2 utilise par le programme en maitre "
+                "(MODRD / MODWR) : passer par COM1 (RS-232, mini-DIN 8). Bon port COM ?")
+    return {"trouve": False, "reglages": {}, "texte": f"Aucune reponse ({len(tries)} essais). {text}"}
+
+
+def listen_hmi(port, seconds=1.5, opener=None) -> dict:
+    """Listen to the RS-485 line where an HMI (master) polls the PLC: its format and the station it asks."""
+    for mode, baud, bits, parity, stop in dl.LISTEN_SETTINGS:
+        try:
+            ser = (opener or _open)(port, baud, parity, stop, 0.1, bits)
+        except Exception as e:
+            raise _drv().DriverError(tsx_web.port_error(port, e)) from None
+        buf, end = b"", time.time() + seconds
+        try:
+            ser.reset_input_buffer()
+            while time.time() < end:
+                buf += ser.read(256)
+        finally:
+            ser.close()
+        frames = dl.ascii_frames(buf) if mode == "ascii" else dl.rtu_frames(buf)
+        if not frames:
+            continue
+        stations = sorted({st for st, _ in frames})
+        out = {"trouve": True, "reglages": {"port": port, "mode": mode, "baud": baud, "parite": parity,
+                                            "station": stations[0]},
+               "texte": f"L'IHM parle en {mode.upper()} {baud} {bits}{parity}{stop} a la station {stations[0]} "
+                        f"({len(frames)} trames)."}
+        try:
+            code = dl.com_word(baud, bits, parity, stop)
+            out["texte"] += (f" Reglages a mettre dans l'automate (Surveillance, ou au demarrage du programme sous M1002) : "
+                             f"D1120 = 16#{code:02X}, M1143 = {1 if mode == 'rtu' else 0}, D1121 = {stations[0]}, M1120 = 1.")
+        except KeyError:
+            out["texte"] += " Vitesse non prise en charge par le DVP."
+        return out
+    return {"trouve": False, "reglages": {},
+            "texte": "Aucune trame lue. Adaptateur branche en parallele sur D+ / D- de l'IHM (essayer d'inverser) ? "
+                     "IHM allumee (en erreur de communication, elle interroge toujours) ?"}
+
+
 # ---- demo ----
 
 class DemoPort:
@@ -91,12 +199,14 @@ class DemoPort:
                 pdu = bytes([0x83, 2])
             else:
                 pdu = bytes([3, 2 * n]) + struct.pack(f">{n}H", *[self.regs.get(a, 0) for a in range(addr, addr + n)])
-        elif func == 1:
+        elif func == 1 and addr < 0x0500 and addr + n > 0x0400:   # X0..X377 = 0x0400..0x04FF
+            pdu = bytes([0x81, 4])                    # X with function 01: exception 04, as the real DVP (18/11)
+        elif func in (1, 2):
             raw = bytearray((n + 7) // 8)
             for i in range(n):
                 if self.coils.get(addr + i):
                     raw[i // 8] |= 1 << (i % 8)
-            pdu = bytes([1, len(raw)]) + raw
+            pdu = bytes([func, len(raw)]) + raw
         elif func in (5, 6):
             if func == 6:
                 self.regs[addr] = n
@@ -193,17 +303,17 @@ def delta_status(plc) -> dict:
     return out
 
 
-def io_row(plc, pos, area, count, label):
+def io_row(plc, pos, area, count, label, first=0):
+    """I/O row of the rack: count bits of area from bit index first (octal names X20.. for an expansion)."""
     try:
-        bits = plc.read_bits(area, 0, count)
+        bits = plc.read_bits(area, first, count)
         values, ok, etat = " ".join(str(int(v)) for v in bits), True, "ok"
     except (ModbusError, dl.DeltaError) as e:
         values, ok, etat = f"non lu ({e})", False, "non lu"
-    last = dl.name(area, count - 1)
-    return {"emplacement": pos, "type": label, "adresse": f"{area}0..{last}",
+    return {"emplacement": pos, "type": label, "adresse": f"{dl.name(area, first)}..{dl.name(area, first + count - 1)}",
             "configure": {"code": "", "nom": label, "references": f"{count} voies"},
             "en_place": {"code": "", "nom": values, "references": ""}, "etat": etat, "ok": ok,
-            "variables": [{"adresse": dl.name(area, i), "libelle": f"{label} {i + 1}"} for i in range(count)]}
+            "variables": [{"adresse": dl.name(area, first + i), "libelle": f"{label} {i + 1}"} for i in range(count)]}
 
 
 def delta_diagnostic(plc) -> dict:
@@ -223,15 +333,9 @@ def delta_diagnostic(plc) -> dict:
     ext_x = _get(lambda: plc.read_words("D", 1142, 1)[0]) or 0
     ext_y = _get(lambda: plc.read_words("D", 1143, 1)[0]) or 0
     if 0 < ext_x <= 256 - n_in:
-        row = io_row(plc, 1, "X", n_in + ext_x, "Entrees d'extension")
-        row["variables"] = row["variables"][n_in:]
-        row["adresse"] = f"{dl.name('X', n_in)}..{dl.name('X', n_in + ext_x - 1)}"
-        out["modules"].append(row)
+        out["modules"].append(io_row(plc, 1, "X", ext_x, "Entrees d'extension", n_in))
     if 0 < ext_y <= 256 - n_out:
-        row = io_row(plc, 1, "Y", n_out + ext_y, "Sorties d'extension")
-        row["variables"] = row["variables"][n_out:]
-        row["adresse"] = f"{dl.name('Y', n_out)}..{dl.name('Y', n_out + ext_y - 1)}"
-        out["modules"].append(row)
+        out["modules"].append(io_row(plc, 1, "Y", ext_y, "Sorties d'extension", n_out))
     specials = _get(lambda: plc.read_words("D", 1140, 1)[0]) or 0
     if 0 < specials <= 8:
         ids = _get(lambda: plc.read_words("D", dl.MODULE_IDS, specials)) or []
@@ -248,11 +352,13 @@ def delta_diagnostic(plc) -> dict:
 # ---- watch table ----
 
 ADDRESS = re.compile(r"^([DMXYSTC])(\d+)$", re.IGNORECASE)
-WORD_FORMATS = ["dec", "ud", "hex", "bin"]
+WORD_FORMATS = ["dec", "ud", "hex", "bin", "real", "dint"]
+DOUBLE_FORMATS = ("real", "dint")      # two registers, low word first (Delta 32-bit: D238 = low, D239 = high)
 
 
 class DeltaVar:
-    """'D100', 'D100:hex', 'M1000', 'X17', 'Y0', 'T5', 'C2', 'S0' (T / C : current value)."""
+    """'D100', 'D100:hex', 'D238:real' (32-bit float on D238 + D239), 'D10:dint' (32-bit integer), 'M1000', 'X17',
+    'Y0', 'T5', 'C2', 'S0' (T / C : current value)."""
 
     def __init__(self, text: str):
         self.text = text.strip()
@@ -268,15 +374,34 @@ class DeltaVar:
         self.fmt = (fmt.strip().lower() or "dec") if self.word else ""
         if self.word and self.fmt not in WORD_FORMATS:
             raise ValueError(f"format {self.fmt} : {', '.join(WORD_FORMATS)}")
+        self.double = self.fmt in DOUBLE_FORMATS
+        if self.double and self.area != "D":
+            raise ValueError(f"format {self.fmt} : D seulement (D{self.n} et D{self.n + 1})")
 
     def read(self, plc):
+        if self.double:
+            low, high = plc.read_words(self.area, self.n, 2)
+            return high << 16 | low
         if self.word:
             return plc.read_words(self.area, self.n, 1)[0]
         return int(plc.read_bits(self.area, self.n, 1)[0])
 
+    def write(self, plc, value):
+        if self.double:
+            plc.write_words(self.area, self.n, [value & 0xFFFF, value >> 16 & 0xFFFF])
+        elif self.word:
+            plc.write_word(self.area, self.n, value)
+        else:
+            plc.write_bit(self.area, self.n, bool(value))
+
     def decode(self, v) -> str:
         if not self.word:
             return str(int(v))
+        if self.fmt == "real":
+            x = struct.unpack("<f", struct.pack("<I", v))[0]
+            return f"{x:.7g}"
+        if self.fmt == "dint":
+            return str(v - (1 << 32) if v & 0x80000000 else v)
         if self.fmt == "ud":
             return str(v)
         if self.fmt == "hex":
@@ -292,6 +417,19 @@ class DeltaVar:
             if t not in ("0", "1"):
                 raise ValueError("0 ou 1")
             return int(t)
+        if self.fmt == "real":
+            try:
+                return struct.unpack("<I", struct.pack("<f", float(t.replace(",", "."))))[0]
+            except (ValueError, OverflowError):
+                raise ValueError("nombre reel illisible (ex. 12.5)") from None
+        if self.fmt == "dint":
+            try:
+                v = int(t)
+            except ValueError:
+                raise ValueError("entier illisible") from None
+            if not -2**31 <= v < 2**32:
+                raise ValueError("hors -2147483648..4294967295")
+            return v & 0xFFFFFFFF
         try:
             if t.startswith("16#") or t.startswith("0x"):
                 v = int(t[3:] if t.startswith("16#") else t[2:], 16)
@@ -338,10 +476,7 @@ def write_values(plc, items) -> dict:
         except ValueError as e:
             raise _drv().DriverError(f"{text} : {e}") from None
         old = v.read(plc)
-        if v.word:
-            plc.write_word(v.area, v.n, value)
-        else:
-            plc.write_bit(v.area, v.n, bool(value))
+        v.write(plc, value)
         back = v.read(plc)
         results.append({"adresse": text, "avant": v.decode(old), "relu": v.decode(back), "ok": back == value})
     run = _get(lambda: plc.read_bits("M", 1000, 1)[0])

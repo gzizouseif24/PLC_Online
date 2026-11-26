@@ -178,6 +178,18 @@ class FxWebTests(unittest.TestCase):
         b[3], b[92], b[93], b[96], b[150] = 1, 1, 1, 1, 1
         self.assertEqual(mw.step_ranges(a, bytes(b)), ["parametres", "pas 0", "pas 2", "pas 29"])
 
+    def test_block_and_inputs(self):
+        r = self.s.block("X", 0, 10)
+        self.assertEqual((r["adresses"][8], r["valeurs"][:4]), ("X10", [1, 0, 0, 1]))
+        self.assertEqual(self.s.block("D", 100, 1)["valeurs"], [-5])
+        with self.assertRaises(DriverError):
+            self.s.block("D", 500, 20)                 # D512+ outside the map
+        with self.assertRaises(DriverError):
+            self.s.block("Q", 0, 1)
+        u = self.s.inputs()["unites"]
+        self.assertEqual([x["nom"] for x in u], ["Unite de base", "Extension 1"])
+        self.assertEqual((u[0]["entrees"][-1]["adresse"], u[1]["entrees"][1]), ("X27", {"adresse": "X31", "valeur": 1}))
+
 
 if __name__ == "__main__":
     unittest.main()

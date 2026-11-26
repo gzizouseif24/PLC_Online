@@ -83,6 +83,15 @@ the program. Same list, download and import as the Programme tab, CSV files.
   `tools/mitsubishi.py`: info, lire, ecrire, test-entrees, programme (read-only copy from 8000h).
   **To confirm on the PLC:** everything (frames match the documented examples), D512+ not readable yet.
 
+- **Omron CJ1M (12/11), demo only in the web interface** (Host Link on the peripheral port, 9600 7E2):
+  Etat (model, mode, fatal / non-fatal flags, most serious error, battery, clock), Diagnostic (error
+  log, cards of the registered I/O table with their CIO words, PLC Setup, units), Surveillance (D W H
+  A T C CIO words and bits; writes refused in RUN: MONITOR button), Donnees (D, H, W; restore goes
+  through MONITOR), Programme (read-only copy, FINS 0306, experimental), RUN / MONITOR / PROGRAM.
+- **Every serial brand:** Changements (one range read again and again, changes logged, CSV), Test E/S
+  (Panasonic, Mitsubishi, Delta, Omron: each input seen at 1 then 0). Watch table of every brand:
+  change log (CSV) and hold (write again every 0.5 s until stopped).
+
 ## Order
 
 1. **Shared serial connection** (COM port list, settings per brand, one port open at a time,

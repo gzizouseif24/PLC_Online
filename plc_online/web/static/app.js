@@ -66,6 +66,9 @@ function renderSettings() {
   $("hint-logix").hidden = key !== "logix";
   $("hint-mitsubishi").hidden = key !== "mitsubishi";
   $("pana-chercher").hidden = key !== "panasonic";
+  $("delta-chercher").hidden = key !== "delta";
+  $("hint-omron").hidden = key !== "omron";
+  $("hint-s7200").hidden = key !== "s7-200";
   if (key === "wago") loadCards();
 }
 
@@ -86,20 +89,39 @@ async function loadPorts() {
 let family = "s7";
 let features = [];
 
+function fxpFamily() {
+  /** Brands whose program copy is read only (no restore button). */
+  return family === "mitsubishi" || family === "panasonic" || family === "omron" || family === "s7200";
+}
+
+function readOnlyProgram() {
+  /** Program copies without a restore button. */
+  return fxpFamily() && family !== "s7200";
+}
+
 function applyBrand(key) {
   const b = brands[key] || {};
   family = b.famille || "s7";
   features = b.fonctions || [];
   for (const e of document.querySelectorAll("[data-fonction]")) e.hidden = !features.includes(e.dataset.fonction);
+  fillZones(key);
+  testState = {};
+  chLog = [];
   const tsx = family === "tsx";
-  const fxp = family === "mitsubishi";
-  $("prog-hint").textContent = fxp
+  const fxp = fxpFamily();
+  $("prog-hint").textContent = family === "s7200"
+    ? "Copie des blocs de l'automate (OB1 programme, DB1 donnees, SDB0 bloc systeme) tels qu'il les donne : a garder, comparer et recharger (STOP). Un projet .mwp se charge avec Micro/WIN. Decodage en instructions : en cours (banc)."
+    : family === "omron"
+    ? "Copie de la zone programme (FINS 0306, experimental), en lecture seule : a garder et a comparer. Rechargement : CX-Programmer."
+    : family === "panasonic"
+    ? "Copie des pas du programme (commande RP), en lecture seule : a garder et a comparer. Rechargement : FPWIN GR."
+    : fxp
     ? "Copie de la memoire programme (parametres + programme), en lecture seule : a garder et a comparer. Environ 1 minute. Rechargement : GX Developer / GX Works."
     : tsx
     ? "Copie de l'application de l'automate (programme et configuration), comme le transfert automate -> PC de PL7."
     : "Copie de tous les blocs (OB, FB, FC, DB) et de la configuration materielle (SDB).";
   $("import-hint").textContent = fxp
-    ? "Copie deja sur le PC : .zip de cette page ou .bin de tools/mitsubishi.py :"
+    ? "Copie deja sur le PC : .zip de cette page ou .bin de l'outil en ligne de commande :"
     : tsx
     ? "Programme deja sur le PC : fichier PL7 .stx, copie .tsxbak (outil terminal) ou .zip de cette page :"
     : "Sauvegarde deja sur le PC (autre dossier, cle USB, terminal) ou projet STEP 7 V5 (dossier du .s7p, ou archive .zip) :";
@@ -109,15 +131,21 @@ function applyBrand(key) {
   $("col-contenu").textContent = tsx ? "Contenu" : "Blocs";
   const pana = family === "panasonic";
   const logix = family === "logix";
-  $("btn-stop").textContent = pana ? "Passer en PROG" : "Passer en STOP";
+  $("btn-stop").textContent = pana ? "Passer en PROG" : family === "omron" ? "Passer en PROGRAM" : "Passer en STOP";
   const mitsu = family === "mitsubishi";
-  const dataLike = family === "delta" || pana || mitsu;        // .csv data copies of this tool
+  const dataLike = family === "delta" || pana || mitsu || family === "omron" || family === "s7200";        // .csv data copies of this tool
   $("watch-hint").textContent = logix
     ? "Nom du tag, comme dans Studio 5000 : Recipe_Speed, Recipe[3].Temp, Program:Main.Count. Ecriture : BOOL, entiers, REAL, STRING (pas les tags de securite)."
     : pana
     ? "DT100, WX0 / WY0 / WR10 (mots), X0, X1F, Y3, R901C (bits : mot decimal + bit hexa). Ecriture : DT, WY, WR, Y, R. Format dint pour les compteurs 32 bits."
     : family === "delta"
-    ? "D100, M10, X17 et Y0 (en octal), T5 / C2 (valeur), S0. Ecriture : D, M, Y, T, C, S. Le format se change sur chaque ligne."
+    ? "D100, M10, X17 et Y0 (en octal), T5 / C2 (valeur), S0. Ecriture : D, M, Y, T, C, S. Le format se change sur chaque ligne : real = flottant 32 bits sur D et D+1 (mot bas en premier), dint = entier 32 bits."
+    : family === "s7200"
+    ? "Bits : I0.0, Q0.1, M1.2, V100.3, SM0.5. Octets / mots / doubles : VB10, VW100, VD200 (format real), MB, IB, QB, SMB, SMW22. Analogique : AIW0, AQW0. Ecriture : Q, M, V, SM30+, AQ."
+    : family === "modicon"
+    ? "%MW (registres 03), %IW (04), %M (bits 01), %I (02). Lecture seule."
+    : family === "omron"
+    ? "D100, W10, H5, A400, T5 / C2 (valeur), 0 ou CIO 0 (mot), 0.03 / W10.05 (bit). Ecriture : CIO, W, H, D, T, C, A448+ (en MONITOR ou PROGRAM)."
     : mitsu
     ? "D0..D511, D8000.., M0..M1023, M8000.., X27 et Y17 (en octal), T5 / C2 (valeur, C200..C255 sur 32 bits), S0. Ecriture : D, T, C, M, Y, S."
     : family === "wago"
@@ -125,7 +153,7 @@ function applyBrand(key) {
     : tsx
     ? "%MW, %MD, %KW, %KD, %SW, %M, %S (le % est facultatif). Ecriture : %MW et %MD. Le format se change sur chaque ligne."
     : "E/I, A/Q, M, DB10.DBW2, T5, Z2. Le format se change sur chaque ligne.";
-  $("ajout-adresse").placeholder = logix ? "Recipe_Speed, Program:Main.Count" : pana ? "DT100, WX0, X0, Y0, R10" : family === "delta" ? "D100, M10, X0, Y0" : mitsu ? "D100, M8000, X27, Y0" : family === "wago" ? "IW0, QW0, I0, Q0" : tsx ? "%MW10, %MD4, %M5, %I1.0" : "MW10, E0.0, DB10.DBD4";
+  $("ajout-adresse").placeholder = logix ? "Recipe_Speed, Program:Main.Count" : pana ? "DT100, WX0, X0, Y0, R10" : family === "delta" ? "D100, M10, X0, Y0" : family === "omron" ? "D100, 0.03, W10, H5, A400" : family === "s7200" ? "VW100, I0.0, Q0.1, SMW22, AIW0" : family === "modicon" ? "%MW10, %IW0, %M5, %I2" : mitsu ? "D100, M8000, X27, Y0" : family === "wago" ? "IW0, QW0, I0, Q0" : tsx ? "%MW10, %MD4, %M5, %I1.0" : "MW10, E0.0, DB10.DBD4";
   $("titre-params").textContent = logix ? "Automate" : dataLike ? "Automate" : family === "wago" ? "Image process" : tsx ? "Automate" : "Parametres CPU";
   const head = $("table-rack").tHead.rows[0].cells;
   head[0].textContent = tsx || family === "wago" ? "Position" : dataLike ? "" : "Empl.";
@@ -135,6 +163,10 @@ function applyBrand(key) {
     ? "Copie de tous les registres DT (recettes, compteurs, reglages), sans le programme. Environ 1 a 2 minutes a 9600 bauds."
     : family === "delta"
     ? "Copie de tous les registres D (recettes, compteurs, reglages), sans le programme."
+    : family === "s7200"
+    ? "Copie de toute la memoire V (VB0..fin, recettes, compteurs, reglages), sans le programme."
+    : family === "omron"
+    ? "Copie des zones D, H et W (recettes, compteurs, reglages), sans le programme. Restauration : passage en MONITOR si l'automate est en RUN."
     : mitsu
     ? "Copie des registres D0..D511 (zone lisible par le port de programmation), sans le programme."
     : "Copie de tous les mots internes %MW et des constantes %KW (recettes, compteurs, reglages), sans le programme.";
@@ -203,7 +235,7 @@ function setCpuMsg(text, isError) {
 
 async function cpuAction(path, question, done) {
   if (!confirm(question)) return;
-  for (const id of ["btn-run", "btn-stop", "btn-horloge"]) $(id).disabled = true;
+  for (const id of ["btn-run", "btn-stop", "btn-horloge", "btn-monitor"]) $(id).disabled = true;
   try {
     const r = await api("POST", path);
     setCpuMsg(done(r));
@@ -211,7 +243,7 @@ async function cpuAction(path, question, done) {
   } catch (e) {
     setCpuMsg(e.message, true);
   } finally {
-    for (const id of ["btn-run", "btn-stop", "btn-horloge"]) $(id).disabled = false;
+    for (const id of ["btn-run", "btn-stop", "btn-horloge", "btn-monitor"]) $(id).disabled = false;
   }
 }
 
@@ -231,6 +263,172 @@ function showTab(id) {
   if (id === "vue-prog") loadBackups();
   if (id === "vue-data") loadData();
   if (id === "vue-axes") startAxes(); else stopAxes();
+  if (id === "vue-test") startTest(); else stopTest();
+  if (id !== "vue-changements") stopChanges();
+}
+
+// ---- Changements: one range read again and again, changes logged ----
+
+let chTimer = null, chBusy = false, chLast = null, chLog = [];
+
+function fillZones(key) {
+  const zones = (brands[key] || {}).zones || [];
+  const sel = $("ch-zone");
+  sel.replaceChildren(...zones.map((z) => { const o = el("option", "", z); o.value = z; return o; }));
+}
+
+function stopChanges() {
+  if (chTimer) clearInterval(chTimer);
+  chTimer = null;
+  $("btn-ch").textContent = "Demarrer";
+}
+
+function toggleChanges(ev) {
+  ev.preventDefault();
+  if (chTimer) { stopChanges(); return; }
+  chLast = null;
+  $("btn-ch").textContent = "Arreter";
+  readChanges();
+  chTimer = setInterval(readChanges, 500);
+}
+
+async function readChanges() {
+  if (chBusy) return;
+  chBusy = true;
+  try {
+    const r = await api("POST", "/api/bloc", { zone: $("ch-zone").value, debut: Number($("ch-debut").value),
+                                                nombre: Number($("ch-nombre").value) });
+    const now = new Date().toLocaleTimeString("fr-FR");
+    const changed = new Set();
+    if (chLast && chLast.adresses.join() === r.adresses.join()) {
+      r.valeurs.forEach((v, i) => {
+        if (v !== chLast.valeurs[i]) {
+          chLog.unshift({ heure: now, adresse: r.adresses[i], avant: chLast.valeurs[i], apres: v });
+          changed.add(i);
+        }
+      });
+      chLog = chLog.slice(0, 1000);
+    }
+    chLast = r;
+    rows($("table-ch").tBodies[0], chLog.slice(0, 200), (c) => {
+      const tr = el("tr");
+      tr.append(cell(c.heure), cell(c.adresse, "mono"), cell(String(c.avant), "mono"), cell(String(c.apres), "mono"));
+      return tr;
+    }, "Aucun changement pour l'instant.", 4);
+    $("ch-valeurs").replaceChildren(...r.adresses.map((a, i) => {
+      const d = el("span", "es" + (changed.has(i) ? " flash" : ""), a + " = " + r.valeurs[i]);
+      return d;
+    }));
+    $("ch-msg").textContent = "Lu a " + now;
+    $("ch-msg").className = "msg";
+  } catch (e) {
+    $("ch-msg").textContent = e.message;
+    $("ch-msg").className = "msg err";
+    stopChanges();
+  } finally {
+    chBusy = false;
+  }
+}
+
+function changesCsv() {
+  const lines = ["heure;adresse;avant;apres", ...chLog.slice().reverse().map((c) => [c.heure, c.adresse, c.avant, c.apres].join(";"))];
+  const a = el("a");
+  a.href = URL.createObjectURL(new Blob([lines.join("\n") + "\n"], { type: "text/csv" }));
+  a.download = "changements_" + new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-") + ".csv";
+  a.click();
+}
+
+// ---- TSX: where are the %I kept? (3 read-only snapshots) ----
+
+async function ioSearch(step) {
+  const msg = $("es-msg");
+  const buttons = ["btn-es-a", "btn-es-b", "btn-es-c"];
+  if (step === "C" && !$("es-entree").value.trim()) {
+    msg.textContent = "Indiquer l'entree basculee (ex. %I1.3) avant l'etape 3.";
+    msg.className = "msg err";
+    return;
+  }
+  for (const b of buttons) $(b).disabled = true;
+  msg.className = "msg";
+  try {
+    await api("POST", "/api/tsx/chercher-es", { etape: step, positions: $("es-positions").value, entree: $("es-entree").value });
+    let j;
+    do {
+      await new Promise((r) => setTimeout(r, 500));
+      j = await api("GET", "/api/tache");
+      msg.textContent = (j.nom || "") + " : " + (j.texte || "...");
+    } while (!j.fini);
+    if (j.erreur) throw new Error(j.erreur);
+    const r = j.resultat;
+    if (r.etape !== "C") {
+      msg.textContent = `Etape ${r.etape} faite (${r.lectures} lectures, segments ${r.segments}). ` +
+        (r.etape === "A" ? "Mettre l'entree a 1, puis etape 2." : "Remettre l'entree a 0, puis etape 3.");
+      return;
+    }
+    msg.textContent = `Reponses qui suivent l'entree (0 -> 1 -> 0) : ${r.trouves.length}. Journal complet : ${r.fichier}`;
+    $("es-resultat").replaceChildren(...r.trouves.map((f) => {
+      const d = el("div", "chip");
+      d.textContent = `${f.requete} : 0 = ${f.a0} / 1 = ${f.a1}`;
+      return d;
+    }));
+  } catch (e) {
+    msg.textContent = e.message;
+    msg.className = "msg err";
+  } finally {
+    for (const b of buttons) $(b).disabled = false;
+  }
+}
+
+// ---- Test E/S: each input seen at 1 then back at 0 ----
+
+let testTimer = null, testBusy = false, testState = {};
+
+function startTest() {
+  stopTest();
+  readTest();
+  testTimer = setInterval(readTest, 200);
+}
+
+function stopTest() {
+  if (testTimer) clearInterval(testTimer);
+  testTimer = null;
+}
+
+async function readTest() {
+  if (testBusy) return;
+  testBusy = true;
+  try {
+    const r = await api("GET", "/api/entrees");
+    $("test-cablage").textContent = r.cablage || "";
+    $("test-notes").textContent = (r.notes || []).join(" ");
+    let total = 0, done = 0;
+    const missing = [];
+    $("test-unites").replaceChildren(...r.unites.map((u) => {
+      const box = el("div", "es-unite");
+      box.append(el("h4", "", u.nom));
+      const grid = el("div", "es-grille");
+      for (const e of u.entrees) {
+        let s = testState[e.adresse];
+        if (!s) s = testState[e.adresse] = { stuck: e.valeur === 1, seen: e.valeur === 1, ok: false };
+        if (e.valeur === 1) s.seen = true;
+        else { if (s.seen) s.ok = true; s.stuck = false; }
+        total += 1;
+        if (s.ok) done += 1; else missing.push(e.adresse);
+        grid.append(el("span", "es" + (e.valeur === 1 ? " on" : "") + (s.ok ? " ok" : "") + (s.stuck ? " stuck" : ""),
+                       e.adresse));
+      }
+      box.append(grid);
+      return box;
+    }));
+    $("test-compte").textContent = `${done} / ${total} entrees testees` + (missing.length && missing.length <= 24 ? " - pas vues : " + missing.join(", ") : "");
+    $("test-msg").textContent = "";
+  } catch (e) {
+    $("test-msg").textContent = e.message;
+    $("test-msg").className = "msg err";
+    stopTest();
+  } finally {
+    testBusy = false;
+  }
 }
 
 // ---- Allen-Bradley: Kinetix axes ----
@@ -427,8 +625,9 @@ async function loadBackups() {
       const tr = el("tr");
       const actions = el("div", "row-actions");
       for (const [text, fn] of [["Comparer", () => compareBackup(b)],
-                                ...(family === "mitsubishi" ? [] : [["Restaurer", () => (family === "tsx" ? planRestoreTsx(b) : planRestore(b, false))]]),
-                                [family === "tsx" || family === "mitsubishi" ? "Details" : "Blocs", () => showBlocks(b)]]) {
+                                ...(family === "s7" && r.sauvegardes.length > 1 ? [["Comparer a une copie", () => compareWithCopy(b, r.sauvegardes)]] : []),
+                                ...(readOnlyProgram() ? [] : [["Restaurer", () => (family === "tsx" || family === "s7200" ? planRestoreTsx(b) : planRestore(b, false))]]),
+                                [family === "tsx" || fxpFamily() ? "Details" : "Blocs", () => showBlocks(b)]]) {
         const btn = el("button", "btn small", text);
         btn.type = "button";
         btn.addEventListener("click", fn);
@@ -460,6 +659,32 @@ function saveProgram(ev) {
   });
 }
 
+function compareWithCopy(b, all) {
+  const others = all.filter((x) => x.id !== b.id);
+  const list = others.map((x, i) => `${i + 1}. ${x.date}${x.note ? " — " + x.note : ""}`).join("\n");
+  const pick = prompt(`Comparer la sauvegarde du ${b.date} a quelle copie ? (numero)\n\n${list}`, "1");
+  const other = others[Number(pick) - 1];
+  if (!other) return;
+  api("POST", "/api/programme/comparer-copies", { id: b.id, autre: other.id }).then((r) => {
+    showResult(r.identique ? "ok" : "bad", (box) => {
+      box.append(el("h4", "", r.identique ? `Copies identiques (${b.date} et ${other.date})`
+                                           : `${r.differences.length} bloc(s) different(s) entre ${b.date} et ${other.date}`));
+      if (!r.identique) {
+        const ul = el("ul");
+        ul.append(...r.differences.map((d) => {
+          const li = el("li");
+          li.append(el("b", "mono", d.bloc + " " + d.verdict), document.createTextNode(d.detail ? "  " + d.detail : ""));
+          return li;
+        }));
+        box.append(ul);
+      }
+      if (r.valeurs_db.length) {
+        box.append(el("p", "hint", "Valeurs actuelles differentes (pas un changement de programme) :"), chips(r.valeurs_db));
+      }
+    });
+  }).catch((e) => showResult("bad", (box) => box.append(el("h4", "", e.message))));
+}
+
 function compareBackup(b) {
   runJob("/api/programme/comparer", { id: b.id }, (r) => {
     showResult(r.identique ? "ok" : "bad", (box) => {
@@ -487,11 +712,25 @@ async function showBlocks(b) {
   try {
     const r = await api("GET", "/api/programme/blocs?id=" + encodeURIComponent(b.id));
     showResult("", (box) => {
-      if (family === "tsx") {
+      if (family === "tsx" || fxpFamily()) {
         box.append(el("h4", "", "Sauvegarde du " + b.date + (b.note ? " — " + b.note : "")));
         const dl = el("dl", "details");
         dl.append(...r.blocs.flatMap((x) => [el("dt", "", x.bloc), el("dd", "", x.taille)]));
         box.append(dl);
+        if (r.stl) {
+          box.append(el("h4", "", "Programme en STL (decode par l'outil)"));
+          box.append(el("p", "hint", `${r.stl.sur} instructions sures, ${r.stl.doute} deduites (marquees ?), ${r.stl.inconnu} groupes d'octets inconnus (??).`));
+          box.append(el("pre", "stl", r.stl.texte));
+          const save = el("button", "btn small", "Telecharger .awl");
+          save.type = "button";
+          save.addEventListener("click", () => {
+            const a = el("a");
+            a.href = URL.createObjectURL(new Blob([r.stl.texte.replace(/\n/g, "\r\n")], { type: "text/plain" }));
+            a.download = "programme_" + b.id + ".awl";
+            a.click();
+          });
+          box.append(save);
+        }
         return;
       }
       box.append(el("h4", "", "Blocs de la sauvegarde du " + b.date + (b.note ? " — " + b.note : "")));
@@ -511,6 +750,31 @@ async function showBlocks(b) {
       t.append(head, body);
       wrap.append(t);
       box.append(wrap);
+      const c = r.config;
+      if (c && (c.modules.length || c.parametres_cpu.length)) {
+        box.append(el("h4", "", "Configuration materielle de la copie" + (c.date ? " (compilee le " + c.date + ")" : "")));
+        if (c.erreur) box.append(el("p", "msg err", c.erreur));
+        const w2 = el("div", "table-wrap");
+        const t2 = el("table", "table");
+        const h2 = el("thead");
+        const r2 = el("tr");
+        r2.append(...["Empl.", "Type", "Adresse", "Module"].map((h) => el("th", "", h)));
+        h2.append(r2);
+        const b2 = el("tbody");
+        b2.append(...c.modules.map((m) => {
+          const tr = el("tr");
+          tr.append(cell(String(m.emplacement), "mono"), cell(m.type), cell(m.adresse, "mono"), cell(m.nom));
+          return tr;
+        }));
+        t2.append(h2, b2);
+        w2.append(t2);
+        box.append(w2);
+        if (c.parametres_cpu.length) {
+          const dl = el("dl", "details");
+          dl.append(...c.parametres_cpu.flatMap(([k, v]) => [el("dt", "", k), el("dd", "", v)]));
+          box.append(dl);
+        }
+      }
     });
   } catch (e) {
     setProgMsg(e.message, true);
@@ -580,6 +844,7 @@ async function planRestoreTsx(b) {
     }
     box.append(el("p", "hint", "Le programme actuel de l'automate est d'abord copie dans la liste (note \"avant restauration\"). " +
                   "L'automate passe en STOP, l'application est chargee puis relue pour verification."));
+    for (const a of plan.avert || []) box.append(el("p", "avert", a));
     if (plan.vide) box.append(el("p", "avert", "L'automate est vide (pas d'application) : rien a copier avant, l'application sera chargee directement."));
     if (plan.run) box.append(el("p", "avert", "L'automate est en RUN : il sera mis en STOP, la machine s'arrete."));
     const go = el("button", "btn btn-danger", "Lancer la restauration");
@@ -683,7 +948,7 @@ function saveData(ev) {
 }
 
 async function planData(b) {
-  const zn = family === "delta" || family === "mitsubishi" ? "D" : family === "panasonic" ? "DT" : "%MW";
+  const zn = family === "omron" ? "mots" : family === "s7200" ? "VB" : family === "delta" || family === "mitsubishi" ? "D" : family === "panasonic" ? "DT" : "%MW";
   setDataMsg(`Lecture des ${zn} de l'automate...`);
   let plan;
   try {
@@ -740,7 +1005,7 @@ async function planData(b) {
 }
 
 async function importData(fileList) {
-  const files = [...fileList].filter((f) => (["delta", "panasonic", "mitsubishi"].includes(family) ? /\.csv$/i : /\.(dat|csv)$/i).test(f.name));
+  const files = [...fileList].filter((f) => (["delta", "panasonic", "mitsubishi", "omron", "s7200"].includes(family) ? /\.csv$/i : /\.(dat|csv)$/i).test(f.name));
   if (!files.length) {
     setDataMsg("Aucun fichier .dat ou .csv dans la selection.", true);
     return;
@@ -758,7 +1023,7 @@ async function importData(fileList) {
 
 // ---- watch table ----
 
-const WATCH_MS = 1000;
+let WATCH_MS = Number(localStorageGet("periode-surveillance")) || 1000;   // the user picks 250 ms .. 2 s
 let watch = loadWatch();          // [{adresse, libelle}]
 let watchTimer = null;
 let watchBusy = false;
@@ -773,7 +1038,13 @@ function formatsFor(adresse) {
   const a = adresse.toUpperCase();
   if (family === "logix") return [];
   if (family === "wago") return /^[IQ]W\d+$/.test(a) ? ["dec", "pt100", "ud", "hex", "bin"] : [];
-  if (family === "delta" || family === "mitsubishi") return /^[DTC]\d+$/.test(a) ? ["dec", "ud", "hex", "bin"] : [];
+  if (family === "delta") return /^D\d+$/.test(a) ? ["dec", "ud", "hex", "bin", "real", "dint"]
+    : /^[TC]\d+$/.test(a) ? ["dec", "ud", "hex", "bin"] : [];
+  if (family === "mitsubishi") return /^[DTC]\d+$/.test(a) ? ["dec", "ud", "hex", "bin"] : [];
+  if (family === "omron") return /\./.test(a) ? [] : ["dec", "ud", "hex", "bin"];
+  if (family === "s7200") return /^(SM|[IQMV])D\d+$/.test(a) ? ["dec", "ud", "hex", "bin", "real"]
+    : /^(SM|AI|AQ|[IQMV])[BW]\d+$/.test(a) ? ["dec", "ud", "hex", "bin"] : [];
+  if (family === "modicon") return /^%?[MI]W\d+$/.test(a) ? ["dec", "ud", "hex", "bin"] : [];
   if (family === "panasonic") return /^DT\d+$/.test(a) ? ["dec", "ud", "hex", "bin", "dint"]
     : /^W[XYR]\d+$/.test(a) ? ["dec", "ud", "hex", "bin"] : [];
   if (family === "tsx") {
@@ -885,7 +1156,15 @@ function renderWatchValues(r) {
       const changed = a in lastValues && lastValues[a] !== v;
       span.textContent = v;
       span.className = "valeur" + (v === "1" ? " bit1" : "");
-      if (changed) { void span.offsetWidth; span.classList.add("changed"); }
+      if (changed) {
+        void span.offsetWidth;
+        span.classList.add("changed");
+        const w = watch.find((x) => fullAddress(x) === a);
+        watchLog.unshift({ heure: new Date().toLocaleTimeString("fr-FR"), adresse: a, libelle: w ? w.libelle || "" : "",
+                           avant: lastValues[a], apres: v });
+        watchLog = watchLog.slice(0, 1000);
+        renderWatchLog();
+      }
       lastValues[a] = v;
     }
   }
@@ -915,6 +1194,12 @@ function setMonitoring(on) {
   if (!$("vue-watch").hidden) startWatch();
 }
 
+function setWatchPeriod(ms) {
+  WATCH_MS = ms;
+  localStorageSet("periode-surveillance", String(ms));
+  if (watchTimer) startWatch();
+}
+
 function startWatch() {
   stopWatch();
   renderWatchRows();
@@ -938,6 +1223,62 @@ function addWatch(text, libelle) {
   return true;
 }
 
+// ---- journal of the watch table: every change, with the time (intermittent faults) ----
+
+let watchLog = [];
+
+function renderWatchLog() {
+  $("watch-journal-compte").textContent = watchLog.length ? `(${watchLog.length})` : "";
+  rows($("table-watch-journal").tBodies[0], watchLog.slice(0, 200), (c) => {
+    const tr = el("tr");
+    tr.append(cell(c.heure), cell(c.adresse, "mono"), cell(c.libelle), cell(String(c.avant), "mono"), cell(String(c.apres), "mono"));
+    return tr;
+  }, "Aucun changement depuis l'ouverture de la table.", 5);
+}
+
+function watchLogCsv() {
+  const lines = ["heure;adresse;libelle;avant;apres",
+                 ...watchLog.slice().reverse().map((c) => [c.heure, c.adresse, c.libelle, c.avant, c.apres].join(";"))];
+  const a = el("a");
+  a.href = URL.createObjectURL(new Blob([lines.join("\n") + "\n"], { type: "text/csv" }));
+  a.download = "journal_surveillance_" + new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-") + ".csv";
+  a.click();
+}
+
+// ---- hold: write the same values again and again until stopped (like "modify permanently") ----
+
+let holdTimer = null, holdItems = null, holdBefore = null;
+
+function stopHold(askRestore) {
+  if (holdTimer) clearInterval(holdTimer);
+  holdTimer = null;
+  $("watch-maintien").hidden = true;
+  const before = holdBefore, items = holdItems;
+  holdItems = holdBefore = null;
+  if (!askRestore || !before || !before.length) return;
+  const lines = before.map((b) => `  ${b.adresse} = ${b.avant}`).join("\n");
+  if (!confirm(`Maintien arrete. Remettre les valeurs d'avant ?\n\n${lines}`)) return;
+  api("POST", "/api/ecrire", { ecritures: before.map((b) => ({ adresse: b.adresse, valeur: b.avant })) })
+    .then(() => setWatchMsg("Valeurs d'avant remises."))
+    .catch((e) => setWatchMsg(e.message, true));
+}
+
+function startHold(items, results) {
+  holdItems = items.map(({ adresse, valeur }) => ({ adresse, valeur }));
+  holdBefore = results.map((x) => ({ adresse: x.adresse, avant: x.avant ?? x.ancien })).filter((x) => x.avant !== undefined && x.avant !== null && x.avant !== "?");
+  $("watch-maintien").hidden = false;
+  $("watch-maintien-texte").textContent = "Maintien en cours (reecrit toutes les 0,5 s) : "
+    + holdItems.map((x) => `${x.adresse} = ${x.valeur}`).join(", ");
+  holdTimer = setInterval(async () => {
+    try {
+      await api("POST", "/api/ecrire", { ecritures: holdItems });
+    } catch (e) {
+      stopHold(false);
+      setWatchMsg("Maintien arrete : " + e.message, true);
+    }
+  }, 500);
+}
+
 async function writeValues() {
   const items = [];
   for (const tr of $("table-watch").tBodies[0].rows) {
@@ -949,7 +1290,9 @@ async function writeValues() {
     return;
   }
   const lines = items.map((it) => `  ${it.adresse} : ${lastValues[it.adresse] ?? "?"}  ->  ${it.valeur}`).join("\n");
-  if (!confirm(`Ecrire dans l'automate ?\n\n${lines}\n\nMachine en securite ?`)) {
+  const hold = $("watch-maintenir").checked;
+  if (hold && holdTimer) stopHold(false);
+  if (!confirm(`${hold ? "Maintenir (reecrire en continu jusqu'a Arreter)" : "Ecrire dans l'automate"} ?\n\n${lines}\n\nMachine en securite ?`)) {
     setWatchMsg("Annule, rien n'a ete ecrit.");
     return;
   }
@@ -963,7 +1306,9 @@ async function writeValues() {
     const io = family === "s7" && items.some((it) => /^[EIAQ]/i.test(it.adresse) && !/^DB/i.test(it.adresse));
     if (r.run && io) text += " CPU en RUN : les entrees / sorties sont reecrites a chaque cycle.";
     else if (r.run) text += " Automate en RUN : le programme peut reecrire ces valeurs.";
+    if (r.note) text += " " + r.note;
     setWatchMsg(text, bad.length > 0);
+    if (hold) startHold(items, r.resultats);
     if (monitoring) readWatch();
   } catch (e) {
     setWatchMsg(e.message, true);
@@ -1171,6 +1516,30 @@ async function searchFp0r() {
   }
 }
 
+async function searchDelta(kind) {
+  const msg = $("delta-msg");
+  const port = (document.querySelector('#reglages input[name="port"]') || {}).value || "";
+  for (const b of ["btn-delta-chercher", "btn-delta-ihm"]) $(b).disabled = true;
+  msg.className = "msg";
+  msg.textContent = kind === "ihm" ? "Ecoute de la ligne sur " + port + " (environ 1 min)..."
+    : "Recherche sur " + port + " : formats, vitesses et stations (environ 1 min)...";
+  try {
+    const r = await api("POST", kind === "ihm" ? "/api/delta/ecouter-ihm" : "/api/delta/chercher", { port });
+    msg.textContent = r.texte + (r.trouve ? " Reglages remplis : cliquer sur Connecter." : "");
+    msg.className = "msg" + (r.trouve ? "" : " err");
+    for (const [k, v] of Object.entries(r.reglages || {})) {
+      const input = document.querySelector(`#reglages input[name="${k}"]`);
+      if (input) input.value = v;
+      localStorageSet("reglage-delta-" + k, String(v));
+    }
+  } catch (e) {
+    msg.textContent = e.message;
+    msg.className = "msg err";
+  } finally {
+    for (const b of ["btn-delta-chercher", "btn-delta-ihm"]) $(b).disabled = false;
+  }
+}
+
 async function searchWago() {
   await autoSearch();
 }
@@ -1231,6 +1600,8 @@ function renderDiagnostic(d) {
   $("diag-info").textContent = family === "logix" ? "Automate, modules du chassis 1756 emplacement par emplacement, axes en defaut."
     : family === "panasonic" ? "Relais et registres speciaux (R9000.., DT90000..), entrees / sorties integrees."
     : family === "delta" ? "Relais et registres speciaux (M1000.., D1000..), entrees / sorties."
+    : family === "s7200" ? "Bits speciaux (SM) expliques, CPU et modules d'extension (SMB8..SMB21) avec leurs adresses et valeurs."
+    : family === "omron" ? "Journal d'erreurs, erreurs fatales / non fatales, cartes de la table E/S avec leurs mots CIO, reglages automate."
     : family === "mitsubishi" ? "Relais et registres speciaux (M8000.., D8000..), entrees / sorties par unite (octal)."
     : family === "wago" ? "Modules lus dans le coupleur, valeurs de l'image process."
     : d.systeme ? "Bits et mots systeme de l'automate."
@@ -1302,6 +1673,9 @@ function setConnected(connected) {
   if (!connected) {
     stopWatch();
     stopAxes();
+    stopTest();
+    stopChanges();
+    stopHold(false);
     $("etat-vide").hidden = false;
     for (const v of document.querySelectorAll(".vue")) v.hidden = true;
     diagLoaded = false;
@@ -1378,19 +1752,32 @@ async function init() {
   brands = await api("GET", "/api/marques");
   const select = $("marque");
   for (const [key, b] of Object.entries(brands)) {
+    if (b.cache) continue;                     // demo of a brand already tested on a real PLC
     const opt = el("option", "", b.nom + (b.disponible ? "" : " (bientot)"));
     opt.value = key;
     opt.disabled = !b.disponible;
     select.append(opt);
   }
   const saved = localStorageGet("marque");
-  if (saved && brands[saved]?.disponible) select.value = saved;
+  if (saved && brands[saved]?.disponible && !brands[saved].cache) select.value = saved;
   select.addEventListener("change", renderSettings);
   renderSettings();
   $("form-connexion").addEventListener("submit", connect);
   $("btn-deconnecter").addEventListener("click", disconnect);
   $("btn-diag").addEventListener("click", loadDiagnostic);
   $("btn-chercher").addEventListener("click", searchWago);
+  $("form-changements").addEventListener("submit", toggleChanges);
+  $("btn-maintien-stop").addEventListener("click", () => stopHold(true));
+  $("btn-journal-effacer").addEventListener("click", () => { watchLog = []; renderWatchLog(); });
+  $("watch-periode").value = String(WATCH_MS);
+  $("watch-periode").addEventListener("change", (e) => setWatchPeriod(Number(e.target.value)));
+  $("btn-journal-csv").addEventListener("click", watchLogCsv);
+  $("btn-ch-effacer").addEventListener("click", () => { chLog = []; rows($("table-ch").tBodies[0], [], null, "Aucun changement pour l'instant.", 4); });
+  $("btn-ch-csv").addEventListener("click", changesCsv);
+  $("btn-es-a").addEventListener("click", () => ioSearch("A"));
+  $("btn-es-b").addEventListener("click", () => ioSearch("B"));
+  $("btn-es-c").addEventListener("click", () => ioSearch("C"));
+  $("btn-test-reset").addEventListener("click", () => { testState = {}; readTest(); });
   renderErrorObs();
   $("btn-ob-erreur").addEventListener("click", loadErrorObs);
   $("btn-auto").addEventListener("click", autoSearch);
@@ -1426,6 +1813,8 @@ async function init() {
   });
   $("btn-visu").addEventListener("click", () => setMonitoring(!monitoring));
   $("btn-pana-chercher").addEventListener("click", searchFp0r);
+  $("btn-delta-chercher").addEventListener("click", () => searchDelta("chercher"));
+  $("btn-delta-ihm").addEventListener("click", () => searchDelta("ihm"));
   setMonitoring(monitoring);
   $("btn-ecrire").addEventListener("click", writeValues);
   $("form-sauver").addEventListener("submit", saveProgram);
@@ -1435,10 +1824,13 @@ async function init() {
       ? "Demarrage demande, mais la cle est sur STOP : la CPU restera en STOP (mettre la cle sur RUN ou RUN-P)."
       : "Demarrage demande (RUN)."));
   $("btn-stop").addEventListener("click", () => cpuAction("/api/cpu/arreter",
-    family === "panasonic"
-      ? "Passer l'automate en PROG ? La machine s'arrete, les sorties sont coupees.\n\nMachine en securite ?"
+    family === "panasonic" || family === "omron"
+      ? `Passer l'automate en ${family === "omron" ? "PROGRAM" : "PROG"} ? La machine s'arrete, les sorties sont coupees.\n\nMachine en securite ?`
       : "Passer la CPU en STOP ? La machine s'arrete, les sorties sont coupees.\n\nMachine en securite ?",
-    () => family === "panasonic" ? "Arret demande (PROG)." : "Arret demande (STOP)."));
+    () => family === "panasonic" ? "Arret demande (PROG)." : family === "omron" ? "Arret demande (PROGRAM)." : "Arret demande (STOP)."));
+  $("btn-monitor").addEventListener("click", () => cpuAction("/api/cpu/monitor",
+    "Passer l'automate en MONITOR ? Le programme continue de tourner, les ecritures sont acceptees.",
+    () => "MONITOR demande."));
   $("btn-horloge").addEventListener("click", () => cpuAction("/api/cpu/horloge",
     "Mettre l'horloge de la CPU a l'heure de ce PC (" + new Date().toLocaleString("fr-FR") + ") ?",
     (r) => "Horloge CPU reglee : " + r.horloge.slice(0, 19)));

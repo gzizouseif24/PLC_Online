@@ -290,78 +290,28 @@ def cmd_restaurer_donnees(tsx, filename):
         print(f"Restauration OK : {len(diffs)} %MW ecrits et verifies.")
 
 
-# ---- chercher-es : ou sont les %I / %Q ? (lecture seule) ----
-
-def probe_requests(positions, segments):
-    """Read-only requests whose answers may hold the %I image: READ_IO_CHANNEL (43) and
-    READ_STATUS_MODULE (44) per position, READ_OBJECTS (36) on unknown segments, debug memory
-    (92 01) on the segments that answered."""
-    out = []
-    for pos in positions:
-        for t in (1, 2, 3, 4):
-            out.append((f"43 type {t} position {pos}", [0x43, PL7_CATEGORY, t, 0, pos, 0xFF, 0x01, 0x08, 0, 0, 0, 0]))
-        out.append((f"44 position {pos}", [READ_STATUS_MODULE, PL7_CATEGORY, 0x02, 0x00, pos]))
-    out.append(("93 defauts rack", [MONITOR, PL7_CATEGORY, 0x02, 0x68, 0x00, 0x04, 0x02, 0x10]))
-    for seg in range(0x60, 0x70):
-        if seg in (0x68, 0x69, 0x6A):
-            continue
-        for typ in (5, 6, 7):
-            out.append((f"36 segment {seg:02X} type {typ}", [READ_OBJECTS, 0, seg, typ, 0, 0, 8, 0]))
-    for seg in segments:
-        for off in range(0, 0x400, 0x60):
-            out.append((f"92 segment {seg:02X} offset {off:03X}",
-                        [DEBUG_MEMORY, PL7_CATEGORY, 0x01, seg, 0x00, off & 0xFF, off >> 8, 0x60]))
-    return out
-
-
-def snapshot(tsx, requests):
-    answers = {}
-    for i, (name, req) in enumerate(requests):
-        print(f"\r   {i + 1}/{len(requests)}", end="", flush=True)
-        try:
-            answers[name] = hexs(tsx.slave.request(req, timeout=3))
-        except UniteError as e:
-            answers[name] = f"ERREUR {e}"
-    print()
-    return answers
-
+# ---- chercher-es : ou sont les %I / %Q ? (lecture seule, aussi dans l'onglet Diagnostic de l'interface) ----
 
 def cmd_chercher_es(tsx, positions):
+    from plc_online.web import tsx_web
     print("Recherche des %I : lecture seule, rien n'est ecrit.\n"
           "Il faut UNE entree que vous pouvez faire passer de 0 a 1 (24 V sur une voie d'un module d'entrees).")
-    try:
-        tsx.slave.request([MONITOR, PL7_CATEGORY, 0x0B], timeout=3)   # session de mise au point, comme PL7
-    except UniteError:
-        pass
     print("Segments de memoire de mise au point...")
-    segments = []
-    for seg in range(0x50, 0x80):
-        try:
-            ans = tsx.slave.request([DEBUG_MEMORY, PL7_CATEGORY, 0x01, seg, 0x00, 0, 0, 0x10], timeout=3)
-            if ans and ans[0] == DEBUG_MEMORY + 0x30:
-                segments.append(seg)
-        except UniteError:
-            pass
+    segments = tsx_web.io_segments(tsx)
     print(f"   segments qui repondent : {' '.join(f'{s:02X}' for s in segments) or 'aucun'}")
-    requests = probe_requests(positions, segments)
-    log = [f"chercher-es {time.strftime('%Y-%m-%d %H:%M:%S')} positions {positions} segments {segments}"]
-    steps = [("A", "Entree a 0. Appuyer sur Entree pour lire"),
-             ("B", "Mettre l'entree a 1 (noter laquelle, ex. %I1.3), puis Entree"),
-             ("C", "Remettre l'entree a 0, puis Entree")]
+    info = {"positions": positions, "segments": segments, "requests": tsx_web.io_probe_requests(positions, segments)}
     shots = {}
-    for key, text in steps:
+    for key, text in (("A", "Entree a 0. Appuyer sur Entree pour lire"),
+                      ("B", "Mettre l'entree a 1 (noter laquelle, ex. %I1.3), puis Entree"),
+                      ("C", "Remettre l'entree a 0, puis Entree")):
         input(f"\n{text} > ")
-        shots[key] = snapshot(tsx, requests)
+        shots[key] = tsx_web.io_snapshot(tsx, info["requests"],
+                                         lambda t, i, n: print(f"\r   {i}/{n}", end="", flush=True))
+        print()
     which = input("\nQuelle entree avez-vous basculee (ex. %I1.3) ? > ").strip()
-    log.append(f"entree basculee : {which}")
-    found = []
-    for name, _ in requests:
-        a, b, c = shots["A"][name], shots["B"][name], shots["C"][name]
-        log.append(f"{name}\n   A {a}\n   B {b}\n   C {c}")
-        if a == c and a != b and not a.startswith("ERREUR"):
-            found.append(name)
+    found, log = tsx_web.io_result(info, shots, which)
     filename = f"chercher_es_{time.strftime('%Y%m%d_%H%M%S')}.txt"
-    Path(filename).write_text("\n".join(log) + "\n", encoding="utf-8")
+    Path(filename).write_text(log, encoding="utf-8")
     print(f"\nReponses qui suivent l'entree (0 -> 1 -> 0) : {len(found)}")
     for name in found:
         print(f"   {name}\n      0 : {shots['A'][name]}\n      1 : {shots['B'][name]}")

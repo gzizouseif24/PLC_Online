@@ -162,9 +162,32 @@ class Fp0rWebTests(unittest.TestCase):
         values, _ = pw.parse_data_csv((self.s.fp0r.data / r["id"] / "donnees.csv").read_text())
         self.assertEqual(values[3], 0xFFFF)
 
-    def test_no_program(self):
+    def test_block_and_inputs(self):
+        self.assertEqual(self.s.block("DT", 0, 2), {"adresses": ["DT0", "DT1"], "valeurs": [1250, 42]})
+        u = self.s.inputs()
+        self.assertEqual([x["nom"] for x in u["unites"]], ["CPU", "Extension 1 (FP0-E16P)"])
+        self.assertEqual(len(u["unites"][0]["entrees"]), 8)
+        self.assertEqual(u["unites"][1]["entrees"][0], {"adresse": "X20", "valeur": 1})
+        self.assertIn("Extension 2", u["notes"][0])
+        self.assertEqual(pw.cpu_inputs("AFP0RC32T"), 16)
+
+    def test_program_copy(self):
+        self.assertEqual(self.s.list_backups()["sauvegardes"], [])
+        self.s.save_program("avant")
+        saved = self.wait()
+        self.s.compare(saved["id"])
+        self.assertTrue(self.wait()["identique"])
+        self.s.plc.ser.program[3] ^= 1
+        self.s.compare(saved["id"])
+        r = self.wait()
+        self.assertEqual(r["differences"][0]["detail"], "pas 3")
+        name, data = self.s.export_backup(saved["id"])
+        self.s.import_backup([(name, data)], "")
+        self.assertEqual(len(self.s.list_backups()["sauvegardes"]), 2)
         with self.assertRaises(DriverError):
-            self.s.list_backups()
+            self.s.restore_plan(saved["id"], False)
+        self.s.delete_backup(saved["id"])
+        self.assertEqual(len(self.s.list_backups()["sauvegardes"]), 1)
 
 
 class SearchTests(unittest.TestCase):

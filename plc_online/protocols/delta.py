@@ -146,7 +146,11 @@ class Delta:
         self.mb = Modicon(transport, station, max_registers=MAX_WORDS, max_bits=MAX_BITS)
 
     def read_bits(self, area: str, start: int, count: int) -> list:
+        """X with function 02 (read input status): the DVP communication table lists X under 02 only, and a
+        real DVP answers 01 on X with exception 04 (machine 18/11). Y, M, S, T, C with function 01."""
         bit_address(area, start + count - 1)
+        if area == "X":
+            return self.mb.read_discrete_inputs(bit_address(area, start), count)
         return self.mb.read_coils(bit_address(area, start), count)
 
     def read_words(self, area: str, start: int, count: int) -> list:
